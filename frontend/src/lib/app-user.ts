@@ -3,6 +3,10 @@
 const STORAGE_KEY = "creatormind_user_id";
 
 export function getOrCreateAppUserId(): string {
+  if (typeof window === "undefined") {
+    return "server-render";
+  }
+
   const existing = window.localStorage.getItem(STORAGE_KEY);
   if (existing) {
     return existing;

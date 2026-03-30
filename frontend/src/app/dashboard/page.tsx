@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useEffect, useState } from "react";
 import AppShell from "@/components/stitch/AppShell";
 import EmptyStateCard from "@/components/stitch/EmptyStateCard";

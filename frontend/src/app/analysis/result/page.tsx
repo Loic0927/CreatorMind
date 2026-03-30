@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { useEffect, useState } from "react";
 import AnalysisResults from "@/components/AnalysisResults";
 import type { AuditContentResponse, PredictionRequest, PredictionResponse } from "@/lib/api";
