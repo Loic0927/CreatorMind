@@ -5,3 +5,7 @@ joblib
 scikit-learn
 python-multipart
 python-dotenv
+cryptography
+pytest
+# Legacy Gemini SDK; migrate the isolated adapter to google.genai separately.
+google-generativeai

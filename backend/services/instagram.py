@@ -1,0 +1,310 @@
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from cryptography.fernet import Fernet, InvalidToken
+
+
+INSTAGRAM_AUTH_URL = "https://www.instagram.com/oauth/authorize"
+INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token"
+INSTAGRAM_GRAPH_URL = "https://graph.instagram.com"
+INSTAGRAM_SCOPES = (
+    "instagram_business_basic",
+    "instagram_business_manage_insights",
+    "instagram_business_content_publish",
+)
+
+
+class InstagramServiceError(Exception):
+    def __init__(self, code: str, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+
+
+_consumed_nonces: set[str] = set()
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise InstagramServiceError(
+            "instagram_not_configured",
+            "Instagram connection is not configured.",
+            503,
+        )
+    return value
+
+
+def instagram_configured() -> bool:
+    required = (
+        "POSTBRIDGE_INSTAGRAM_CLIENT_ID",
+        "POSTBRIDGE_INSTAGRAM_CLIENT_SECRET",
+        "POSTBRIDGE_INSTAGRAM_REDIRECT_URI",
+        "POSTBRIDGE_TOKEN_ENCRYPTION_KEY",
+        "POSTBRIDGE_OAUTH_STATE_SECRET",
+    )
+    return all(os.getenv(name) for name in required)
+
+
+def create_oauth_state(user_id: str, lifetime_seconds: int = 600) -> str:
+    payload = {
+        "user_id": user_id,
+        "nonce": secrets.token_urlsafe(18),
+        "exp": int(time.time()) + lifetime_seconds,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).rstrip(b"=")
+    signature = hmac.new(
+        _required_env("POSTBRIDGE_OAUTH_STATE_SECRET").encode(),
+        encoded,
+        hashlib.sha256,
+    ).digest()
+    return f"{encoded.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+
+
+def consume_oauth_state(state: str) -> str:
+    try:
+        encoded, supplied_signature = state.split(".", 1)
+        expected = hmac.new(
+            _required_env("POSTBRIDGE_OAUTH_STATE_SECRET").encode(),
+            encoded.encode(),
+            hashlib.sha256,
+        ).digest()
+        supplied = base64.urlsafe_b64decode(
+            supplied_signature + "=" * (-len(supplied_signature) % 4)
+        )
+        if not hmac.compare_digest(expected, supplied):
+            raise ValueError
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        )
+        nonce = str(payload["nonce"])
+        if int(payload["exp"]) < int(time.time()) or nonce in _consumed_nonces:
+            raise ValueError
+        _consumed_nonces.add(nonce)
+        return str(payload["user_id"])
+    except InstagramServiceError:
+        raise
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise InstagramServiceError(
+            "invalid_oauth_state",
+            "Instagram connection request is invalid or expired.",
+            400,
+        ) from exc
+
+
+def build_authorization_url(state: str) -> str:
+    return INSTAGRAM_AUTH_URL + "?" + urlencode(
+        {
+            "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
+            "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
+            "response_type": "code",
+            "scope": ",".join(INSTAGRAM_SCOPES),
+            "state": state,
+        }
+    )
+
+
+def _request_json(
+    method: str,
+    url: str,
+    *,
+    form: Optional[dict[str, str]] = None,
+    query: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    if query:
+        url = f"{url}?{urlencode(query)}"
+    body = urlencode(form).encode() if form else None
+    request = Request(url, data=body, method=method)
+    if form:
+        request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
+        raise InstagramServiceError(
+            "instagram_upstream_error",
+            "Instagram could not complete the request.",
+            502,
+        ) from None
+    if not isinstance(payload, dict):
+        raise InstagramServiceError(
+            "instagram_upstream_error",
+            "Instagram returned an invalid response.",
+            502,
+        )
+    return payload
+
+
+def _token_from_payload(payload: dict[str, Any], error_code: str) -> str:
+    token = payload.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise InstagramServiceError(
+            error_code,
+            "Instagram token exchange failed.",
+            502,
+        )
+    return token
+
+
+def exchange_authorization_code(code: str) -> dict[str, Any]:
+    payload = _request_json(
+        "POST",
+        INSTAGRAM_TOKEN_URL,
+        form={
+            "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
+            "client_secret": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_SECRET"),
+            "grant_type": "authorization_code",
+            "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
+            "code": code,
+        },
+    )
+    _token_from_payload(payload, "instagram_short_token_exchange_failed")
+    return payload
+
+
+def exchange_long_lived_token(short_lived_token: str) -> dict[str, Any]:
+    payload = _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/access_token",
+        query={
+            "grant_type": "ig_exchange_token",
+            "client_secret": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_SECRET"),
+            "access_token": short_lived_token,
+        },
+    )
+    _token_from_payload(payload, "instagram_long_token_exchange_failed")
+    return payload
+
+
+def fetch_instagram_profile(access_token: str) -> dict[str, Any]:
+    payload = _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/me",
+        query={
+            "fields": "id,username,account_type,media_count",
+            "access_token": access_token,
+        },
+    )
+    if not payload.get("id") or not payload.get("username"):
+        raise InstagramServiceError(
+            "instagram_profile_failed",
+            "Instagram profile could not be loaded.",
+            502,
+        )
+    return payload
+
+
+def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
+    payload = _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/me/media",
+        query={
+            "fields": "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp",
+            "access_token": access_token,
+        },
+    )
+    items = payload.get("data")
+    if not isinstance(items, list):
+        raise InstagramServiceError(
+            "instagram_media_failed",
+            "Instagram media could not be loaded.",
+            502,
+        )
+    return [item for item in items if isinstance(item, dict)]
+
+
+def encrypt_access_token(token: str) -> str:
+    key = _required_env("POSTBRIDGE_TOKEN_ENCRYPTION_KEY")
+    try:
+        return Fernet(key.encode()).encrypt(token.encode()).decode()
+    except (ValueError, TypeError) as exc:
+        raise InstagramServiceError(
+            "instagram_not_configured",
+            "Instagram token encryption is not configured.",
+            503,
+        ) from exc
+
+
+def decrypt_access_token(encrypted_token: str) -> str:
+    key = _required_env("POSTBRIDGE_TOKEN_ENCRYPTION_KEY")
+    try:
+        return Fernet(key.encode()).decrypt(encrypted_token.encode()).decode()
+    except (InvalidToken, ValueError, TypeError) as exc:
+        raise InstagramServiceError(
+            "connection_expired",
+            "Instagram connection has expired.",
+            401,
+        ) from exc
+
+
+def token_expiry(payload: dict[str, Any]) -> Optional[datetime]:
+    expires_in = payload.get("expires_in")
+    if not isinstance(expires_in, (int, float)):
+        return None
+    return datetime.fromtimestamp(time.time() + float(expires_in), timezone.utc)
+
+
+def engagement_rate(metrics: dict[str, Optional[int]]) -> float:
+    reach = metrics.get("reach")
+    if not reach:
+        return 0.0
+    interactions = sum(
+        metrics.get(name) or 0 for name in ("likes", "comments", "saves", "shares")
+    )
+    return round(interactions / reach * 100, 2)
+
+
+def safe_raw_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    allowed = {"likes", "comments", "saves", "shares", "reach", "views", "impressions"}
+    return {key: value for key, value in metrics.items() if key in allowed}
+
+
+def aggregate_seven_days(
+    media: list[Any], snapshots: list[Any], now: Optional[datetime] = None
+) -> dict[str, Any]:
+    current = now or datetime.now(timezone.utc)
+    start_timestamp = current.timestamp() - 7 * 24 * 60 * 60
+    recent_media = [
+        item
+        for item in media
+        if item.published_at.replace(tzinfo=item.published_at.tzinfo or timezone.utc).timestamp()
+        >= start_timestamp
+    ]
+    latest: dict[str, Any] = {}
+    for snapshot in snapshots:
+        if snapshot.media_id in {item.id for item in recent_media} and (
+            snapshot.media_id not in latest
+            or snapshot.captured_at > latest[snapshot.media_id].captured_at
+        ):
+            latest[snapshot.media_id] = snapshot
+    totals: dict[str, Optional[int]] = {
+        name: 0 for name in ("reach", "views", "likes", "comments", "saves", "shares")
+    }
+    for name in totals:
+        values = [
+            getattr(item, name)
+            for item in latest.values()
+            if getattr(item, name) is not None
+        ]
+        totals[name] = sum(values) if values else None
+    totals["engagement_rate"] = engagement_rate(totals)
+    return {
+        "period": "7d",
+        "start": datetime.fromtimestamp(start_timestamp, timezone.utc).isoformat(),
+        "end": current.isoformat(),
+        "posts": len(recent_media),
+        "metrics": totals,
+    }

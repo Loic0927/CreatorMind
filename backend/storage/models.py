@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -46,7 +46,64 @@ class PredictionHistory(BaseModel):
 
 
 class StoreData(BaseModel):
+    schema_version: int = 1
     social_connections: list[SocialConnection] = Field(default_factory=list)
     posts: list[Post] = Field(default_factory=list)
     analytics_snapshots: list[AnalyticsSnapshot] = Field(default_factory=list)
     prediction_history: list[PredictionHistory] = Field(default_factory=list)
+    instagram_accounts: list["InstagramAccount"] = Field(default_factory=list)
+    instagram_media: list["InstagramMedia"] = Field(default_factory=list)
+    tracked_posts: list["TrackedPost"] = Field(default_factory=list)
+    instagram_insight_snapshots: list["InstagramInsightSnapshot"] = Field(default_factory=list)
+
+
+class InstagramAccount(BaseModel):
+    id: str
+    user_id: str
+    instagram_user_id: str
+    username: str
+    profile_picture_url: Optional[str] = None
+    account_type: Optional[str] = None
+    media_count: Optional[int] = None
+    encrypted_access_token: str
+    token_expires_at: Optional[datetime] = None
+    status: Literal["connected", "expired", "disconnected", "error"] = "connected"
+    connected_at: datetime
+    last_synced_at: Optional[datetime] = None
+    last_error: Optional[str] = None
+
+
+class InstagramMedia(BaseModel):
+    id: str
+    account_id: str
+    instagram_media_id: str
+    media_type: str
+    media_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    permalink: Optional[str] = None
+    caption: str = ""
+    published_at: datetime
+    last_synced_at: datetime
+
+
+class TrackedPost(BaseModel):
+    id: str
+    user_id: str
+    media_id: str
+    is_active: bool = True
+    started_at: datetime
+    stopped_at: Optional[datetime] = None
+
+
+class InstagramInsightSnapshot(BaseModel):
+    id: str
+    media_id: str
+    captured_at: datetime
+    likes: Optional[int] = None
+    comments: Optional[int] = None
+    saves: Optional[int] = None
+    shares: Optional[int] = None
+    reach: Optional[int] = None
+    views: Optional[int] = None
+    engagement_rate: float = 0.0
+    raw_metrics: dict[str, Any] = Field(default_factory=dict)

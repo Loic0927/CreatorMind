@@ -1,0 +1,9 @@
+export type ConnectionStatus = 'not_connected' | 'connected' | 'expired' | 'disconnected' | 'error';
+export type InstagramConnection = { connected: boolean; configured: boolean; status: ConnectionStatus; username?: string; profile_picture_url?: string; account_type?: string; last_synced_at?: string };
+export type MetricValue = number | null;
+export type InstagramMedia = { id: string; instagram_media_id: string; media_type: string; media_url?: string; thumbnail_url?: string; caption: string; published_at: string; last_synced_at: string };
+export type Snapshot = { id: string; captured_at: string; likes: MetricValue; comments: MetricValue; saves: MetricValue; shares: MetricValue; reach: MetricValue; views: MetricValue; engagement_rate: number };
+export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[] };
+export type InsightsData = { status: ConnectionStatus; period: '7d'; start?: string; end?: string; posts?: number; metrics?: Record<string, MetricValue>; trend?: { date: string; value: number }[]; top_posts?: TrackedPost[] };
+export type Draft = { information: string; goal: string; otherGoal: string; caption: string; hashtags: string; imageUri?: string; hasResults: boolean };
+export type AppScreen = 'home' | 'create' | 'preview' | 'insights' | 'settings' | 'tracking';

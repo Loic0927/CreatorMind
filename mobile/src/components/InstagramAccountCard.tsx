@@ -1,0 +1,8 @@
+import { Image, StyleSheet, Text, View } from 'react-native';
+import { InstagramConnection } from '../types';
+import { Button } from './ui';
+export function InstagramAccountCard({ connection, onConnect, onRefresh, onDisconnect }: { connection: InstagramConnection; onConnect: () => void; onRefresh: () => void; onDisconnect: () => void }) {
+  if (!connection.connected) return <View style={styles.card}><Text style={styles.name}>Instagram</Text><Text style={styles.status}>{connection.status === 'expired' ? 'Connection expired' : 'Not connected'}</Text><Button label={connection.status === 'expired' ? 'Reconnect Instagram' : 'Connect Instagram'} onPress={onConnect} /></View>;
+  return <View style={styles.card}><View style={styles.row}>{connection.profile_picture_url ? <Image source={{ uri: connection.profile_picture_url }} style={styles.avatar} /> : null}<View><Text style={styles.name}>@{connection.username}</Text><Text style={styles.status}>{connection.account_type || 'Professional account'} · Connected</Text></View></View><Text style={styles.status}>Last synced {connection.last_synced_at ? new Date(connection.last_synced_at).toLocaleString() : '—'}</Text><Button label="Refresh connection" onPress={onRefresh} secondary /><Button label="Disconnect" onPress={onDisconnect} secondary /></View>;
+}
+const styles = StyleSheet.create({ card: { padding: 18, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#ebe6f2', gap: 12 }, row: { flexDirection: 'row', alignItems: 'center', gap: 10 }, avatar: { width: 42, height: 42, borderRadius: 21 }, name: { fontWeight: '800', color: '#201633', fontSize: 17 }, status: { color: '#746b82' } });

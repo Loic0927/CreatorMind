@@ -33,6 +33,7 @@ from backend.services.youtube import (
     get_google_client_secret,
     store_youtube_connection,
 )
+from backend.instagram_api import router as instagram_router
 from backend.storage.json_store import (
     append_prediction_history,
     get_analytics_snapshots,
@@ -65,6 +66,7 @@ def log_environment_presence() -> None:
 log_environment_presence()
 
 app = FastAPI(title="CreatorMind AI API")
+app.include_router(instagram_router)
 
 app.add_middleware(
     CORSMiddleware,

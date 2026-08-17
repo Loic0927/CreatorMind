@@ -1,12 +1,28 @@
 # node
 node_modules/
 dist/
+build/
+.cache/
 .next/
 
 # python
 __pycache__/
+**/__pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
+.venv/
+venv/
+backend/data/*.json
+!backend/data/store.example.json
+
+# local development tools
+backend/list_gemini_models.py
+backend/.dockerignore
+mobile/.claude/
+mobile/AGENTS.md
+mobile/CLAUDE.md
 
 # vscode
 .vscode/
