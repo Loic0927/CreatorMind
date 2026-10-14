@@ -2,11 +2,14 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from backend.services.instagram import (
+    INSTAGRAM_SCOPES,
     InstagramServiceError,
     aggregate_seven_days,
+    build_app_return_url,
     build_authorization_url,
     consume_oauth_state,
     create_oauth_state,
@@ -21,20 +24,18 @@ from backend.services.instagram import (
 )
 from backend.storage.json_store import (
     create_tracked_post,
-    get_instagram_account,
     get_instagram_media as get_stored_instagram_media,
     get_tracked_posts,
     load_store,
     stop_tracked_post,
     update_store,
-    upsert_instagram_account,
     upsert_instagram_media,
 )
 from backend.storage.models import InstagramAccount, InstagramMedia
-from backend.storage.token_store import (
-    delete_encrypted_token,
-    get_encrypted_token,
-    save_encrypted_token,
+from backend.storage.instagram_repository import (
+    InstagramRepository,
+    InstagramRepositoryError,
+    get_instagram_repository,
 )
 
 
@@ -58,6 +59,30 @@ def service_error(exc: InstagramServiceError) -> HTTPException:
     )
 
 
+def repository_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "instagram_storage_unavailable",
+            "message": "Instagram connection storage is unavailable.",
+        },
+    )
+
+
+def repository() -> InstagramRepository:
+    try:
+        return get_instagram_repository()
+    except InstagramRepositoryError:
+        raise repository_error() from None
+
+
+def stored_connection(user_id: str) -> InstagramAccount | None:
+    try:
+        return repository().get_connection(user_id)
+    except InstagramRepositoryError:
+        raise repository_error() from None
+
+
 def public_account(account: InstagramAccount | None) -> dict:
     if not account:
         return {
@@ -79,7 +104,12 @@ def public_account(account: InstagramAccount | None) -> dict:
 
 
 def _active_account(user_id: str) -> InstagramAccount:
-    account = get_instagram_account(user_id)
+    account = stored_connection(user_id)
+    if account and account.status in {"expired", "reconnect_required"}:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "reconnect_required", "message": "Instagram must be reconnected."},
+        )
     if not account or account.status != "connected":
         raise HTTPException(
             status_code=404,
@@ -92,7 +122,10 @@ def _active_account(user_id: str) -> InstagramAccount:
 
 
 def _access_token(account: InstagramAccount) -> str:
-    encrypted_token = get_encrypted_token(account.id)
+    try:
+        encrypted_token = repository().get_encrypted_token(account.id)
+    except InstagramRepositoryError:
+        raise repository_error() from None
     if not encrypted_token:
         raise HTTPException(
             status_code=401,
@@ -107,10 +140,36 @@ def _access_token(account: InstagramAccount) -> str:
         raise service_error(exc) from exc
 
 
+def _mark_reconnect_required(account: InstagramAccount) -> None:
+    updated = account.model_copy(
+        update={
+            "status": "reconnect_required",
+            "last_error": "instagram_token_invalid",
+            "last_synced_at": datetime.now(timezone.utc),
+        }
+    )
+    try:
+        repository().upsert_connection(updated)
+    except InstagramRepositoryError:
+        raise repository_error() from None
+
+
+def _handle_connected_service_error(
+    account: InstagramAccount, exc: InstagramServiceError
+) -> HTTPException:
+    if exc.code in {"instagram_token_invalid", "connection_expired"}:
+        _mark_reconnect_required(account)
+        return HTTPException(
+            status_code=401,
+            detail={"code": "reconnect_required", "message": "Instagram must be reconnected."},
+        )
+    return service_error(exc)
+
+
 @router.get("/api/instagram/connection")
 @router.get("/instagram/connection", include_in_schema=False)
 def connection(user_id: str = Header(..., alias="X-User-Id")):
-    return public_account(get_instagram_account(current_user(user_id)))
+    return public_account(stored_connection(current_user(user_id)))
 
 
 @router.post("/api/instagram/connect/start")
@@ -130,29 +189,27 @@ def connect_callback(
     state: str | None = None,
     error: str | None = None,
 ):
-    if error:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "instagram_authorization_denied",
-                "message": "Instagram authorization was not completed.",
-            },
-        )
-    if not code or not state:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "invalid_oauth_callback",
-                "message": "Instagram callback is missing required parameters.",
-            },
-        )
     try:
+        if error:
+            return RedirectResponse(
+                build_app_return_url("error", "instagram_authorization_denied"),
+                status_code=302,
+            )
+        if not code or not state:
+            return RedirectResponse(
+                build_app_return_url("error", "invalid_oauth_callback"),
+                status_code=302,
+            )
         user_id = consume_oauth_state(state)
         short_payload = exchange_authorization_code(code)
         long_payload = exchange_long_lived_token(short_payload["access_token"])
         access_token = long_payload["access_token"]
         profile = fetch_instagram_profile(access_token)
-        existing = get_instagram_account(user_id)
+        repo = repository()
+        try:
+            existing = repo.get_connection(user_id)
+        except InstagramRepositoryError:
+            raise repository_error() from None
         now = datetime.now(timezone.utc)
         encrypted_token = encrypt_access_token(access_token)
         account = InstagramAccount(
@@ -165,20 +222,27 @@ def connect_callback(
             media_count=profile.get("media_count"),
             encrypted_access_token="",
             token_expires_at=token_expiry(long_payload),
+            scopes=list(INSTAGRAM_SCOPES),
             status="connected",
             connected_at=existing.connected_at if existing else now,
             last_synced_at=now,
             last_error=None,
         )
-        save_encrypted_token(account.id, encrypted_token)
         try:
-            upsert_instagram_account(account)
-        except Exception:
-            delete_encrypted_token(account.id)
-            raise
-        return {"connected": True, "account": public_account(account)}
+            account = repo.upsert_connection(
+                account,
+                encrypted_token=encrypted_token,
+                scopes=list(INSTAGRAM_SCOPES),
+            )
+        except InstagramRepositoryError:
+            raise repository_error() from None
+        return RedirectResponse(build_app_return_url("success"), status_code=302)
     except InstagramServiceError as exc:
-        raise service_error(exc) from exc
+        return RedirectResponse(build_app_return_url("error", exc.code), status_code=302)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        safe_code = str(detail.get("code", "instagram_callback_failed"))
+        return RedirectResponse(build_app_return_url("error", safe_code), status_code=302)
 
 
 @router.get("/api/instagram/account")
@@ -197,10 +261,13 @@ def account(user_id: str = Header(..., alias="X-User-Id")):
                 "last_error": None,
             }
         )
-        upsert_instagram_account(updated)
+        try:
+            updated = repository().upsert_connection(updated)
+        except InstagramRepositoryError:
+            raise repository_error() from None
         return public_account(updated)
     except InstagramServiceError as exc:
-        raise service_error(exc) from exc
+        raise _handle_connected_service_error(stored, exc) from exc
 
 
 def _parse_timestamp(value: object) -> datetime:
@@ -238,30 +305,22 @@ def media(user_id: str = Header(..., alias="X-User-Id")):
         upsert_instagram_media(items)
         return {"status": account.status, "items": items}
     except InstagramServiceError as exc:
-        raise service_error(exc) from exc
+        raise _handle_connected_service_error(account, exc) from exc
 
 
 def _disconnect(user_id: str) -> dict:
-    existing = get_instagram_account(user_id)
     def mutate(store):
-        account = next(
-            (item for item in store.instagram_accounts if item.user_id == user_id),
-            None,
-        )
-        if not account:
-            return False
-        account.status = "disconnected"
-        account.encrypted_access_token = ""
-        account.last_error = None
         for tracked in store.tracked_posts:
             if tracked.user_id == user_id and tracked.is_active:
                 tracked.is_active = False
                 tracked.stopped_at = datetime.now(timezone.utc)
-        return True
 
-    disconnected = update_store(mutate)
-    if existing:
-        delete_encrypted_token(existing.id)
+    try:
+        disconnected = repository().delete_connection(user_id)
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    if disconnected:
+        update_store(mutate)
     return {"disconnected": disconnected}
 
 
@@ -282,7 +341,7 @@ class TrackRequest(BaseModel):
 @router.post("/tracked-posts")
 def track(payload: TrackRequest, user_id: str = Header(..., alias="X-User-Id")):
     user_id = current_user(user_id)
-    account = get_instagram_account(user_id)
+    account = stored_connection(user_id)
     owned_ids = (
         {item.id for item in get_stored_instagram_media(account.id)} if account else set()
     )
@@ -394,7 +453,7 @@ def insights(
             status_code=400,
             detail={"code": "unsupported_period", "message": "Only 7d is supported."},
         )
-    account = get_instagram_account(user_id)
+    account = stored_connection(user_id)
     if not account:
         return {"status": "not_connected", "period": "7d"}
     if account.status != "connected":

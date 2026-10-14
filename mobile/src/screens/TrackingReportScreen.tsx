@@ -5,7 +5,10 @@ import { getTrackedPost, refreshTrackedPost, stopTracking } from '../services/ap
 import { TrackedPost } from '../types';
 
 export function TrackingReportScreen({ userId, initial, onBack }: { userId: string; initial: TrackedPost; onBack: () => void }) {
-  const [post, setPost] = useState(initial); const [loading, setLoading] = useState(false); const load = useCallback(async () => { setPost(await getTrackedPost(userId, initial.tracking.id)); }, [initial.tracking.id, userId]); useEffect(() => { load(); }, [load]);
+  const [post, setPost] = useState(initial); const [loading, setLoading] = useState(false); const load = useCallback(async () => { setPost(await getTrackedPost(userId, initial.tracking.id)); }, [initial.tracking.id, userId]);
+  // The state update in load happens after the asynchronous API request.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(); }, [load]);
   const refresh = async () => { setLoading(true); try { await refreshTrackedPost(userId, post.tracking.id); await load(); } catch (e) { Alert.alert('Refresh unavailable', e instanceof Error ? e.message : 'Try again.'); } finally { setLoading(false); } };
   const stop = () => Alert.alert('Stop tracking?', 'Historical snapshots will be kept, but this post will no longer sync.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Stop tracking', style: 'destructive', onPress: async () => { await stopTracking(userId, post.tracking.id); onBack(); } }]);
   const image = post.media.thumbnail_url || post.media.media_url; const latest = post.latest;

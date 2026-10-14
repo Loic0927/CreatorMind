@@ -8,6 +8,7 @@ import joblib
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -34,6 +35,7 @@ from backend.services.youtube import (
     store_youtube_connection,
 )
 from backend.instagram_api import router as instagram_router
+from backend.config import csv_environment, is_production, validate_runtime_environment
 from backend.storage.json_store import (
     append_prediction_history,
     get_analytics_snapshots,
@@ -48,6 +50,7 @@ logger = logging.getLogger(__name__)
 BACKEND_DIR = Path(__file__).resolve().parent
 ENV_PATH = BACKEND_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
+validate_runtime_environment()
 
 
 def log_environment_presence() -> None:
@@ -68,13 +71,22 @@ log_environment_presence()
 app = FastAPI(title="CreatorMind AI API")
 app.include_router(instagram_router)
 
+cors_origins = csv_environment(
+    "POSTBRIDGE_CORS_ALLOWED_ORIGINS",
+    "http://localhost:3000" if not is_production() else "",
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+if is_production():
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=csv_environment("POSTBRIDGE_ALLOWED_HOSTS"),
+    )
 
 MODEL_PATH = BACKEND_DIR / "models" / "model.pkl"
 
@@ -806,7 +818,10 @@ def audit_youtube(payload: YouTubeAuditRequest) -> YouTubeAuditResponse:
 async def extract_screenshot_metrics_route(file: UploadFile = File(...)) -> ScreenshotMetricsResponse:
     logger.info("EXTRACT_SCREENSHOT_METRICS submit started")
     logger.info("EXTRACT_SCREENSHOT_METRICS filename: %s", file.filename)
-    file_bytes = await file.read()
+    max_upload_bytes = int(os.getenv("POSTBRIDGE_MAX_UPLOAD_BYTES", "10485760"))
+    file_bytes = await file.read(max_upload_bytes + 1)
+    if len(file_bytes) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured limit.")
     parsed = extract_screenshot_metrics(file_bytes, file.filename or "upload")
     logger.info("EXTRACT_SCREENSHOT_METRICS response ready: %s", parsed["candidate_metrics"])
     return ScreenshotMetricsResponse(**parsed)

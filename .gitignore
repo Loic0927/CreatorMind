@@ -12,6 +12,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!.env.oci.example
 .venv/
 venv/
 backend/data/*.json
@@ -32,3 +33,22 @@ mobile/CLAUDE.md
 
 # logs
 *.log
+
+# production deployment artifacts
+**/.env.production
+deploy/**/backups/
+**/*token*.local.json
+*.pem
+*.key
+certificates/
+
+# OCI production runtime files and database dumps
+.env.oci
+deploy/oci/.env.oci
+backups/
+*.dump
+*.dump.gz
+oci_api_key*.pem
+secrets/
+**/*credentials*.json
+**/oci_config*

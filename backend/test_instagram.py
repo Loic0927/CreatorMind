@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from cryptography.fernet import Fernet
@@ -16,9 +17,11 @@ from backend.services.instagram import (
     engagement_rate,
     exchange_authorization_code,
     exchange_long_lived_token,
+    refresh_long_lived_token,
     safe_raw_metrics,
 )
 from backend.storage import json_store
+from backend.storage.instagram_repository import LocalDevelopmentInstagramRepository
 from backend.storage.models import (
     InstagramAccount,
     InstagramInsightSnapshot,
@@ -27,16 +30,30 @@ from backend.storage.models import (
 
 
 @pytest.fixture(autouse=True)
-def instagram_environment(monkeypatch):
+def instagram_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("POSTBRIDGE_INSTAGRAM_CLIENT_ID", "test-client")
     monkeypatch.setenv("POSTBRIDGE_INSTAGRAM_CLIENT_SECRET", "test-client-secret")
     monkeypatch.setenv(
         "POSTBRIDGE_INSTAGRAM_REDIRECT_URI",
         "https://example.test/api/instagram/connect/callback",
     )
+    monkeypatch.setenv(
+        "POSTBRIDGE_INSTAGRAM_APP_RETURN_URI",
+        "creatormind://instagram-connected",
+    )
     monkeypatch.setenv("POSTBRIDGE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("POSTBRIDGE_OAUTH_STATE_SECRET", "test-state-secret")
-    instagram._consumed_nonces.clear()
+    repository = LocalDevelopmentInstagramRepository()
+    monkeypatch.setattr(instagram, "get_instagram_repository", lambda: repository)
+    monkeypatch.setattr(instagram_api, "get_instagram_repository", lambda: repository)
+    monkeypatch.setattr(json_store, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(json_store, "STORE_PATH", tmp_path / "store.json")
+    from backend.storage import token_store
+
+    monkeypatch.setattr(
+        token_store, "TOKEN_STORE_PATH", tmp_path / "postbridge_tokens.local.json"
+    )
+    return repository
 
 
 def test_oauth_state_valid_and_single_use():
@@ -67,6 +84,14 @@ def test_authorization_url_has_required_scopes():
     assert "instagram_business_basic" in url
     assert "instagram_business_manage_insights" in url
     assert "instagram_business_content_publish" in url
+
+
+def test_authorization_url_uses_configured_redirect_uri():
+    url = instagram.build_authorization_url(create_oauth_state("user-a"))
+    query = parse_qs(urlparse(url).query)
+    assert query["redirect_uri"] == [
+        "https://example.test/api/instagram/connect/callback"
+    ]
 
 
 def test_token_exchange_success(monkeypatch):
@@ -107,10 +132,10 @@ def _account(encrypted_token: str = "encrypted") -> InstagramAccount:
     )
 
 
-def test_callback_success_encrypts_before_storage_and_hides_tokens(monkeypatch, caplog):
+def test_callback_success_encrypts_before_storage_and_hides_tokens(
+    monkeypatch, caplog, instagram_environment
+):
     state = create_oauth_state("owner@example.test")
-    stored = []
-    encrypted_tokens = []
     monkeypatch.setattr(
         instagram_api,
         "exchange_authorization_code",
@@ -131,20 +156,15 @@ def test_callback_success_encrypts_before_storage_and_hides_tokens(monkeypatch, 
             "media_count": 4,
         },
     )
-    monkeypatch.setattr(instagram_api, "get_instagram_account", lambda user_id: None)
-    monkeypatch.setattr(instagram_api, "upsert_instagram_account", stored.append)
-    monkeypatch.setattr(
-        instagram_api,
-        "save_encrypted_token",
-        lambda account_id, token: encrypted_tokens.append(token),
-    )
-
     response = instagram_api.connect_callback(code="private-code", state=state)
 
-    assert response["connected"] is True
-    assert stored[0].encrypted_access_token == ""
-    assert instagram.decrypt_access_token(encrypted_tokens[0]) == "long-sensitive"
-    rendered = repr(response) + caplog.text
+    assert response.status_code == 302
+    assert response.headers["location"] == "creatormind://instagram-connected?status=success"
+    stored = instagram_environment.get_connection("owner@example.test")
+    assert stored.encrypted_access_token == ""
+    encrypted = instagram_environment.get_encrypted_token(stored.id)
+    assert instagram.decrypt_access_token(encrypted) == "long-sensitive"
+    rendered = response.headers["location"] + caplog.text
     for secret in ("private-code", "short-sensitive", "long-sensitive", "test-client-secret"):
         assert secret not in rendered
 
@@ -157,10 +177,13 @@ def test_callback_success_encrypts_before_storage_and_hides_tokens(monkeypatch, 
     ],
 )
 def test_callback_rejects_invalid_or_denied_requests(kwargs, expected_code):
-    with pytest.raises(HTTPException) as failure:
-        instagram_api.connect_callback(**kwargs)
-    assert failure.value.detail["code"] == expected_code
-    assert "access_denied" not in str(failure.value.detail)
+    response = instagram_api.connect_callback(**kwargs)
+    assert response.status_code == 302
+    assert parse_qs(urlparse(response.headers["location"]).query) == {
+        "status": ["error"],
+        "code": [expected_code],
+    }
+    assert "access_denied" not in response.headers["location"]
 
 
 def test_callback_exchange_error_is_sanitized(monkeypatch):
@@ -172,20 +195,89 @@ def test_callback_exchange_error_is_sanitized(monkeypatch):
             InstagramServiceError("instagram_upstream_error", "Instagram could not complete the request.")
         ),
     )
+    response = instagram_api.connect_callback(code="private-code", state=state)
+    assert response.headers["location"].endswith(
+        "?status=error&code=instagram_upstream_error"
+    )
+    assert "private-code" not in response.headers["location"]
+
+
+def test_callback_profile_failure_redirects_with_safe_code(monkeypatch):
+    state = create_oauth_state("owner@example.test")
+    monkeypatch.setattr(instagram_api, "exchange_authorization_code", lambda code: {"access_token": "short-secret"})
+    monkeypatch.setattr(instagram_api, "exchange_long_lived_token", lambda token: {"access_token": "long-secret"})
+    monkeypatch.setattr(
+        instagram_api,
+        "fetch_instagram_profile",
+        lambda token: (_ for _ in ()).throw(
+            InstagramServiceError("instagram_profile_failed", "safe failure")
+        ),
+    )
+    response = instagram_api.connect_callback(code="private-code", state=state)
+    assert response.headers["location"].endswith(
+        "?status=error&code=instagram_profile_failed"
+    )
+    assert "secret" not in response.headers["location"]
+
+
+def test_invalid_and_replayed_state_redirect_with_safe_code():
+    invalid = instagram_api.connect_callback(code="private-code", state="invalid")
+    assert invalid.headers["location"].endswith("?status=error&code=invalid_oauth_state")
+
+    state = create_oauth_state("owner@example.test")
+    consume_oauth_state(state)
+    replayed = instagram_api.connect_callback(code="private-code", state=state)
+    assert replayed.headers["location"].endswith("?status=error&code=invalid_oauth_state")
+
+
+def test_arbitrary_mobile_return_uri_is_rejected():
+    with pytest.raises(InstagramServiceError) as failure:
+        instagram.instagram_app_return_uri("https://attacker.example/callback")
+    assert failure.value.code == "instagram_return_uri_not_allowed"
+
+
+def test_refresh_long_lived_token_interface(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        instagram,
+        "_request_json",
+        lambda method, url, **kwargs: calls.append((method, url, kwargs))
+        or {"access_token": "refreshed-secret", "expires_in": 3600},
+    )
+    result = refresh_long_lived_token("existing-secret")
+    assert result["expires_in"] == 3600
+    assert calls[0][2]["query"]["grant_type"] == "ig_refresh_token"
+
+
+def test_revoked_token_marks_connection_reconnect_required(
+    monkeypatch, instagram_environment
+):
+    encrypted = instagram.encrypt_access_token("private-token")
+    instagram_environment.upsert_connection(_account(), encrypted_token=encrypted)
+    monkeypatch.setattr(
+        instagram_api,
+        "fetch_instagram_profile",
+        lambda token: (_ for _ in ()).throw(
+            InstagramServiceError(
+                "instagram_token_invalid",
+                "Instagram authorization is no longer valid.",
+                401,
+            )
+        ),
+    )
     with pytest.raises(HTTPException) as failure:
-        instagram_api.connect_callback(code="private-code", state=state)
-    assert failure.value.detail == {
-        "code": "instagram_upstream_error",
-        "message": "Instagram could not complete the request.",
-    }
+        instagram_api.account("owner@example.test")
+    assert failure.value.detail["code"] == "reconnect_required"
+    stored = instagram_environment.get_connection("owner@example.test")
+    assert stored is not None
+    assert stored.status == "reconnect_required"
+    assert instagram_environment.get_encrypted_token(stored.id) == encrypted
 
 
-def test_account_upstream_success_and_error(monkeypatch):
+def test_account_upstream_success_and_error(monkeypatch, instagram_environment):
     encrypted = instagram.encrypt_access_token("private-token")
     existing = _account(encrypted)
-    monkeypatch.setattr(instagram_api, "get_instagram_account", lambda user_id: existing)
-    monkeypatch.setattr(instagram_api, "get_encrypted_token", lambda account_id: encrypted)
-    monkeypatch.setattr(instagram_api, "upsert_instagram_account", lambda value: value)
+    instagram_environment.upsert_connection(existing, encrypted_token=encrypted)
     monkeypatch.setattr(
         instagram_api,
         "fetch_instagram_profile",
@@ -212,13 +304,10 @@ def test_account_upstream_success_and_error(monkeypatch):
     assert failure.value.status_code == 502
 
 
-def test_media_upstream_success_and_error(monkeypatch):
+def test_media_upstream_success_and_error(monkeypatch, instagram_environment):
     existing = _account(instagram.encrypt_access_token("private-token"))
-    monkeypatch.setattr(instagram_api, "get_instagram_account", lambda user_id: existing)
-    monkeypatch.setattr(
-        instagram_api,
-        "get_encrypted_token",
-        lambda account_id: existing.encrypted_access_token,
+    instagram_environment.upsert_connection(
+        existing, encrypted_token=existing.encrypted_access_token
     )
     monkeypatch.setattr(instagram_api, "upsert_instagram_media", lambda items: items)
     monkeypatch.setattr(

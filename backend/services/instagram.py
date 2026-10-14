@@ -5,18 +5,24 @@ import json
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from backend.storage.instagram_repository import (
+    InstagramRepositoryError,
+    get_instagram_repository,
+)
 
 
 INSTAGRAM_AUTH_URL = "https://www.instagram.com/oauth/authorize"
 INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token"
 INSTAGRAM_GRAPH_URL = "https://graph.instagram.com"
+INSTAGRAM_REFRESH_PATH = "/refresh_access_token"
 INSTAGRAM_SCOPES = (
     "instagram_business_basic",
     "instagram_business_manage_insights",
@@ -32,15 +38,12 @@ class InstagramServiceError(Exception):
         self.status_code = status_code
 
 
-_consumed_nonces: set[str] = set()
-
-
 def _required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
         raise InstagramServiceError(
             "instagram_not_configured",
-            "Instagram connection is not configured.",
+            f"Missing required Instagram configuration: {name}.",
             503,
         )
     return value
@@ -51,17 +54,50 @@ def instagram_configured() -> bool:
         "POSTBRIDGE_INSTAGRAM_CLIENT_ID",
         "POSTBRIDGE_INSTAGRAM_CLIENT_SECRET",
         "POSTBRIDGE_INSTAGRAM_REDIRECT_URI",
+        "POSTBRIDGE_INSTAGRAM_APP_RETURN_URI",
         "POSTBRIDGE_TOKEN_ENCRYPTION_KEY",
         "POSTBRIDGE_OAUTH_STATE_SECRET",
     )
     return all(os.getenv(name) for name in required)
 
 
+def instagram_app_return_uri(requested_uri: Optional[str] = None) -> str:
+    """Return the single server-controlled mobile OAuth destination.
+
+    A caller may supply a URI only for equality validation. It can never select an
+    arbitrary destination, which keeps the callback from becoming an open redirect.
+    """
+    configured = _required_env("POSTBRIDGE_INSTAGRAM_APP_RETURN_URI")
+    parsed = urlparse(configured)
+    if parsed.scheme != "creatormind" or parsed.netloc != "instagram-connected":
+        raise InstagramServiceError(
+            "instagram_invalid_app_return_uri",
+            "Instagram mobile return URI is not configured safely.",
+            503,
+        )
+    if requested_uri is not None and requested_uri != configured:
+        raise InstagramServiceError(
+            "instagram_return_uri_not_allowed",
+            "Instagram mobile return URI is not allowed.",
+            400,
+        )
+    return configured
+
+
+def build_app_return_url(status: str, code: Optional[str] = None) -> str:
+    query = {"status": status}
+    if code:
+        query["code"] = code
+    return f"{instagram_app_return_uri()}?{urlencode(query)}"
+
+
 def create_oauth_state(user_id: str, lifetime_seconds: int = 600) -> str:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=lifetime_seconds)
     payload = {
         "user_id": user_id,
         "nonce": secrets.token_urlsafe(18),
-        "exp": int(time.time()) + lifetime_seconds,
+        "exp": int(expires_at.timestamp()),
     }
     encoded = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
@@ -71,6 +107,16 @@ def create_oauth_state(user_id: str, lifetime_seconds: int = 600) -> str:
         encoded,
         hashlib.sha256,
     ).digest()
+    try:
+        get_instagram_repository().create_oauth_state(
+            payload["nonce"], user_id, expires_at
+        )
+    except InstagramRepositoryError:
+        raise InstagramServiceError(
+            "instagram_storage_unavailable",
+            "Instagram connection storage is unavailable.",
+            503,
+        ) from None
     return f"{encoded.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
@@ -91,10 +137,22 @@ def consume_oauth_state(state: str) -> str:
             base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
         )
         nonce = str(payload["nonce"])
-        if int(payload["exp"]) < int(time.time()) or nonce in _consumed_nonces:
+        if int(payload["exp"]) < int(time.time()):
             raise ValueError
-        _consumed_nonces.add(nonce)
-        return str(payload["user_id"])
+        expected_user_id = str(payload["user_id"])
+        try:
+            stored_user_id = get_instagram_repository().consume_oauth_state(
+                nonce, datetime.now(timezone.utc)
+            )
+        except InstagramRepositoryError:
+            raise InstagramServiceError(
+                "instagram_storage_unavailable",
+                "Instagram connection storage is unavailable.",
+                503,
+            ) from None
+        if stored_user_id != expected_user_id:
+            raise ValueError
+        return expected_user_id
     except InstagramServiceError:
         raise
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -133,7 +191,25 @@ def _request_json(
     try:
         with urlopen(request, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except HTTPError as exc:
+        try:
+            error_payload = json.loads(exc.read().decode("utf-8"))
+            provider_error = error_payload.get("error", {})
+            error_code = provider_error.get("code")
+        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+            error_code = None
+        if error_code == 190:
+            raise InstagramServiceError(
+                "instagram_token_invalid",
+                "Instagram authorization is no longer valid.",
+                401,
+            ) from None
+        raise InstagramServiceError(
+            "instagram_upstream_error",
+            "Instagram could not complete the request.",
+            502,
+        ) from None
+    except (URLError, TimeoutError, json.JSONDecodeError, OSError):
         raise InstagramServiceError(
             "instagram_upstream_error",
             "Instagram could not complete the request.",
@@ -186,6 +262,25 @@ def exchange_long_lived_token(short_lived_token: str) -> dict[str, Any]:
         },
     )
     _token_from_payload(payload, "instagram_long_token_exchange_failed")
+    return payload
+
+
+def refresh_long_lived_token(long_lived_token: str) -> dict[str, Any]:
+    """Refresh a valid long-lived Instagram token.
+
+    This is an on-demand interface only. A future durable scheduler should invoke it
+    before expiry (target: seven days before ``token_expires_at``), persist the new
+    encrypted token atomically, and retry transient failures without duplicate jobs.
+    """
+    payload = _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}{INSTAGRAM_REFRESH_PATH}",
+        query={
+            "grant_type": "ig_refresh_token",
+            "access_token": long_lived_token,
+        },
+    )
+    _token_from_payload(payload, "instagram_token_refresh_failed")
     return payload
 
 

@@ -9,3 +9,9 @@ cryptography
 pytest
 # Legacy Gemini SDK; migrate the isolated adapter to google.genai separately.
 google-generativeai
+SQLAlchemy>=2.0,<3.0
+alembic>=1.13,<2.0
+psycopg[binary]>=3.1,<4.0
+gunicorn>=22,<24
+# Official OCI SDK; pure-Python and supported on linux/amd64 and linux/arm64.
+oci>=2.150,<3.0

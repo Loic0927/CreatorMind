@@ -1,0 +1,1 @@
+# Safe placeholder. Set OCI_CONFIG_HOST_PATH only when using OCI_CONFIG_FILE=/run/secrets/oci_config.

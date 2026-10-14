@@ -25,6 +25,11 @@ export const getInstagramInsights = (userId: string) => request<InsightsData>('/
 export const disconnectInstagram = (userId: string) => request('/api/instagram/connection', userId, { method: 'DELETE' });
 export async function connectInstagram(userId: string): Promise<void> {
   const result = await request<{ authorization_url: string }>('/api/instagram/connect/start', userId, { method: 'POST' });
-  const authResult = await WebBrowser.openAuthSessionAsync(result.authorization_url, Linking.createURL('instagram-connected'));
+  const returnUri = Linking.createURL('instagram-connected');
+  const authResult = await WebBrowser.openAuthSessionAsync(result.authorization_url, returnUri);
   if (authResult.type !== 'success') throw new ApiError('oauth_cancelled', 'Instagram connection was cancelled.', 400);
+  const parsed = Linking.parse(authResult.url);
+  const status = typeof parsed.queryParams?.status === 'string' ? parsed.queryParams.status : '';
+  const code = typeof parsed.queryParams?.code === 'string' ? parsed.queryParams.code : 'oauth_failed';
+  if (status !== 'success') throw new ApiError(code, 'Instagram could not be connected. Please try again.', 400);
 }

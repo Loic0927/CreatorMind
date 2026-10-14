@@ -2,6 +2,8 @@
 
 CreatorMind AI is a lightweight full-stack AI dashboard for predicting social content performance and generating practical creator insights.
 
+OCI production deployment is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`. Existing local and AWS deployment paths remain unchanged.
+
 Stack:
 
 - Frontend: Next.js + TypeScript + Tailwind
@@ -10,6 +12,26 @@ Stack:
 - Persistence: local JSON store at `backend/data/store.json`
 
 ## Project Setup
+
+### Environment files
+
+Environment files are intentionally separated because FastAPI, Next.js, Expo, and
+the two deployment targets load different filenames from different directories.
+Do not combine secrets into a root client environment file.
+
+| Runtime | Tracked template | Local/runtime file | Loaded by |
+| --- | --- | --- | --- |
+| FastAPI local backend | `backend/.env.example` | `backend/.env` | `backend/main.py` |
+| Next.js frontend | `frontend/.env.local.example` | `frontend/.env.local` | Next.js |
+| Expo mobile | `mobile/.env.example` | `mobile/.env.local` | Expo CLI |
+| OCI production | `.env.oci.example` | `.env.oci` | Docker Compose |
+| AWS Lightsail production | `deploy/aws-lightsail/.env.example` | `deploy/aws-lightsail/.env.production` | Docker Compose |
+
+Only templates belong in Git. The corresponding runtime files contain real values
+and are ignored. Copy only the template for the runtime you are starting, then
+replace its placeholders. Client files (`frontend/.env.local` and
+`mobile/.env.local`) must never contain provider secrets, OAuth client secrets,
+database credentials, or permanent access tokens.
 
 From the project root, install backend dependencies:
 
@@ -30,19 +52,10 @@ Create the frontend environment file:
 copy .env.local.example .env.local
 ```
 
-Set the backend YouTube Data API key if you want real public YouTube video data in the
-YouTube audit flow:
-
-```powershell
-$env:YOUTUBE_API_KEY="your-youtube-data-api-key"
-$env:GOOGLE_CLIENT_ID="your-google-client-id"
-$env:GOOGLE_CLIENT_SECRET="your-google-client-secret"
-$env:YOUTUBE_OAUTH_REDIRECT_URI="http://127.0.0.1:8000/auth/youtube/callback"
-$env:FRONTEND_BASE_URL="http://localhost:3000"
-```
-
-CreatorMind uses this key only for the official YouTube Data API public `videos`
-endpoint. It does not scrape YouTube pages.
+Configure backend integrations in `backend/.env`, using
+`backend/.env.example` as the complete local-backend reference. CreatorMind uses
+the YouTube key only for the official YouTube Data API public `videos` endpoint;
+it does not scrape YouTube pages.
 
 ## Backend
 

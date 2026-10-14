@@ -67,7 +67,10 @@ class InstagramAccount(BaseModel):
     media_count: Optional[int] = None
     encrypted_access_token: str
     token_expires_at: Optional[datetime] = None
-    status: Literal["connected", "expired", "disconnected", "error"] = "connected"
+    scopes: list[str] = Field(default_factory=list)
+    status: Literal[
+        "connected", "expired", "reconnect_required", "disconnected", "error"
+    ] = "connected"
     connected_at: datetime
     last_synced_at: Optional[datetime] = None
     last_error: Optional[str] = None

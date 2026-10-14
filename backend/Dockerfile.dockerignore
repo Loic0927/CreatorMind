@@ -6,9 +6,16 @@
 !.env.example
 backend/.env
 backend/.env.*
-!backend/.env.example
+backend/test*.py
+backend/**/test*.py
 .venv/
 venv/
 backend/data/
+deploy/**/.env.production
+**/*token*.local.json
+**/backups/
+**/*.pem
+**/*.key
+**/logs/
 frontend/
 mobile/

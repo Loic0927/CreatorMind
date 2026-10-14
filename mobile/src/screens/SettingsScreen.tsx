@@ -8,6 +8,8 @@ import { InstagramConnection } from '../types';
 export function SettingsScreen({ email, onLogout }: { email: string; onLogout: () => Promise<void> }) {
   const [connection, setConnection] = useState<InstagramConnection>({ connected: false, configured: false, status: 'not_connected' }); const [error, setError] = useState('');
   const load = useCallback(async () => { try { setConnection(await getConnection(email)); setError(''); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load connection.'); } }, [email]);
+  // The state updates in load happen as part of the asynchronous API request.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { load(); }, [load]);
   const connect = async () => { try { await connectInstagram(email); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Could not connect Instagram.'); } };
   const confirmDisconnect = () => Alert.alert('Disconnect Instagram?', 'Instagram Insights will stop updating. Your CreatorMind account and historical snapshots will be kept.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Disconnect', style: 'destructive', onPress: async () => { await disconnectInstagram(email); await load(); } }]);

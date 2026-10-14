@@ -1,4 +1,4 @@
-export type ConnectionStatus = 'not_connected' | 'connected' | 'expired' | 'disconnected' | 'error';
+export type ConnectionStatus = 'not_connected' | 'connected' | 'expired' | 'reconnect_required' | 'disconnected' | 'error';
 export type InstagramConnection = { connected: boolean; configured: boolean; status: ConnectionStatus; username?: string; profile_picture_url?: string; account_type?: string; last_synced_at?: string };
 export type MetricValue = number | null;
 export type InstagramMedia = { id: string; instagram_media_id: string; media_type: string; media_url?: string; thumbnail_url?: string; caption: string; published_at: string; last_synced_at: string };
