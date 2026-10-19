@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "CreatorMind",
-    "slug": "creatormind-mobile",
-    "scheme": "creatormind",
+    "name": "PostBridge",
+    "slug": "postbridge-mobile",
+    "scheme": "postbridge",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "CreatorMind uses your selected photo to preview a social post."
+        "NSPhotoLibraryUsageDescription": "PostBridge uses your selected photo to preview a social post."
       }
     },
     "android": {

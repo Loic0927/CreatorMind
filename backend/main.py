@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 import joblib
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import RedirectResponse
@@ -35,14 +35,16 @@ from backend.services.youtube import (
     store_youtube_connection,
 )
 from backend.instagram_api import router as instagram_router
+from backend.auth import AuthenticatedUser, require_user
+from backend.auth_api import router as auth_router
+from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
 from backend.config import csv_environment, is_production, validate_runtime_environment
 from backend.storage.json_store import (
-    append_prediction_history,
     get_analytics_snapshots,
     get_posts,
-    get_prediction_history,
     get_social_connections,
 )
+from backend.storage.content_repository import get_content_repository
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,7 +70,8 @@ def log_environment_presence() -> None:
 
 log_environment_presence()
 
-app = FastAPI(title="CreatorMind AI API")
+app = FastAPI(title="PostBridge API")
+app.include_router(auth_router)
 app.include_router(instagram_router)
 
 cors_origins = csv_environment(
@@ -385,9 +388,9 @@ def run_prediction(payload: PredictionRequest) -> dict:
     }
 
 
-def build_dashboard_summary() -> DashboardSummaryResponse:
-    history = get_prediction_history()
-    connections = get_social_connections()
+def build_dashboard_summary(user_id: str) -> DashboardSummaryResponse:
+    history = get_content_repository().predictions(user_id)
+    connections = [item for item in get_social_connections() if item.user_id == user_id]
     posts = get_posts()
     snapshots = get_analytics_snapshots()
 
@@ -417,8 +420,8 @@ def build_dashboard_summary() -> DashboardSummaryResponse:
     )
 
 
-def build_recent_analyses(limit: int = 5) -> list[RecentAnalysisResponse]:
-    history = sorted(get_prediction_history(), key=lambda item: item.created_at, reverse=True)
+def build_recent_analyses(user_id: str, limit: int = 5) -> list[RecentAnalysisResponse]:
+    history = sorted(get_content_repository().predictions(user_id), key=lambda item: item.created_at, reverse=True)
     items: list[RecentAnalysisResponse] = []
 
     for entry in history[:limit]:
@@ -462,7 +465,7 @@ def build_platform_status() -> list[PlatformStatusResponse]:
 @app.get("/")
 def root() -> dict:
     return {
-        "name": "CreatorMind AI API",
+        "name": "PostBridge API",
         "status": "running",
         "docs": "/docs",
     }
@@ -544,36 +547,36 @@ def youtube_auth_disconnect(user_id: str) -> dict:
 
 
 @app.get("/dashboard/summary", response_model=DashboardSummaryResponse)
-def dashboard_summary() -> DashboardSummaryResponse:
-    return build_dashboard_summary()
+def dashboard_summary(user: AuthenticatedUser = Depends(require_user)) -> DashboardSummaryResponse:
+    return build_dashboard_summary(user.id)
 
 
 @app.get("/dashboard/recent-analyses", response_model=list[RecentAnalysisResponse])
-def dashboard_recent_analyses() -> list[RecentAnalysisResponse]:
-    return build_recent_analyses()
+def dashboard_recent_analyses(user: AuthenticatedUser = Depends(require_user)) -> list[RecentAnalysisResponse]:
+    return build_recent_analyses(user.id)
 
 
 @app.get("/dashboard/platform-status", response_model=list[PlatformStatusResponse])
-def dashboard_platform_status() -> list[PlatformStatusResponse]:
+def dashboard_platform_status(user: AuthenticatedUser = Depends(require_user)) -> list[PlatformStatusResponse]:
     return build_platform_status()
 
 
 @app.get("/history", response_model=HistoryResponse)
-def history() -> HistoryResponse:
-    return HistoryResponse(items=build_recent_analyses(limit=100))
+def history(user: AuthenticatedUser = Depends(require_user)) -> HistoryResponse:
+    return HistoryResponse(items=build_recent_analyses(user.id, limit=100))
 
 
 @app.post("/predict", response_model=PredictionResponse)
-def predict(payload: PredictionRequest) -> PredictionResponse:
+def predict(payload: PredictionRequest, user: AuthenticatedUser = Depends(require_user)) -> PredictionResponse:
     prediction = run_prediction(payload)
     insights = generate_content_insights(payload.model_dump(), prediction)
     response = PredictionResponse(**prediction, insights=InsightResponse(**insights))
-    append_prediction_history(payload.model_dump(), response.model_dump())
+    get_content_repository().append_prediction(user.id, payload.model_dump(), response.model_dump())
     return response
 
 
 @app.post("/analyze-url", response_model=PredictionResponse)
-def analyze_url(payload: AnalyzeUrlRequest) -> PredictionResponse:
+def analyze_url(payload: AnalyzeUrlRequest, user: AuthenticatedUser = Depends(require_user)) -> PredictionResponse:
     try:
         parsed = parse_content_url(payload.url)
     except ValueError as exc:
@@ -583,7 +586,8 @@ def analyze_url(payload: AnalyzeUrlRequest) -> PredictionResponse:
     prediction = run_prediction(prediction_input)
     insights = generate_content_insights(prediction_input.model_dump(), prediction)
     response = PredictionResponse(**prediction, insights=InsightResponse(**insights))
-    append_prediction_history(
+    get_content_repository().append_prediction(
+        user.id,
         {
             "url": payload.url,
             "parsed": parsed.prediction_input,
@@ -595,7 +599,7 @@ def analyze_url(payload: AnalyzeUrlRequest) -> PredictionResponse:
 
 
 @app.post("/audit-content", response_model=AuditContentResponse)
-def audit_content(payload: AuditContentRequest) -> AuditContentResponse:
+def audit_content(payload: AuditContentRequest, user: AuthenticatedUser = Depends(require_user)) -> AuditContentResponse:
     logger.info("AUDIT_CONTENT submit started")
     logger.info(
         "AUDIT_CONTENT payload: %s",
@@ -682,7 +686,8 @@ def audit_content(payload: AuditContentRequest) -> AuditContentResponse:
         content_diagnosis=ContentDiagnosisResponse(**diagnosis),
         prediction_signal=prediction_signal,
     )
-    append_prediction_history(
+    get_content_repository().append_prediction(
+        user.id,
         {
             "url": payload.url,
             "platform": platform,
@@ -696,6 +701,35 @@ def audit_content(payload: AuditContentRequest) -> AuditContentResponse:
     logger.info("AUDIT_CONTENT response ready")
     logger.info("AUDIT_CONTENT history persisted")
     return response
+
+
+class MobileCaptionRequest(BaseModel):
+    information: str = Field(..., min_length=3, max_length=4000)
+    goal: str = Field(..., min_length=2, max_length=200)
+
+
+class MobileCaptionResponse(BaseModel):
+    caption: str
+    hashtags: str
+
+
+@app.post("/mobile/caption", response_model=MobileCaptionResponse)
+def mobile_caption(payload: MobileCaptionRequest, user: AuthenticatedUser = Depends(require_user)) -> MobileCaptionResponse:
+    prompt = (
+        "Create an Instagram caption for the following content. Return exactly two sections: "
+        "CAPTION: followed by the caption, and HASHTAGS: followed by 5 to 8 relevant hashtags. "
+        f"Content: {payload.information}\nGoal: {payload.goal}"
+    )
+    try:
+        generated = generate_gemini_content(prompt)
+    except GeminiConfigurationError as exc:
+        raise HTTPException(status_code=503, detail={"code": "caption_not_configured", "message": str(exc)}) from None
+    except GeminiUpstreamError as exc:
+        raise HTTPException(status_code=502, detail={"code": "caption_generation_failed", "message": str(exc)}) from None
+    caption_text, marker, hashtag_text = generated.partition("HASHTAGS:")
+    caption = caption_text.removeprefix("CAPTION:").strip()
+    hashtags = hashtag_text.strip() if marker else ""
+    return MobileCaptionResponse(caption=caption, hashtags=hashtags)
 
 
 @app.post("/audit-youtube", response_model=YouTubeAuditResponse)

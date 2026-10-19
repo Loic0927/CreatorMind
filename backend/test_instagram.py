@@ -43,6 +43,7 @@ def instagram_environment(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("POSTBRIDGE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("POSTBRIDGE_OAUTH_STATE_SECRET", "test-state-secret")
+    monkeypatch.setenv("FRONTEND_BASE_URL", "https://app.example.test")
     repository = LocalDevelopmentInstagramRepository()
     monkeypatch.setattr(instagram, "get_instagram_repository", lambda: repository)
     monkeypatch.setattr(instagram_api, "get_instagram_repository", lambda: repository)
@@ -184,6 +185,17 @@ def test_callback_rejects_invalid_or_denied_requests(kwargs, expected_code):
         "code": [expected_code],
     }
     assert "access_denied" not in response.headers["location"]
+
+
+def test_web_callback_denial_returns_to_web_app():
+    state = create_oauth_state("owner@example.test", client="web")
+    response = instagram_api.connect_callback(
+        state=state, error="access_denied"
+    )
+    assert response.headers["location"] == (
+        "https://app.example.test/dashboard?"
+        "instagram=error&code=instagram_authorization_denied"
+    )
 
 
 def test_callback_exchange_error_is_sanitized(monkeypatch):

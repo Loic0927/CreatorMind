@@ -6,6 +6,6 @@ describe('buildMockCaption', () => {
     expect(result.caption).toContain('Calm Content Workflow');
     expect(result.caption).toContain('Plan once and reuse ideas.');
     expect(result.hashtags).toContain('#calm');
-    expect(result.hashtags).toContain('#creatormind');
+    expect(result.hashtags).toContain('#postbridge');
   });
 });

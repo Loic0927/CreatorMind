@@ -47,11 +47,35 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import os, urllib.request; request = urllib.request.Request('http://127.0.0.1:8000/health', headers={'Host': os.environ['POSTBRIDGE_API_DOMAIN']}); urllib.request.urlopen(request, timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging: *default-logging
+
+  frontend:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${POSTBRIDGE_PUBLIC_API_URL:?set POSTBRIDGE_PUBLIC_API_URL in .env.oci}
+    image: postbridge-web:oci
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    expose: ["3000"]
+    networks: [proxy]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/dashboard').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     logging: *default-logging
 
   nginx:
@@ -65,11 +89,16 @@ services:
       - certbot_www:/var/www/certbot:ro
       - letsencrypt:/etc/letsencrypt:ro
     environment:
-      NGINX_SERVER_NAME: ${POSTBRIDGE_DOMAIN:?set POSTBRIDGE_DOMAIN in .env.oci}
+      NGINX_WEB_SERVER_NAME: ${POSTBRIDGE_WEB_DOMAIN:?set POSTBRIDGE_WEB_DOMAIN in .env.oci}
+      NGINX_WWW_SERVER_NAME: ${POSTBRIDGE_WWW_DOMAIN:?set POSTBRIDGE_WWW_DOMAIN in .env.oci}
+      NGINX_API_SERVER_NAME: ${POSTBRIDGE_API_DOMAIN:?set POSTBRIDGE_API_DOMAIN in .env.oci}
+      NGINX_CERTIFICATE_NAME: ${POSTBRIDGE_WEB_DOMAIN:?set POSTBRIDGE_WEB_DOMAIN in .env.oci}
       NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-10m}
     networks: [proxy]
     depends_on:
       app:
+        condition: service_healthy
+      frontend:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/nginx-health || exit 1"]

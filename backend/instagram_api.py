@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -11,27 +11,22 @@ from backend.services.instagram import (
     aggregate_seven_days,
     build_app_return_url,
     build_authorization_url,
-    consume_oauth_state,
+    consume_oauth_state_context,
     create_oauth_state,
     decrypt_access_token,
+    engagement_rate,
     encrypt_access_token,
     exchange_authorization_code,
     exchange_long_lived_token,
     fetch_instagram_media,
+    fetch_instagram_media_insights,
     fetch_instagram_profile,
     instagram_configured,
     token_expiry,
 )
-from backend.storage.json_store import (
-    create_tracked_post,
-    get_instagram_media as get_stored_instagram_media,
-    get_tracked_posts,
-    load_store,
-    stop_tracked_post,
-    update_store,
-    upsert_instagram_media,
-)
-from backend.storage.models import InstagramAccount, InstagramMedia
+from backend.auth import AuthenticatedUser, require_user
+from backend.storage.content_repository import get_content_repository
+from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
@@ -42,8 +37,13 @@ from backend.storage.instagram_repository import (
 router = APIRouter()
 
 
-def current_user(x_user_id: str = Header(..., alias="X-User-Id")) -> str:
-    value = x_user_id.strip()
+def upsert_instagram_media(items: list[InstagramMedia]) -> list[InstagramMedia]:
+    """Compatibility boundary retained for tests and local integrations."""
+    return get_content_repository().upsert_media(items)
+
+
+def current_user(user: AuthenticatedUser | str) -> str:
+    value = user.id if isinstance(user, AuthenticatedUser) else user.strip()
     if not value:
         raise HTTPException(
             status_code=401,
@@ -168,16 +168,16 @@ def _handle_connected_service_error(
 
 @router.get("/api/instagram/connection")
 @router.get("/instagram/connection", include_in_schema=False)
-def connection(user_id: str = Header(..., alias="X-User-Id")):
-    return public_account(stored_connection(current_user(user_id)))
+def connection(user: AuthenticatedUser = Depends(require_user)):
+    return public_account(stored_connection(current_user(user)))
 
 
 @router.post("/api/instagram/connect/start")
 @router.post("/instagram/connect/start", include_in_schema=False)
-def connect_start(user_id: str = Header(..., alias="X-User-Id")):
-    user_id = current_user(user_id)
+def connect_start(client: str = Query("mobile"), user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
     try:
-        return {"authorization_url": build_authorization_url(create_oauth_state(user_id))}
+        return {"authorization_url": build_authorization_url(create_oauth_state(user_id, client=client))}
     except InstagramServiceError as exc:
         raise service_error(exc) from exc
 
@@ -189,10 +189,18 @@ def connect_callback(
     state: str | None = None,
     error: str | None = None,
 ):
+    client = "mobile"
     try:
         if error:
+            if state:
+                try:
+                    _, client = consume_oauth_state_context(state)
+                except InstagramServiceError:
+                    pass
             return RedirectResponse(
-                build_app_return_url("error", "instagram_authorization_denied"),
+                build_app_return_url(
+                    "error", "instagram_authorization_denied", client
+                ),
                 status_code=302,
             )
         if not code or not state:
@@ -200,7 +208,7 @@ def connect_callback(
                 build_app_return_url("error", "invalid_oauth_callback"),
                 status_code=302,
             )
-        user_id = consume_oauth_state(state)
+        user_id, client = consume_oauth_state_context(state)
         short_payload = exchange_authorization_code(code)
         long_payload = exchange_long_lived_token(short_payload["access_token"])
         access_token = long_payload["access_token"]
@@ -236,18 +244,18 @@ def connect_callback(
             )
         except InstagramRepositoryError:
             raise repository_error() from None
-        return RedirectResponse(build_app_return_url("success"), status_code=302)
+        return RedirectResponse(build_app_return_url("success", client=client), status_code=302)
     except InstagramServiceError as exc:
-        return RedirectResponse(build_app_return_url("error", exc.code), status_code=302)
+        return RedirectResponse(build_app_return_url("error", exc.code, client), status_code=302)
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         safe_code = str(detail.get("code", "instagram_callback_failed"))
-        return RedirectResponse(build_app_return_url("error", safe_code), status_code=302)
+        return RedirectResponse(build_app_return_url("error", safe_code, client), status_code=302)
 
 
 @router.get("/api/instagram/account")
-def account(user_id: str = Header(..., alias="X-User-Id")):
-    user_id = current_user(user_id)
+def account(user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
     stored = _active_account(user_id)
     try:
         profile = fetch_instagram_profile(_access_token(stored))
@@ -281,8 +289,8 @@ def _parse_timestamp(value: object) -> datetime:
 
 @router.get("/api/instagram/media")
 @router.get("/instagram/media", include_in_schema=False)
-def media(user_id: str = Header(..., alias="X-User-Id")):
-    account = _active_account(current_user(user_id))
+def media(user: AuthenticatedUser = Depends(require_user)):
+    account = _active_account(current_user(user))
     try:
         upstream = fetch_instagram_media(_access_token(account))
         now = datetime.now(timezone.utc)
@@ -309,29 +317,23 @@ def media(user_id: str = Header(..., alias="X-User-Id")):
 
 
 def _disconnect(user_id: str) -> dict:
-    def mutate(store):
-        for tracked in store.tracked_posts:
-            if tracked.user_id == user_id and tracked.is_active:
-                tracked.is_active = False
-                tracked.stopped_at = datetime.now(timezone.utc)
-
     try:
         disconnected = repository().delete_connection(user_id)
     except InstagramRepositoryError:
         raise repository_error() from None
     if disconnected:
-        update_store(mutate)
+        get_content_repository().stop_all_tracked(user_id)
     return {"disconnected": disconnected}
 
 
 @router.delete("/api/instagram/connection")
-def delete_connection(user_id: str = Header(..., alias="X-User-Id")):
-    return _disconnect(current_user(user_id))
+def delete_connection(user: AuthenticatedUser = Depends(require_user)):
+    return _disconnect(current_user(user))
 
 
 @router.post("/instagram/disconnect", include_in_schema=False)
-def legacy_disconnect(user_id: str = Header(..., alias="X-User-Id")):
-    return _disconnect(current_user(user_id))
+def legacy_disconnect(user: AuthenticatedUser = Depends(require_user)):
+    return _disconnect(current_user(user))
 
 
 class TrackRequest(BaseModel):
@@ -339,25 +341,26 @@ class TrackRequest(BaseModel):
 
 
 @router.post("/tracked-posts")
-def track(payload: TrackRequest, user_id: str = Header(..., alias="X-User-Id")):
-    user_id = current_user(user_id)
+def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
     account = stored_connection(user_id)
     owned_ids = (
-        {item.id for item in get_stored_instagram_media(account.id)} if account else set()
+        {item.id for item in get_content_repository().media_for_account(account.id)} if account else set()
     )
     if payload.media_id not in owned_ids:
         raise HTTPException(
             status_code=404,
             detail={"code": "media_not_found", "message": "Instagram post was not found."},
         )
-    return create_tracked_post(user_id, payload.media_id)
+    return get_content_repository().create_tracked(user_id, payload.media_id)
 
 
 def tracked_payload(user_id: str):
-    store = load_store()
-    media_by_id = {item.id: item for item in store.instagram_media}
+    account = stored_connection(user_id)
+    media = get_content_repository().media_for_account(account.id) if account else []
+    media_by_id = {item.id: item for item in media}
     snapshots_by_media = {}
-    for item in store.instagram_insight_snapshots:
+    for item in get_content_repository().snapshots(list(media_by_id)):
         if (
             item.media_id not in snapshots_by_media
             or item.captured_at > snapshots_by_media[item.media_id].captured_at
@@ -369,18 +372,18 @@ def tracked_payload(user_id: str):
             "media": media_by_id.get(tracked.media_id),
             "latest": snapshots_by_media.get(tracked.media_id),
         }
-        for tracked in get_tracked_posts(user_id)
+        for tracked in get_content_repository().tracked(user_id)
     ]
 
 
 @router.get("/tracked-posts")
-def tracked_posts(user_id: str = Header(..., alias="X-User-Id")):
-    return {"items": tracked_payload(current_user(user_id))}
+def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
+    return {"items": tracked_payload(current_user(user))}
 
 
 @router.get("/tracked-posts/{tracked_id}")
-def tracked_detail(tracked_id: str, user_id: str = Header(..., alias="X-User-Id")):
-    user_id = current_user(user_id)
+def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
     item = next(
         (
             item
@@ -397,18 +400,17 @@ def tracked_detail(tracked_id: str, user_id: str = Header(..., alias="X-User-Id"
                 "message": "Tracked post was not found.",
             },
         )
-    store = load_store()
     item["snapshots"] = [
         snapshot
-        for snapshot in store.instagram_insight_snapshots
+        for snapshot in get_content_repository().snapshots([item["tracking"].media_id])
         if snapshot.media_id == item["tracking"].media_id
     ]
     return item
 
 
 @router.delete("/tracked-posts/{tracked_id}")
-def stop_tracking(tracked_id: str, user_id: str = Header(..., alias="X-User-Id")):
-    if not stop_tracked_post(current_user(user_id), tracked_id):
+def stop_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    if not get_content_repository().stop_tracked(current_user(user), tracked_id):
         raise HTTPException(
             status_code=404,
             detail={
@@ -421,12 +423,11 @@ def stop_tracking(tracked_id: str, user_id: str = Header(..., alias="X-User-Id")
 
 @router.post("/tracked-posts/{tracked_id}/refresh")
 def refresh_tracking(
-    tracked_id: str, user_id: str = Header(..., alias="X-User-Id")
+    tracked_id: str, user: AuthenticatedUser = Depends(require_user)
 ):
-    user_id = current_user(user_id)
-    if not any(
-        item["tracking"].id == tracked_id for item in tracked_payload(user_id)
-    ):
+    user_id = current_user(user)
+    tracked_item = next((item for item in tracked_payload(user_id) if item["tracking"].id == tracked_id), None)
+    if not tracked_item:
         raise HTTPException(
             status_code=404,
             detail={
@@ -434,20 +435,29 @@ def refresh_tracking(
                 "message": "Tracked post was not found.",
             },
         )
-    raise HTTPException(
-        status_code=503,
-        detail={
-            "code": "instagram_insights_not_implemented",
-            "message": "Live Instagram Insights refresh is not implemented yet.",
-        },
+    account = _active_account(user_id)
+    media_item = tracked_item.get("media")
+    if media_item is None:
+        raise HTTPException(status_code=404, detail={"code": "media_not_found", "message": "Instagram post was not found."})
+    try:
+        metrics = fetch_instagram_media_insights(_access_token(account), media_item.instagram_media_id)
+    except InstagramServiceError as exc:
+        raise _handle_connected_service_error(account, exc) from exc
+    snapshot = InstagramInsightSnapshot(
+        id=str(uuid4()), media_id=media_item.id, captured_at=datetime.now(timezone.utc),
+        likes=metrics.get("likes"), comments=metrics.get("comments"), saves=metrics.get("saves"),
+        shares=metrics.get("shares"), reach=metrics.get("reach"), views=metrics.get("views"),
+        engagement_rate=engagement_rate(metrics), raw_metrics=metrics,
     )
+    get_content_repository().append_snapshot(snapshot)
+    return tracked_detail(tracked_id, user)
 
 
 @router.get("/insights/instagram")
 def insights(
-    period: str = Query("7d"), user_id: str = Header(..., alias="X-User-Id")
+    period: str = Query("7d"), user: AuthenticatedUser = Depends(require_user)
 ):
-    user_id = current_user(user_id)
+    user_id = current_user(user)
     if period != "7d":
         raise HTTPException(
             status_code=400,
@@ -458,12 +468,19 @@ def insights(
         return {"status": "not_connected", "period": "7d"}
     if account.status != "connected":
         return {"status": account.status, "period": "7d"}
-    store = load_store()
-    stored_media = [
-        item for item in store.instagram_media if item.account_id == account.id
-    ]
-    result = aggregate_seven_days(stored_media, store.instagram_insight_snapshots)
+    stored_media = get_content_repository().media_for_account(account.id)
+    snapshots = get_content_repository().snapshots([item.id for item in stored_media])
+    result = aggregate_seven_days(stored_media, snapshots)
     result["status"] = "connected"
-    result["top_posts"] = []
-    result["trend"] = []
+    tracked = tracked_payload(user_id)
+    result["top_posts"] = sorted(
+        [item for item in tracked if item.get("latest")],
+        key=lambda item: item["latest"].engagement_rate,
+        reverse=True,
+    )[:3]
+    daily: dict[str, int] = {}
+    for snapshot in snapshots:
+        day = snapshot.captured_at.date().isoformat()
+        daily[day] = daily.get(day, 0) + (snapshot.reach or snapshot.views or 0)
+    result["trend"] = [{"date": day, "value": value} for day, value in sorted(daily.items())[-7:]]
     return result

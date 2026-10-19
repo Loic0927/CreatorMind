@@ -69,7 +69,7 @@ def instagram_app_return_uri(requested_uri: Optional[str] = None) -> str:
     """
     configured = _required_env("POSTBRIDGE_INSTAGRAM_APP_RETURN_URI")
     parsed = urlparse(configured)
-    if parsed.scheme != "creatormind" or parsed.netloc != "instagram-connected":
+    if parsed.scheme not in {"postbridge", "creatormind"} or parsed.netloc != "instagram-connected":
         raise InstagramServiceError(
             "instagram_invalid_app_return_uri",
             "Instagram mobile return URI is not configured safely.",
@@ -84,20 +84,29 @@ def instagram_app_return_uri(requested_uri: Optional[str] = None) -> str:
     return configured
 
 
-def build_app_return_url(status: str, code: Optional[str] = None) -> str:
+def build_app_return_url(status: str, code: Optional[str] = None, client: str = "mobile") -> str:
     query = {"status": status}
     if code:
         query["code"] = code
+    if client == "web":
+        frontend = _required_env("FRONTEND_BASE_URL").rstrip("/")
+        web_query = {"instagram": status}
+        if code:
+            web_query["code"] = code
+        return f"{frontend}/dashboard?{urlencode(web_query)}"
     return f"{instagram_app_return_uri()}?{urlencode(query)}"
 
 
-def create_oauth_state(user_id: str, lifetime_seconds: int = 600) -> str:
+def create_oauth_state(user_id: str, lifetime_seconds: int = 600, client: str = "mobile") -> str:
+    if client not in {"mobile", "web"}:
+        raise InstagramServiceError("instagram_invalid_client", "Instagram connection client is invalid.", 400)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=lifetime_seconds)
     payload = {
         "user_id": user_id,
         "nonce": secrets.token_urlsafe(18),
         "exp": int(expires_at.timestamp()),
+        "client": client,
     }
     encoded = base64.urlsafe_b64encode(
         json.dumps(payload, separators=(",", ":")).encode()
@@ -120,7 +129,7 @@ def create_oauth_state(user_id: str, lifetime_seconds: int = 600) -> str:
     return f"{encoded.decode()}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
-def consume_oauth_state(state: str) -> str:
+def consume_oauth_state_context(state: str) -> tuple[str, str]:
     try:
         encoded, supplied_signature = state.split(".", 1)
         expected = hmac.new(
@@ -152,7 +161,10 @@ def consume_oauth_state(state: str) -> str:
             ) from None
         if stored_user_id != expected_user_id:
             raise ValueError
-        return expected_user_id
+        client = str(payload.get("client", "mobile"))
+        if client not in {"mobile", "web"}:
+            raise ValueError
+        return expected_user_id, client
     except InstagramServiceError:
         raise
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -161,6 +173,10 @@ def consume_oauth_state(state: str) -> str:
             "Instagram connection request is invalid or expired.",
             400,
         ) from exc
+
+
+def consume_oauth_state(state: str) -> str:
+    return consume_oauth_state_context(state)[0]
 
 
 def build_authorization_url(state: str) -> str:
@@ -319,6 +335,45 @@ def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
             502,
         )
     return [item for item in items if isinstance(item, dict)]
+
+
+def fetch_instagram_media_insights(access_token: str, instagram_media_id: str) -> dict[str, int]:
+    """Fetch the metrics supported for a media item without fabricating missing values."""
+    metrics: dict[str, int] = {}
+    try:
+        basic = _request_json(
+            "GET",
+            f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}",
+            query={"fields": "like_count,comments_count", "access_token": access_token},
+        )
+        if isinstance(basic.get("like_count"), int):
+            metrics["likes"] = basic["like_count"]
+        if isinstance(basic.get("comments_count"), int):
+            metrics["comments"] = basic["comments_count"]
+    except InstagramServiceError:
+        pass
+
+    for upstream_name, local_name in (("reach", "reach"), ("saved", "saves"), ("shares", "shares"), ("views", "views")):
+        try:
+            payload = _request_json(
+                "GET",
+                f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/insights",
+                query={"metric": upstream_name, "access_token": access_token},
+            )
+            data = payload.get("data")
+            if not isinstance(data, list) or not data:
+                continue
+            metric = data[0] if isinstance(data[0], dict) else {}
+            value = metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
+            if value is None and isinstance(metric.get("values"), list) and metric["values"]:
+                value = metric["values"][0].get("value")
+            if isinstance(value, (int, float)):
+                metrics[local_name] = int(value)
+        except InstagramServiceError:
+            continue
+    if not metrics:
+        raise InstagramServiceError("instagram_insights_unavailable", "Instagram did not return insights for this post.", 502)
+    return metrics
 
 
 def encrypt_access_token(token: str) -> str:

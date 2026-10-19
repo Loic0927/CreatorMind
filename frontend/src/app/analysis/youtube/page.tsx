@@ -1,7 +1,5 @@
-import YouTubeAuditForm from "@/components/YouTubeAuditForm";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-export default function YouTubeAuditPage() {
-  return <YouTubeAuditForm />;
+export default function LegacyYouTubeAnalysisPage() {
+  redirect("/dashboard");
 }

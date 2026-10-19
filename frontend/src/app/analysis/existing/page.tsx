@@ -1,7 +1,5 @@
-import PredictionForm from "@/components/PredictionForm";
+import { redirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-export default function ExistingAnalysisPage() {
-  return <PredictionForm />;
+export default function LegacyExistingAnalysisPage() {
+  redirect("/dashboard");
 }

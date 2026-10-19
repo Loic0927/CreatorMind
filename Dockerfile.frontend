@@ -1,0 +1,35 @@
+FROM node:20-alpine AS dependencies
+
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+FROM node:20-alpine AS builder
+
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+
+WORKDIR /app
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY frontend ./
+RUN test -n "$NEXT_PUBLIC_API_BASE_URL" \
+    && npm run build
+
+FROM node:20-alpine AS runner
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    HOSTNAME=0.0.0.0 \
+    PORT=3000
+
+WORKDIR /app
+RUN addgroup --system --gid 10001 nodejs \
+    && adduser --system --uid 10001 --ingroup nodejs nextjs
+
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]

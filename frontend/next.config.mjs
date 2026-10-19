@@ -1,8 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  output: "standalone",
+  outputFileTracingRoot: process.cwd(),
 };
 
 export default nextConfig;

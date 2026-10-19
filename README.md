@@ -1,6 +1,9 @@
-# CreatorMind AI
+# PostBridge
 
-CreatorMind AI is a lightweight full-stack AI dashboard for predicting social content performance and generating practical creator insights.
+PostBridge is a full-stack creator app with one email-based account shared by the
+responsive Next.js web app and the Expo mobile app. It connects Instagram,
+tracks post insights, generates captions, and preserves the trained social-content
+prediction model in `backend/models/model.pkl`.
 
 OCI production deployment is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`. Existing local and AWS deployment paths remain unchanged.
 
@@ -9,7 +12,8 @@ Stack:
 - Frontend: Next.js + TypeScript + Tailwind
 - Backend: FastAPI
 - ML artifact: `backend/models/model.pkl`
-- Persistence: local JSON store at `backend/data/store.json`
+- Production persistence: PostgreSQL
+- Local development persistence: SQLite for accounts and optional JSON fallback for legacy content
 
 ## Project Setup
 
@@ -53,7 +57,7 @@ copy .env.local.example .env.local
 ```
 
 Configure backend integrations in `backend/.env`, using
-`backend/.env.example` as the complete local-backend reference. CreatorMind uses
+`backend/.env.example` as the complete local-backend reference. PostBridge uses
 the YouTube key only for the official YouTube Data API public `videos` endpoint;
 it does not scrape YouTube pages.
 
@@ -75,7 +79,13 @@ Available routes:
 
 - `GET /`
 - `GET /health`
+- `POST /auth/request-code`
+- `POST /auth/verify-code`
+- `GET /auth/session`
+- `POST /auth/logout`
+- `DELETE /auth/account`
 - `POST /predict`
+- `POST /mobile/caption`
 - `POST /audit-content`
 - `POST /audit-youtube`
 - `GET /auth/youtube/start`
@@ -120,11 +130,16 @@ The frontend expects the backend at:
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
 
+The same email address creates the same backend user on web and mobile. Both
+clients send an opaque bearer session to the API, so Instagram connections,
+tracked posts, insight snapshots, and saved predictions are account-scoped and
+available on either client.
+
 ## Current Real Capabilities
 
 - Real prediction requests through `POST /predict`
 - Real model inference from `backend/models/model.pkl`
-- Real prediction history persistence in `backend/data/store.json`
+- Real account-scoped prediction history persistence in PostgreSQL in production
 - Real dashboard summary data derived from saved prediction history
 - Real recent analyses list derived from saved prediction history
 - Real platform connection status responses from stored connection records

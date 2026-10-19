@@ -14,8 +14,8 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "CreatorMind AI",
-  description: "AI dashboard for creator content performance prediction"
+  title: "PostBridge",
+  description: "Create, analyze and track social content across web and mobile"
 };
 
 export default function RootLayout({
