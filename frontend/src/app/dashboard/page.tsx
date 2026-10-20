@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Connection, Prediction, Session, TrackedPost, caption, connectInstagram,
-  deleteAccount, getConnection, getHistory, getInsights, getInstagramMedia, getTrackedPosts, logout,
+  deleteAccount, getConnection, getHistory, getInstagramMedia, getTrackedPosts, logout,
   predict, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, verifyCode,
 } from "@/lib/postbridge";
 
@@ -45,7 +45,7 @@ export default function DashboardPage() {
 
 function Brand({ compact = false }: { compact?: boolean }) { return <div className={`flex items-center gap-3 ${compact ? "lg:hidden" : ""}`}><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#7c3aed] font-black text-white">PB</div><div><div className="font-black">PostBridge</div>{!compact && <div className="text-[10px] uppercase tracking-[.2em] text-[#80778b]">Creator intelligence</div>}</div></div>; }
 function NavButton({ label, icon, active, onClick }: { label: string; icon: string; active: boolean; onClick: () => void }) { return <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-bold ${active ? "bg-[#eee8fa] text-[#5b21b6]" : "text-[#746b82] hover:bg-[#f7f5ff]"}`}><span className="w-5 text-center text-lg">{icon}</span>{label}</button>; }
-function Title({ children, text }: { children: React.ReactNode; text: string }) { return <header className="mb-7"><h1 className="text-3xl font-black tracking-tight md:text-4xl">{children}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[#746b82]">{text}</p></header>; }
+function Title({ children, className = "mb-7" }: { children: React.ReactNode; text?: string; className?: string }) { return <h1 className={`text-2xl font-black tracking-tight md:text-3xl ${className}`}>{children}</h1>; }
 function Card({ children, dark = false }: { children: React.ReactNode; dark?: boolean }) { return <div className={`rounded-3xl border p-5 shadow-sm md:p-6 ${dark ? "border-[#392651] bg-[#24163b] text-white" : "border-[#e7e0f0] bg-white"}`}>{children}</div>; }
 function ErrorText({ value }: { value: string }) { return value ? <div className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{value}</div> : null; }
 
@@ -56,13 +56,76 @@ function Login({ onLogin }: { onLogin: (value: Session) => void }) {
 }
 
 function Home({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
-  const [connection, setConnection] = useState<Connection | null>(null); const [posts, setPosts] = useState<TrackedPost[]>([]); const [media, setMedia] = useState<Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }>>([]); const [choosing, setChoosing] = useState(false); const [error, setError] = useState(""); const [loading, setLoading] = useState(true); const [addingMediaId, setAddingMediaId] = useState<string | null>(null); const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const load = useCallback(async (clearError = true) => { setLoading(true); if (clearError) setError(""); try { const [nextConnection, tracked] = await Promise.all([getConnection(session), getTrackedPosts(session)]); setConnection(nextConnection); setPosts(tracked.items); } catch (e) { setError(e instanceof Error ? e.message : "Could not load posts."); } finally { setLoading(false); } }, [session]);
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [media, setMedia] = useState<Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }>>([]);
+  const [choosing, setChoosing] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [addingMediaId, setAddingMediaId] = useState<string | null>(null);
+  const [refreshingId, setRefreshingId] = useState<string | null>(null);
+  const load = useCallback(async (clearError = true) => {
+    setLoading(true);
+    if (clearError) setError("");
+    try {
+      const [nextConnection, tracked] = await Promise.all([getConnection(session), getTrackedPosts(session)]);
+      setConnection(nextConnection);
+      setPosts(tracked.items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load posts.");
+    } finally {
+      setLoading(false);
+    }
+  }, [session]);
   useEffect(() => { void load(); }, [load]);
-  const choosePost = async () => { try { setError(""); setMedia((await getInstagramMedia(session)).items); setChoosing(true); } catch (e) { setError(e instanceof Error ? e.message : "Could not load Instagram posts."); } };
-  const addPost = async (mediaId: string) => { setAddingMediaId(mediaId); setError(""); try { const tracked = await trackInstagramPost(session, mediaId); setChoosing(false); try { await refreshTrackedPost(session, tracked.id); } catch (e) { setError(`Post added, but metrics could not be refreshed: ${e instanceof Error ? e.message : "Instagram insights are unavailable."}`); } await load(false); } catch (e) { setError(e instanceof Error ? e.message : "Could not add this Instagram post."); } finally { setAddingMediaId(null); } };
-  const refreshPost = async (trackedId: string) => { setRefreshingId(trackedId); setError(""); try { const refreshed = await refreshTrackedPost(session, trackedId); setPosts((current) => current.map((post) => post.tracking.id === trackedId ? refreshed : post)); } catch (e) { setError(e instanceof Error ? e.message : "Could not refresh Instagram metrics."); } finally { setRefreshingId(null); } };
-  return <><div className="flex flex-wrap items-start justify-between gap-4"><Title text="The same tracked posts and Instagram account appear here and in your mobile app.">Tracked posts</Title>{connection?.connected && <button onClick={() => void choosePost()} className="rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button>}</div><ErrorText value={error} />{choosing && <Card><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-black">Choose an Instagram post</h2><button disabled={addingMediaId !== null} onClick={() => setChoosing(false)} className="text-sm font-bold text-[#5b21b6] disabled:opacity-50">Close</button></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{media.map((item) => <button key={item.id} disabled={addingMediaId !== null} onClick={() => void addPost(item.id)} className="overflow-hidden rounded-2xl bg-[#eee8fa] text-left disabled:cursor-wait disabled:opacity-60">{(item.thumbnail_url || item.media_url) ? <img alt="Instagram post" src={item.thumbnail_url || item.media_url} className="aspect-square w-full object-cover" /> : <div className="aspect-square" />}<p className="line-clamp-2 p-3 text-xs font-bold">{addingMediaId === item.id ? "Adding and loading metrics…" : item.caption || "Instagram post"}</p></button>)}</div></Card>}{loading ? <Card>Loading your account…</Card> : !connection?.connected ? <Card><h2 className="text-xl font-black">Connect Instagram</h2><p className="mt-2 text-sm text-[#746b82]">Connect once, then use the same account on web and mobile.</p><button onClick={() => void onConnect()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Connect Instagram</button></Card> : posts.length === 0 ? <Card><h2 className="text-xl font-black">No tracked posts yet</h2><p className="mt-2 text-sm text-[#746b82]">Select an Instagram post to start tracking its performance.</p><button onClick={() => void choosePost()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button></Card> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{posts.map((post) => <Card key={post.tracking.id}>{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" />}<p className="line-clamp-2 font-bold">{post.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><Metric label="Likes" value={post.latest?.likes} /><Metric label="Reach" value={post.latest?.reach} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-[#eee8fa] pt-4"><p className="text-[11px] text-[#80778b]">{post.latest?.captured_at ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}` : "Metrics have not been loaded yet."}</p><button disabled={refreshingId !== null} onClick={() => void refreshPost(post.tracking.id)} className="shrink-0 rounded-lg bg-[#eee8fa] px-3 py-2 text-xs font-bold text-[#5b21b6] disabled:cursor-wait disabled:opacity-60">{refreshingId === post.tracking.id ? "Refreshing…" : "Refresh metrics"}</button></div></Card>)}</div>}</>;
+  const choosePost = async () => {
+    try {
+      setError("");
+      setMedia((await getInstagramMedia(session)).items);
+      setChoosing(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load Instagram posts.");
+    }
+  };
+  const addPost = async (mediaId: string) => {
+    setAddingMediaId(mediaId);
+    setError("");
+    try {
+      const tracked = await trackInstagramPost(session, mediaId);
+      setChoosing(false);
+      try {
+        await refreshTrackedPost(session, tracked.id);
+      } catch (e) {
+        setError(`Post added, but metrics could not be refreshed: ${e instanceof Error ? e.message : "Instagram insights are unavailable."}`);
+      }
+      await load(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not add this Instagram post.");
+    } finally {
+      setAddingMediaId(null);
+    }
+  };
+  const refreshPost = async (trackedId: string) => {
+    setRefreshingId(trackedId);
+    setError("");
+    try {
+      const refreshed = await refreshTrackedPost(session, trackedId);
+      setPosts((current) => current.map((post) => post.tracking.id === trackedId ? refreshed : post));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not refresh Instagram metrics.");
+    } finally {
+      setRefreshingId(null);
+    }
+  };
+  return <>
+    <div className="mb-8 flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
+      <Title className="mb-0">Tracked posts</Title>
+      {connection?.connected && <button onClick={() => void choosePost()} className="rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button>}
+    </div>
+    <ErrorText value={error} />
+    {choosing && <Card><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-black">Choose an Instagram post</h2><button disabled={addingMediaId !== null} onClick={() => setChoosing(false)} className="text-sm font-bold text-[#5b21b6] disabled:opacity-50">Close</button></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{media.map((item) => <button key={item.id} disabled={addingMediaId !== null} onClick={() => void addPost(item.id)} className="overflow-hidden rounded-2xl bg-[#eee8fa] text-left disabled:cursor-wait disabled:opacity-60">{(item.thumbnail_url || item.media_url) ? <img alt="Instagram post" src={item.thumbnail_url || item.media_url} className="aspect-square w-full object-cover" /> : <div className="aspect-square" />}<p className="line-clamp-2 p-3 text-xs font-bold">{addingMediaId === item.id ? "Adding and loading metrics…" : item.caption || "Instagram post"}</p></button>)}</div></Card>}
+    {loading ? <Card>Loading your account…</Card> : !connection?.connected ? <Card><h2 className="text-xl font-black">Connect Instagram</h2><button onClick={() => void onConnect()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Connect Instagram</button></Card> : posts.length === 0 ? <Card><h2 className="text-xl font-black">No tracked posts yet</h2><button onClick={() => void choosePost()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button></Card> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{posts.map((post) => <Card key={post.tracking.id}>{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" />}<p className="line-clamp-2 font-bold">{post.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><Metric label="Likes" value={post.latest?.likes} /><Metric label="Reach" value={post.latest?.reach} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-[#eee8fa] pt-4"><p className="text-[11px] text-[#80778b]">{post.latest?.captured_at ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}` : "Metrics have not been loaded yet."}</p><button disabled={refreshingId !== null} onClick={() => void refreshPost(post.tracking.id)} className="shrink-0 rounded-lg bg-[#eee8fa] px-3 py-2 text-xs font-bold text-[#5b21b6] disabled:cursor-wait disabled:opacity-60">{refreshingId === post.tracking.id ? "Refreshing…" : "Refresh metrics"}</button></div></Card>)}</div>}
+  </>;
 }
 
 function Create({ session }: { session: Session }) {
@@ -73,21 +136,34 @@ function Create({ session }: { session: Session }) {
 
 function Analyze({ session }: { session: Session }) {
   const [captionLength, setCaptionLength] = useState(120); const [hashtags, setHashtags] = useState(5); const [hour, setHour] = useState(18); const [result, setResult] = useState<Prediction | null>(null); const [error, setError] = useState("");
-  return <><Title text="This preserves the trained prediction model and its original recommendations.">Analyze performance</Title><ErrorText value={error} /><div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]"><Card><NumberInput label="Caption length" value={captionLength} onChange={setCaptionLength} /><NumberInput label="Hashtag count" value={hashtags} onChange={setHashtags} /><NumberInput label="Posting hour (0–23)" value={hour} onChange={setHour} /><button onClick={async () => { try { setError(""); setResult(await predict(session, { platform: "Instagram", contentType: "Post", captionLength, hashtagsCount: hashtags, postingHour: hour })); } catch (e) { setError(e instanceof Error ? e.message : "Analysis failed."); } }} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white">Run analysis</button></Card>{result ? <AnalysisCard value={result} /> : <Card><p className="text-sm text-[#746b82]">Run the model to see predicted views, viral score, engagement and recommendations.</p></Card>}</div></>;
+  return <><Title>Analyze performance</Title><ErrorText value={error} /><div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]"><Card><NumberInput label="Caption length" value={captionLength} onChange={setCaptionLength} /><NumberInput label="Hashtag count" value={hashtags} onChange={setHashtags} /><NumberInput label="Posting hour (0–23)" value={hour} onChange={setHour} /><button onClick={async () => { try { setError(""); setResult(await predict(session, { platform: "Instagram", contentType: "Post", captionLength, hashtagsCount: hashtags, postingHour: hour })); } catch (e) { setError(e instanceof Error ? e.message : "Analysis failed."); } }} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white">Run analysis</button></Card>{result ? <AnalysisCard value={result} /> : <Card><p className="text-sm text-[#746b82]">Run the model to see predicted views, engagement and recommendations.</p></Card>}</div></>;
 }
 
 function Insights({ session }: { session: Session }) {
-  const [data, setData] = useState<Record<string, any> | null>(null); const [history, setHistory] = useState<Array<any>>([]); const [error, setError] = useState("");
-  useEffect(() => { Promise.all([getInsights(session), getHistory(session)]).then(([insights, analyses]) => { setData(insights); setHistory(analyses.items); }).catch((e) => setError(e instanceof Error ? e.message : "Insights failed.")); }, [session]);
-  return <><Title text="Instagram metrics and AI analysis history stay attached to your PostBridge account.">Insights</Title><ErrorText value={error} />{data?.status !== "connected" ? <Card><p className="text-sm text-[#746b82]">Connect Instagram to see live account metrics. Your AI analysis history is available below.</p></Card> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{Object.entries(data.metrics ?? {}).slice(0, 8).map(([key, value]) => <Card key={key}><p className="text-3xl font-black">{String(value ?? "—")}</p><p className="mt-1 text-xs font-bold uppercase tracking-wide text-[#746b82]">{key.replaceAll("_", " ")}</p></Card>)}</div>}<h2 className="mb-4 mt-8 text-xl font-black">Analysis history</h2><div className="space-y-3">{history.length ? history.map((item) => <Card key={item.id}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-black">{item.platform} · {item.content_type}</p><p className="text-xs text-[#80778b]">{new Date(item.created_at).toLocaleString()}</p></div><div className="flex gap-5 text-sm"><Metric label="Views" value={item.views} /><Metric label="Viral" value={item.viral_score} /><Metric label="Engagement" value={`${item.engagement}%`} /></div></div></Card>) : <Card><p className="text-sm text-[#746b82]">No saved analyses yet.</p></Card>}</div></>;
+  const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [history, setHistory] = useState<Array<{ id: string; created_at: string; platform: string; content_type: string; views: number; engagement: number }>>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    Promise.all([getTrackedPosts(session), getHistory(session)])
+      .then(([tracked, analyses]) => { setPosts(tracked.items); setHistory(analyses.items); })
+      .catch((e) => setError(e instanceof Error ? e.message : "Insights failed."));
+  }, [session]);
+  return <>
+    <Title>Insights</Title>
+    <ErrorText value={error} />
+    <h2 className="mb-4 text-lg font-black">Post performance</h2>
+    {posts.length === 0 ? <Card><p className="text-sm text-[#746b82]">Track an Instagram post to see its individual metrics here.</p></Card> : <div className="grid gap-5 md:grid-cols-2">{posts.map((post) => <Card key={post.tracking.id}><div className="flex gap-4">{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="h-20 w-20 shrink-0 rounded-xl object-cover" />}<div className="min-w-0"><p className="line-clamp-2 text-sm font-black">{post.media.caption || "Instagram post"}</p><p className="mt-1 text-[11px] text-[#80778b]">{post.latest?.captured_at ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}` : "Metrics have not been loaded yet."}</p></div></div><div className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3"><Metric label="Reach" value={post.latest?.reach} /><Metric label="Views" value={post.latest?.views} /><Metric label="Likes" value={post.latest?.likes} /><Metric label="Comments" value={post.latest?.comments} /><Metric label="Saves" value={post.latest?.saves} /><Metric label="Shares" value={post.latest?.shares} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div></Card>)}</div>}
+    <h2 className="mb-4 mt-8 text-lg font-black">Analysis history</h2>
+    <div className="space-y-3">{history.length ? history.map((item) => <Card key={item.id}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-black">{item.platform} · {item.content_type}</p><p className="text-xs text-[#80778b]">{new Date(item.created_at).toLocaleString()}</p></div><div className="grid grid-cols-2 gap-5 text-sm"><Metric label="Views" value={item.views} /><Metric label="Engagement" value={`${item.engagement}%`} /></div></div></Card>) : <Card><p className="text-sm text-[#746b82]">No saved analyses yet.</p></Card>}</div>
+  </>;
 }
 
 function Settings({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [error, setError] = useState("");
-  return <><Title text="Manage the account shared by PostBridge web and mobile.">Settings</Title><ErrorText value={error} /><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 text-lg font-black">{session.user.email}</p><div className="mt-6 flex flex-wrap gap-3"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-5 py-3 font-bold">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-5 py-3 font-bold text-red-700">Delete account</button></div></Card></>;
+  return <><Title>Settings</Title><ErrorText value={error} /><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p><div className="mt-6 grid grid-cols-2 gap-3 sm:flex"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-3 py-3 text-sm font-bold sm:px-5 sm:text-base">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700 sm:px-5 sm:text-base">Delete account</button></div></Card></>;
 }
 
-function AnalysisCard({ value }: { value: Prediction }) { return <Card dark><div className="grid grid-cols-3 gap-3"><Metric label="Predicted views" value={value.views} light /><Metric label="Viral score" value={`${value.viral_score}/100`} light /><Metric label="Engagement" value={`${value.engagement}%`} light /></div><p className="mt-6 leading-7 text-violet-50">{value.insights.analysis}</p><div className="mt-6 grid gap-5 md:grid-cols-2"><Insight title="Strengths" items={value.insights.strengths} /><Insight title="Recommendations" items={value.insights.recommendations} /></div></Card>; }
+function AnalysisCard({ value }: { value: Prediction }) { return <Card dark><div className="grid grid-cols-2 gap-3"><Metric label="Predicted views" value={value.views} light /><Metric label="Engagement" value={`${value.engagement}%`} light /></div><p className="mt-6 leading-7 text-violet-50">{value.insights.analysis}</p><div className="mt-6 grid gap-5 md:grid-cols-2"><Insight title="Strengths" items={value.insights.strengths} /><Insight title="Recommendations" items={value.insights.recommendations} /></div></Card>; }
 function Insight({ title, items }: { title: string; items: string[] }) { return <div><h3 className="font-black text-violet-300">{title}</h3><ul className="mt-2 space-y-2 text-sm leading-6 text-violet-50">{items.map((item) => <li key={item}>• {item}</li>)}</ul></div>; }
 function Metric({ label, value, light = false }: { label: string; value: unknown; light?: boolean }) { return <div><p className={`font-black ${light ? "text-white" : "text-[#201633]"}`}>{value == null ? "—" : String(value)}</p><p className={`text-[10px] font-bold uppercase tracking-wide ${light ? "text-violet-300" : "text-[#80778b]"}`}>{label}</p></div>; }
 function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) { return <label className="mb-4 block text-sm font-bold">{label}<input type="number" value={value} onChange={(e) => onChange(Number(e.target.value))} className="mt-2 w-full rounded-2xl border border-[#ddd5e8] p-4 font-normal" /></label>; }
