@@ -5,6 +5,7 @@ export type Session = { accessToken: string; expiresAt: string; user: { id: stri
 export type Prediction = { views: number; viral_score: number; engagement: number; insights: { analysis: string; strengths: string[]; weaknesses: string[]; recommendations: string[] } };
 export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string };
 export type TrackedPost = { tracking: { id: string }; media: { id: string; caption: string; media_url?: string; thumbnail_url?: string; published_at: string }; latest?: { likes?: number; comments?: number; saves?: number; shares?: number; reach?: number; views?: number; engagement_rate?: number; captured_at?: string } };
+export type TrackingRecord = { id: string };
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -54,7 +55,8 @@ export async function authRequest<T>(session: Session, path: string, init?: Requ
 export const getConnection = (session: Session) => authRequest<Connection>(session, "/api/instagram/connection");
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getInstagramMedia = (session: Session) => authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(session, "/api/instagram/media");
-export const trackInstagramPost = (session: Session, mediaId: string) => authRequest(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
+export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
+export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const getInsights = (session: Session) => authRequest<Record<string, any>>(session, "/insights/instagram?period=7d");
 export const getHistory = (session: Session) => authRequest<{ items: Array<{ id: string; created_at: string; platform: string; content_type: string; views: number; viral_score: number; engagement: number }> }>(session, "/history");
 export const predict = (session: Session, payload: { platform: string; contentType: string; captionLength: number; hashtagsCount: number; postingHour: number }) => authRequest<Prediction>(session, "/predict", { method: "POST", body: JSON.stringify(payload) });
