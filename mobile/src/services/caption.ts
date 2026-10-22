@@ -1,6 +1,12 @@
 import { API_BASE_URL, CAPTION_MODE } from '../config/environment';
+import { ImageMimeType, SocialPlatform } from '../types';
 
-export type CaptionInput = { information: string; goal: string };
+export type CaptionInput = {
+  information: string;
+  goal: string;
+  platform: SocialPlatform;
+  image: { mime_type: ImageMimeType; data: string };
+};
 export type CaptionResult = { caption: string; hashtags: string };
 
 export function buildMockCaption(input: CaptionInput): CaptionResult {

@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { API_BASE_URL } from '../config/environment';
-import { InsightsData, InstagramConnection, InstagramMedia, TrackedPost } from '../types';
+import { InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, TrackedPost } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -21,19 +21,11 @@ export const getInstagramMedia = (userId: string) => request<{ status: string; i
 export const trackPost = (userId: string, mediaId: string) => request('/tracked-posts', userId, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
 export const stopTracking = (userId: string, id: string) => request(`/tracked-posts/${id}`, userId, { method: 'DELETE' });
 export const refreshTrackedPost = (userId: string, id: string) => request(`/tracked-posts/${id}/refresh`, userId, { method: 'POST' });
+export const analyzeTrackedPost = (userId: string, id: string) => request<PostAnalysis>(`/tracked-posts/${id}/analyses`, userId, { method: 'POST' });
 export const getInstagramInsights = (userId: string) => request<InsightsData>('/insights/instagram?period=7d', userId);
 export const disconnectInstagram = (userId: string) => request('/api/instagram/connection', userId, { method: 'DELETE' });
 export const deleteAccount = (accessToken: string) => request('/auth/account', accessToken, { method: 'DELETE' });
 
-export type PredictionResponse = {
-  views: number;
-  viral_score: number;
-  engagement: number;
-  insights: { analysis: string; strengths: string[]; weaknesses: string[]; recommendations: string[] };
-};
-
-export const predictContent = (accessToken: string, payload: { platform: string; contentType: string; captionLength: number; hashtagsCount: number; postingHour: number }) =>
-  request<PredictionResponse>('/predict', accessToken, { method: 'POST', body: JSON.stringify(payload) });
 export async function connectInstagram(userId: string): Promise<void> {
   const result = await request<{ authorization_url: string }>('/api/instagram/connect/start', userId, { method: 'POST' });
   const returnUri = Linking.createURL('instagram-connected');

@@ -1,6 +1,6 @@
 # PostBridge product plan
 
-Last updated: 2026-10-20  
+Last updated: 2026-10-22
 Owner: PostBridge  
 Purpose: Track the work required to turn the current Instagram MVP into a multi-platform post creation, publishing, and per-post performance analysis product.
 
@@ -30,6 +30,9 @@ PostBridge should let one signed-in user:
 - Insights are displayed per post. The primary Insights view must not present an aggregate of unrelated posts as if it described one post.
 - Content-aware analysis uses observed metrics plus available post content. It must identify unavailable inputs rather than invent them.
 - `viral_score` is removed from current UI, API contracts, persisted output, documentation, and tests. Existing stored history must remain readable during migration.
+- Predicted view counts are not part of the product experience. Creation returns editable copy only; performance analysis must prefer observed provider metrics and clearly labelled interpretation.
+- Caption generation targets one selected platform at a time and uses both the content brief and an uploaded image. Platform selection for generation does not imply that publishing is already connected.
+- The first multimodal creation flow supports JPG, PNG, and WebP images up to 5 MB in the web client. Video understanding remains out of scope for this phase.
 - Provider credentials and access tokens remain server-side and encrypted. Client applications never receive permanent provider tokens.
 
 ## Current verified baseline
@@ -40,6 +43,7 @@ PostBridge should let one signed-in user:
 - [x] Instagram media can be imported and selected for tracking.
 - [x] A tracked post can request and persist a fresh Instagram insight snapshot.
 - [x] Caption and hashtag generation is available through the backend.
+- [-] Web caption generation accepts a target platform, expanded/custom goal, and uploaded image context; production verification remains.
 - [x] OCI Object Storage configuration and a private media bucket exist.
 
 ## Build checklist
@@ -55,6 +59,12 @@ PostBridge should let one signed-in user:
   What to build: Return tracked posts with their latest snapshot and snapshot history; let the user choose a post and show only that post's metrics, timestamp, deltas, caption, and thumbnail. Keep analysis history associated with the selected post where possible.
   Acceptance: Selecting post A never displays metrics from post B. A post without a snapshot shows an explicit empty state and Refresh metrics action.
   Verify: Track two Instagram posts with different values, select each one, and confirm every displayed metric matches its own latest database snapshot.
+
+- [-] **2a. Make the creation composer platform- and image-aware**
+  Spec ref: `User feedback > Creation inputs`
+  What to build: Remove the creation-time predicted views/analysis card on web and mobile; add Instagram, Twitter, Facebook, Threads, and YouTube generation targets; expand goals and provide an Other field; send validated JPG/PNG/WebP image bytes to Gemini together with the user's brief; migrate the Gemini adapter to the maintained `google-genai` SDK. Do not accept video in this phase.
+  Acceptance: Generated copy reflects both visible image content and the written brief, follows the selected platform's format, accepts a non-empty custom goal, and never displays a predicted view count in the creation result.
+  Verify: Run Gemini adapter tests and the frontend production build; manually generate from one image for each platform, test Other with empty/non-empty input, reject a video, and reject an image over 5 MB.
 
 - [ ] **3. Add persistent draft and publication models**
   Spec ref: `Core > Draft before publish`
@@ -98,23 +108,23 @@ PostBridge should let one signed-in user:
   Acceptance: A successfully published Instagram post appears once in Tracked posts; retries and callbacks do not create duplicates.
   Verify: Publish one draft, confirm one media row and one tracked row, retry, and confirm row counts remain unchanged.
 
-- [ ] **10. Add single-post content-aware analysis**
+- [-] **10. Add single-post content-aware analysis**
   Spec ref: `Core > Explain post performance`
   What to build: Create a structured analysis service using the selected post's latest/current metric history, caption, hashtags, media type, publish time, and available thumbnail/image context. Return summary, what performed well, what underperformed, likely content reasons, and concrete next actions. Clearly label metric facts versus model interpretation.
   Acceptance: Two posts with different content and metrics receive meaningfully different responses; missing metrics or inaccessible visual content are called out; provider data is never fabricated.
   Verify: Add deterministic service tests with mocked model responses and manual tests for high/low engagement, missing reach, image, and video/thumbnail-only inputs.
 
-- [ ] **11. Add analysis persistence and post detail history**
+- [-] **11. Add analysis persistence and post detail history**
   Spec ref: `Core > Track analysis over time`
   What to build: Persist each analysis against the tracked post and source snapshot IDs, including model/version and creation time. Show analyses inside the selected post detail rather than in a global unrelated list.
   Acceptance: Refreshing metrics can create a new analysis without overwriting the previous report, and every report identifies the snapshot it analyzed.
   Verify: Create two snapshots and two reports for one post; confirm chronological display and immutable source references.
 
-- [-] **12. Remove viral prediction end to end**
+- [-] **12. Remove viral and view prediction end to end**
   Spec ref: `Core > Remove viral prediction`
-  What to build: Remove `viral_score` from active backend response models, new persistence payloads, web/mobile types, dashboard cards, analysis history, copy, tests, and documentation. Add backward-compatible reading or a migration for old prediction history. Decide separately whether predicted views/engagement remain useful; they must not be presented as observed platform data.
-  Acceptance: No user-facing screen or current API contract displays viral score, old rows do not crash history pages, and a repository search finds only intentional legacy migration references.
-  Verify: Run `rg -n "viral_score|Viral score|Viral Score" backend frontend mobile README.md` and review every remaining match; run all backend, frontend, and mobile checks.
+  What to build: Remove `viral_score` and predicted views from active backend response models, new persistence payloads, web/mobile types, dashboard cards, analysis history, copy, tests, and documentation. Add backward-compatible reading or a migration for old prediction history. Engagement guidance must not be presented as observed platform data.
+  Acceptance: No user-facing screen or current API contract displays viral score or predicted views, old rows do not crash history pages, and a repository search finds only intentional legacy migration references.
+  Verify: Run `rg -n "viral_score|Viral score|Viral Score|predicted views|Predicted views" backend frontend mobile README.md` and review every remaining match; run all backend, frontend, and mobile checks.
 
 - [ ] **13. Bring the same workflow to mobile**
   Spec ref: `Cross-platform > Web and app parity`
@@ -166,3 +176,8 @@ PostBridge should let one signed-in user:
 - 2026-10-20: Created this plan from the live OCI/Instagram MVP and current responsive UI feedback.
 - 2026-10-20: Confirmed existing Instagram OAuth, media import, tracking refresh, and caption-generation foundations.
 - 2026-10-20: Implemented the first responsive web cleanup, changed Insights from aggregate totals to per-post cards, and removed viral score from the current dashboard UI. Production build passed; responsive visual review and backend/legacy viral cleanup remain.
+- 2026-10-22: Removed creation-time prediction output, added target-platform and expanded/custom goal inputs, added image-aware Gemini caption generation, and migrated the isolated adapter from deprecated `google-generativeai` to `google-genai`.
+- 2026-10-22: The frontend production build, Python syntax checks, and Gemini adapter text/image behavior passed locally. Full backend pytest remains pending because the local Windows Python environment is unavailable and Docker Desktop is not running.
+- 2026-10-22: Brought the same creation changes to Expo: platform selection, expanded/custom goals, image payloads, and no prediction card. Mobile typecheck, direct ESLint, and both Jest suites passed.
+- 2026-10-22: Replaced the dashboard's generic caption-length prediction form with tracked-post analysis based on real Instagram snapshots, metric deltas, caption, publish time, and available image/thumbnail context.
+- 2026-10-22: Added account-scoped `tracked_post_analyses` persistence tied to tracked posts and source snapshots, plus chronological analysis history on web and mobile post detail. Production migration and live Gemini verification remain.

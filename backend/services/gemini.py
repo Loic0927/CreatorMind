@@ -1,9 +1,4 @@
-"""Gemini text generation boundary.
-
-The legacy ``google.generativeai`` SDK is imported lazily so unit tests and pytest
-collection never require credentials or network access. Migrating this adapter to
-``google.genai`` is intentionally deferred to a separate change.
-"""
+"""Gemini text and image generation boundary."""
 
 import os
 from collections.abc import Callable
@@ -19,30 +14,43 @@ class GeminiUpstreamError(RuntimeError):
 
 
 GeminiClientFactory = Callable[[str, str], Any]
+GeminiImagePartFactory = Callable[[bytes, str], Any]
 
 
-def _legacy_client_factory(api_key: str, model_name: str) -> Any:
-    # TODO: Migrate this isolated adapter from google.generativeai to google.genai
-    # in a dedicated SDK migration change.
+def _client_factory(api_key: str, model_name: str) -> Any:
+    del model_name
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError as exc:
         raise GeminiConfigurationError(
             "The Gemini SDK is not installed on the backend."
         ) from exc
 
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_name)
+    return genai.Client(api_key=api_key)
+
+
+def _image_part_factory(image_bytes: bytes, mime_type: str) -> Any:
+    try:
+        from google.genai import types
+    except ImportError as exc:
+        raise GeminiConfigurationError(
+            "The Gemini SDK is not installed on the backend."
+        ) from exc
+
+    return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
 
 def generate_gemini_content(
     prompt: str,
     *,
+    image_bytes: bytes | None = None,
+    image_mime_type: str | None = None,
     api_key: str | None = None,
     model_name: str | None = None,
     client_factory: GeminiClientFactory | None = None,
+    image_part_factory: GeminiImagePartFactory | None = None,
 ) -> str:
-    """Generate text without exposing provider errors or credentials."""
+    """Generate content from text and an optional inline image."""
 
     resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
     if not resolved_api_key:
@@ -52,10 +60,25 @@ def generate_gemini_content(
     if not resolved_model:
         raise GeminiConfigurationError("GEMINI_MODEL is not configured.")
 
-    factory = client_factory or _legacy_client_factory
+    if (image_bytes is None) != (image_mime_type is None):
+        raise GeminiConfigurationError(
+            "Image bytes and MIME type must be provided together."
+        )
+
+    factory = client_factory or _client_factory
     try:
-        model = factory(resolved_api_key, resolved_model)
-        response = model.generate_content(prompt)
+        client = factory(resolved_api_key, resolved_model)
+        contents: str | list[Any] = prompt
+        if image_bytes is not None and image_mime_type is not None:
+            part_factory = image_part_factory or _image_part_factory
+            contents = [
+                part_factory(image_bytes, image_mime_type),
+                prompt,
+            ]
+        response = client.models.generate_content(
+            model=resolved_model,
+            contents=contents,
+        )
         text = response.text
     except GeminiConfigurationError:
         raise

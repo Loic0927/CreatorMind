@@ -123,3 +123,20 @@ class InstagramInsightSnapshotRecord(Base):
     views: Mapped[int | None] = mapped_column(Integer)
     engagement_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     raw_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class TrackedPostAnalysisRecord(Base):
+    __tablename__ = "tracked_post_analyses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_snapshot_id: Mapped[str] = mapped_column(String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_snapshot_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    metric_deltas: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    content_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

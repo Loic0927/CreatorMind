@@ -24,9 +24,11 @@ from backend.services.instagram import (
     instagram_configured,
     token_expiry,
 )
+from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
+from backend.services.post_analysis import PostAnalysisError, analyze_post
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
-from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia
+from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
@@ -376,19 +378,12 @@ def tracked_payload(user_id: str):
     ]
 
 
-@router.get("/tracked-posts")
-def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
-    return {"items": tracked_payload(current_user(user))}
-
-
-@router.get("/tracked-posts/{tracked_id}")
-def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
-    user_id = current_user(user)
+def _tracked_item(user_id: str, tracked_id: str) -> dict:
     item = next(
         (
-            item
-            for item in tracked_payload(user_id)
-            if item["tracking"].id == tracked_id
+            candidate
+            for candidate in tracked_payload(user_id)
+            if candidate["tracking"].id == tracked_id
         ),
         None,
     )
@@ -400,12 +395,88 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
                 "message": "Tracked post was not found.",
             },
         )
-    item["snapshots"] = [
-        snapshot
-        for snapshot in get_content_repository().snapshots([item["tracking"].media_id])
-        if snapshot.media_id == item["tracking"].media_id
-    ]
     return item
+
+
+@router.get("/tracked-posts")
+def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
+    return {"items": tracked_payload(current_user(user))}
+
+
+@router.get("/tracked-posts/{tracked_id}")
+def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    item = _tracked_item(user_id, tracked_id)
+    item["snapshots"] = sorted(
+        [
+            snapshot
+            for snapshot in get_content_repository().snapshots([item["tracking"].media_id])
+            if snapshot.media_id == item["tracking"].media_id
+        ],
+        key=lambda snapshot: snapshot.captured_at,
+        reverse=True,
+    )
+    item["analyses"] = get_content_repository().analyses(user_id, tracked_id)
+    return item
+
+
+@router.get("/tracked-posts/{tracked_id}/analyses")
+def tracked_analyses(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    _tracked_item(user_id, tracked_id)
+    return {"items": get_content_repository().analyses(user_id, tracked_id)}
+
+
+@router.post("/tracked-posts/{tracked_id}/analyses")
+def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    item = _tracked_item(user_id, tracked_id)
+    media_item = item.get("media")
+    if media_item is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "media_not_found", "message": "Instagram post was not found."},
+        )
+    snapshots = get_content_repository().snapshots([item["tracking"].media_id])
+    if not snapshots:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "metrics_required",
+                "message": "Refresh this post's metrics before running an analysis.",
+            },
+        )
+    try:
+        computed = analyze_post(media_item, snapshots)
+    except GeminiConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "analysis_not_configured", "message": str(exc)},
+        ) from None
+    except (GeminiUpstreamError, PostAnalysisError):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "analysis_failed",
+                "message": "PostBridge could not analyze this post. Please try again.",
+            },
+        ) from None
+
+    analysis = TrackedPostAnalysis(
+        id=str(uuid4()),
+        user_id=user_id,
+        tracked_post_id=tracked_id,
+        source_snapshot_id=computed.source_snapshot_ids[-1],
+        source_snapshot_ids=computed.source_snapshot_ids,
+        model_name=computed.model_name,
+        schema_version=computed.schema_version,
+        observed_metrics=computed.observed_metrics,
+        metric_deltas=computed.metric_deltas,
+        content_payload=computed.content_payload,
+        output_payload=computed.output_payload,
+        created_at=datetime.now(timezone.utc),
+    )
+    return get_content_repository().append_analysis(analysis)
 
 
 @router.delete("/tracked-posts/{tracked_id}")
@@ -426,15 +497,7 @@ def refresh_tracking(
     tracked_id: str, user: AuthenticatedUser = Depends(require_user)
 ):
     user_id = current_user(user)
-    tracked_item = next((item for item in tracked_payload(user_id) if item["tracking"].id == tracked_id), None)
-    if not tracked_item:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "tracked_post_not_found",
-                "message": "Tracked post was not found.",
-            },
-        )
+    tracked_item = _tracked_item(user_id, tracked_id)
     account = _active_account(user_id)
     media_item = tracked_item.get("media")
     if media_item is None:

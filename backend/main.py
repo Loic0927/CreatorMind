@@ -1,7 +1,9 @@
+import base64
+import binascii
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlencode
 
 import joblib
@@ -703,9 +705,16 @@ def audit_content(payload: AuditContentRequest, user: AuthenticatedUser = Depend
     return response
 
 
+class MobileCaptionImage(BaseModel):
+    mime_type: Literal["image/jpeg", "image/png", "image/webp"]
+    data: str = Field(..., min_length=4)
+
+
 class MobileCaptionRequest(BaseModel):
     information: str = Field(..., min_length=3, max_length=4000)
     goal: str = Field(..., min_length=2, max_length=200)
+    platform: Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"] = "Instagram"
+    image: Optional[MobileCaptionImage] = None
 
 
 class MobileCaptionResponse(BaseModel):
@@ -715,13 +724,44 @@ class MobileCaptionResponse(BaseModel):
 
 @app.post("/mobile/caption", response_model=MobileCaptionResponse)
 def mobile_caption(payload: MobileCaptionRequest, user: AuthenticatedUser = Depends(require_user)) -> MobileCaptionResponse:
+    platform_guidance = {
+        "Instagram": "Write an engaging Instagram caption with 5 to 8 relevant hashtags.",
+        "Twitter": "Keep the full post within 280 characters and use no more than 3 relevant hashtags.",
+        "Facebook": "Write a conversational Facebook post with a clear call to action and 2 to 4 relevant hashtags.",
+        "Threads": "Write a concise, natural Threads post that invites conversation and uses no more than 3 hashtags.",
+        "YouTube": "Write a useful YouTube post description with a strong opening and 3 to 5 relevant hashtags.",
+    }
     prompt = (
-        "Create an Instagram caption for the following content. Return exactly two sections: "
-        "CAPTION: followed by the caption, and HASHTAGS: followed by 5 to 8 relevant hashtags. "
-        f"Content: {payload.information}\nGoal: {payload.goal}"
+        f"Create copy for {payload.platform}. Analyze the supplied image together with the user's "
+        "content brief when an image is present. Do not invent names, organizations, achievements, "
+        "or other facts that are not supported by those inputs. "
+        f"{platform_guidance[payload.platform]} "
+        "Return exactly two sections: CAPTION: followed by the post copy, and HASHTAGS: followed only "
+        "by the hashtags.\n"
+        f"Content brief: {payload.information}\nGoal: {payload.goal}"
     )
+    image_bytes: bytes | None = None
+    image_mime_type: str | None = None
+    if payload.image is not None:
+        max_upload_bytes = int(os.getenv("POSTBRIDGE_MAX_UPLOAD_BYTES", "10485760"))
+        max_base64_length = ((max_upload_bytes + 2) // 3) * 4
+        if len(payload.image.data) > max_base64_length:
+            raise HTTPException(status_code=413, detail="Uploaded image exceeds the configured limit.")
+        try:
+            image_bytes = base64.b64decode(payload.image.data, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(status_code=422, detail="Uploaded image is not valid base64 data.") from None
+        if not image_bytes:
+            raise HTTPException(status_code=422, detail="Uploaded image is empty.")
+        if len(image_bytes) > max_upload_bytes:
+            raise HTTPException(status_code=413, detail="Uploaded image exceeds the configured limit.")
+        image_mime_type = payload.image.mime_type
     try:
-        generated = generate_gemini_content(prompt)
+        generated = generate_gemini_content(
+            prompt,
+            image_bytes=image_bytes,
+            image_mime_type=image_mime_type,
+        )
     except GeminiConfigurationError as exc:
         raise HTTPException(status_code=503, detail={"code": "caption_not_configured", "message": str(exc)}) from None
     except GeminiUpstreamError as exc:

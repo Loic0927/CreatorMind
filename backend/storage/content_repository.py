@@ -7,8 +7,8 @@ from sqlalchemy import select
 
 from backend.storage import json_store
 from backend.storage.database import session_factory
-from backend.storage.models import InstagramInsightSnapshot, InstagramMedia, PredictionHistory, TrackedPost
-from backend.storage.sql_models import InstagramInsightSnapshotRecord, InstagramMediaRecord, PredictionHistoryRecord, TrackedPostRecord
+from backend.storage.models import InstagramInsightSnapshot, InstagramMedia, PredictionHistory, TrackedPost, TrackedPostAnalysis
+from backend.storage.sql_models import InstagramInsightSnapshotRecord, InstagramMediaRecord, PredictionHistoryRecord, TrackedPostAnalysisRecord, TrackedPostRecord
 
 
 def _utc(value: datetime) -> datetime:
@@ -120,6 +120,34 @@ class ContentRepository:
             session.add(InstagramInsightSnapshotRecord(**item.model_dump()))
         return item
 
+    def append_analysis(self, item: TrackedPostAnalysis) -> TrackedPostAnalysis:
+        if not self.persistent:
+            return json_store.append_tracked_post_analysis(item)
+        factory = session_factory()
+        with factory.begin() as session:
+            session.add(TrackedPostAnalysisRecord(**item.model_dump()))
+        return item
+
+    def analyses(self, user_id: str, tracked_post_id: str) -> list[TrackedPostAnalysis]:
+        if not self.persistent:
+            return sorted(
+                json_store.get_tracked_post_analyses(user_id, tracked_post_id),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )
+        statement = (
+            select(TrackedPostAnalysisRecord)
+            .where(
+                TrackedPostAnalysisRecord.user_id == user_id,
+                TrackedPostAnalysisRecord.tracked_post_id == tracked_post_id,
+            )
+            .order_by(TrackedPostAnalysisRecord.created_at.desc())
+        )
+        factory = session_factory()
+        with factory() as session:
+            records = session.scalars(statement).all()
+        return [self._analysis(item) for item in records]
+
     @staticmethod
     def _media(item: InstagramMediaRecord) -> InstagramMedia:
         return InstagramMedia(id=item.id, account_id=item.account_id, instagram_media_id=item.instagram_media_id, media_type=item.media_type, media_url=item.media_url, thumbnail_url=item.thumbnail_url, permalink=item.permalink, caption=item.caption, published_at=_utc(item.published_at), last_synced_at=_utc(item.last_synced_at))
@@ -131,6 +159,23 @@ class ContentRepository:
     @staticmethod
     def _snapshot(item: InstagramInsightSnapshotRecord) -> InstagramInsightSnapshot:
         return InstagramInsightSnapshot(id=item.id, media_id=item.media_id, captured_at=_utc(item.captured_at), likes=item.likes, comments=item.comments, saves=item.saves, shares=item.shares, reach=item.reach, views=item.views, engagement_rate=item.engagement_rate, raw_metrics=item.raw_metrics or {})
+
+    @staticmethod
+    def _analysis(item: TrackedPostAnalysisRecord) -> TrackedPostAnalysis:
+        return TrackedPostAnalysis(
+            id=item.id,
+            user_id=item.user_id,
+            tracked_post_id=item.tracked_post_id,
+            source_snapshot_id=item.source_snapshot_id,
+            source_snapshot_ids=item.source_snapshot_ids or [],
+            model_name=item.model_name,
+            schema_version=item.schema_version,
+            observed_metrics=item.observed_metrics or {},
+            metric_deltas=item.metric_deltas or {},
+            content_payload=item.content_payload or {},
+            output_payload=item.output_payload or {},
+            created_at=_utc(item.created_at),
+        )
 
 
 @lru_cache(maxsize=1)

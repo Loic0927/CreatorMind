@@ -45,6 +45,21 @@ class PredictionHistory(BaseModel):
     output_payload: dict
 
 
+class TrackedPostAnalysis(BaseModel):
+    id: str
+    user_id: str
+    tracked_post_id: str
+    source_snapshot_id: str
+    source_snapshot_ids: list[str] = Field(default_factory=list)
+    model_name: str
+    schema_version: str = "post-analysis-v1"
+    observed_metrics: dict[str, Any] = Field(default_factory=dict)
+    metric_deltas: dict[str, Any] = Field(default_factory=dict)
+    content_payload: dict[str, Any] = Field(default_factory=dict)
+    output_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class StoreData(BaseModel):
     schema_version: int = 1
     social_connections: list[SocialConnection] = Field(default_factory=list)
@@ -55,6 +70,7 @@ class StoreData(BaseModel):
     instagram_media: list["InstagramMedia"] = Field(default_factory=list)
     tracked_posts: list["TrackedPost"] = Field(default_factory=list)
     instagram_insight_snapshots: list["InstagramInsightSnapshot"] = Field(default_factory=list)
+    tracked_post_analyses: list[TrackedPostAnalysis] = Field(default_factory=list)
 
 
 class InstagramAccount(BaseModel):

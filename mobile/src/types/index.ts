@@ -3,7 +3,33 @@ export type InstagramConnection = { connected: boolean; configured: boolean; sta
 export type MetricValue = number | null;
 export type InstagramMedia = { id: string; instagram_media_id: string; media_type: string; media_url?: string; thumbnail_url?: string; caption: string; published_at: string; last_synced_at: string };
 export type Snapshot = { id: string; captured_at: string; likes: MetricValue; comments: MetricValue; saves: MetricValue; shares: MetricValue; reach: MetricValue; views: MetricValue; engagement_rate: number };
-export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[] };
+export type PostAnalysis = {
+  id: string;
+  tracked_post_id: string;
+  source_snapshot_id: string;
+  source_snapshot_ids: string[];
+  model_name: string;
+  schema_version: string;
+  observed_metrics: Record<string, number | null>;
+  metric_deltas: Record<string, number | null>;
+  content_payload: { visual_context_used?: boolean; visual_context_kind?: string };
+  output_payload: { summary: string; strengths: string[]; concerns: string[]; recommendations: string[]; missing_inputs: string[] };
+  created_at: string;
+};
+export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[]; analyses?: PostAnalysis[] };
 export type InsightsData = { status: ConnectionStatus; period: '7d'; start?: string; end?: string; posts?: number; metrics?: Record<string, MetricValue>; trend?: { date: string; value: number }[]; top_posts?: TrackedPost[] };
-export type Draft = { information: string; goal: string; otherGoal: string; caption: string; hashtags: string; imageUri?: string; hasResults: boolean };
+export type SocialPlatform = 'Instagram' | 'Twitter' | 'Facebook' | 'Threads' | 'YouTube';
+export type ImageMimeType = 'image/jpeg' | 'image/png' | 'image/webp';
+export type Draft = {
+  information: string;
+  goal: string;
+  otherGoal: string;
+  platform: SocialPlatform;
+  caption: string;
+  hashtags: string;
+  imageUri?: string;
+  imageData?: string;
+  imageMimeType?: ImageMimeType;
+  hasResults: boolean;
+};
 export type AppScreen = 'home' | 'create' | 'preview' | 'insights' | 'settings' | 'tracking';

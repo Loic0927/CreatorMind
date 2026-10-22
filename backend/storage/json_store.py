@@ -20,6 +20,7 @@ from backend.storage.models import (
     SocialConnection,
     StoreData,
     TrackedPost,
+    TrackedPostAnalysis,
 )
 
 
@@ -111,6 +112,18 @@ def stop_tracked_post(user_id: str, tracked_id: str) -> bool:
 
 def append_instagram_snapshot(snapshot: InstagramInsightSnapshot) -> InstagramInsightSnapshot:
     return update_store(lambda store: (store.instagram_insight_snapshots.append(snapshot), snapshot)[1])
+
+
+def append_tracked_post_analysis(analysis: TrackedPostAnalysis) -> TrackedPostAnalysis:
+    return update_store(lambda store: (store.tracked_post_analyses.append(analysis), analysis)[1])
+
+
+def get_tracked_post_analyses(user_id: str, tracked_post_id: str) -> list[TrackedPostAnalysis]:
+    return [
+        item
+        for item in load_store().tracked_post_analyses
+        if item.user_id == user_id and item.tracked_post_id == tracked_post_id
+    ]
 
 
 def save_store(store: StoreData) -> None:
