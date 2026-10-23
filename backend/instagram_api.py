@@ -33,6 +33,7 @@ from backend.services.publishing import (
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
+from backend.services.account_insights import build_account_insights
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
@@ -484,6 +485,21 @@ def tracked_analyses(tracked_id: str, user: AuthenticatedUser = Depends(require_
     user_id = current_user(user)
     _tracked_item(user_id, tracked_id)
     return {"items": get_content_repository().analyses(user_id, tracked_id)}
+
+
+@router.get("/insights/patterns")
+def account_pattern_insights(
+    timezone_offset_minutes: int = Query(0, ge=-840, le=840),
+    user: AuthenticatedUser = Depends(require_user),
+):
+    user_id = current_user(user)
+    items = []
+    for item in tracked_payload(user_id):
+        items.append({
+            **item,
+            "analyses": get_content_repository().analyses(user_id, item["tracking"].id),
+        })
+    return build_account_insights(items, timezone_offset_minutes)
 
 
 @router.post("/tracked-posts/{tracked_id}/analyses")

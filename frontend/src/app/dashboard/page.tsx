@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  Connection, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
-  createDraft, deleteAccount, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
+  AccountInsights, Connection, PatternInsight, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
+  createDraft, deleteAccount, getAccountInsights, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
   publishDraft, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, updateDraft, uploadMediaAsset, verifyCode,
 } from "@/lib/postbridge";
 
@@ -357,7 +357,7 @@ function Create({ session }: { session: Session }) {
         {drafts.filter((item) => item.status === "draft" || item.status === "failed").map((draft) => <option key={draft.id} value={draft.id}>{draft.content_brief.slice(0, 70) || "Untitled draft"} - {draft.status}</option>)}
       </select>
     </Card>}
-    <div className="grid gap-6 xl:grid-cols-[1fr_.9fr]">
+    <div className={result ? "grid gap-6 xl:grid-cols-[1fr_.9fr]" : ""}>
       <Card>
         <label className="text-sm font-bold">Image</label>
         <label className="mt-2 grid min-h-44 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-[#b9aec8] bg-[#f7f5ff] text-sm font-bold text-[#5b21b6]">
@@ -367,14 +367,20 @@ function Create({ session }: { session: Session }) {
         {image && <p className="mt-2 truncate text-xs text-[#80778b]">{image.name}</p>}
 
         <label className="mt-5 block text-sm font-bold">Social platforms</label>
-        <p className="mt-1 text-xs text-[#80778b]">Select one or more. Copy is generated for all selected destinations.</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {platforms.map((item) => {
-            const selected = selectedPlatforms.includes(item);
-            const capability = capabilities.find((value) => value.platform === item);
-            return <button type="button" key={item} onClick={() => togglePlatform(item)} className={`rounded-full border px-4 py-2 text-sm font-bold ${selected ? "border-violet-600 bg-violet-100 text-violet-800" : "border-[#ddd5e8] bg-white text-[#746b82]"}`}>{selected ? "Selected: " : ""}{item}{capability && !capability.available ? " (publish unavailable)" : ""}</button>;
-          })}
-        </div>
+        <details className="relative mt-2">
+          <summary className="flex cursor-pointer list-none items-center justify-between rounded-2xl border border-[#ddd5e8] bg-white p-4 font-bold">
+            <span>{selectedPlatforms.length ? selectedPlatforms.join(", ") : "Choose platforms"}</span><span className="text-[#80778b]">⌄</span>
+          </summary>
+          <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-[#ddd5e8] bg-white p-2 shadow-xl">
+            {platforms.map((item) => {
+              const capability = capabilities.find((value) => value.platform === item);
+              return <label key={item} className="flex cursor-pointer items-center justify-between rounded-xl px-3 py-3 hover:bg-[#f7f5ff]">
+                <span className="flex items-center gap-3"><input type="checkbox" checked={selectedPlatforms.includes(item)} onChange={() => togglePlatform(item)} className="h-4 w-4 accent-violet-600" />{item}</span>
+                {capability && !capability.available && <span className="text-xs text-[#80778b]">Unavailable</span>}
+              </label>;
+            })}
+          </div>
+        </details>
 
         <label className="mt-5 block text-sm font-bold">Information</label>
         <textarea value={information} onChange={(e) => setInformation(e.target.value)} className="mt-2 min-h-32 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400" placeholder="Describe your content, audience and key message" />
@@ -388,7 +394,7 @@ function Create({ session }: { session: Session }) {
         <button disabled={busy || !information.trim() || !image || !effectiveGoal || selectedPlatforms.length === 0} onClick={() => void run()} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white disabled:opacity-50">{busy ? "Creating..." : "Create caption"}</button>
       </Card>
       <div className="space-y-6">
-        {result ? <Card>
+        {result && <Card>
           <h2 className="text-xl font-black">Caption</h2>
           <textarea className="mt-4 min-h-40 w-full rounded-xl bg-[#f7f5ff] p-4" value={result.caption} onChange={(event) => { setResult({ ...result, caption: event.target.value }); setPublishKey(""); }} />
           <textarea className="mt-3 min-h-20 w-full rounded-xl bg-[#f7f5ff] p-4 text-[#5b21b6]" value={result.hashtags} onChange={(event) => { setResult({ ...result, hashtags: event.target.value }); setPublishKey(""); }} />
@@ -399,7 +405,7 @@ function Create({ session }: { session: Session }) {
           {selectedPlatforms.some((platform) => !publishablePlatforms.includes(platform)) && <p className="mt-3 text-xs text-amber-700">Unavailable or disconnected platforms remain generation targets but will not be submitted for publishing.</p>}
           {image && image.mimeType !== "image/jpeg" && <p className="mt-2 text-xs text-amber-700">Instagram publishing currently requires a JPEG. This image can still be saved and used to generate copy.</p>}
           {publicationResults.length > 0 && <div className="mt-4 space-y-2">{publicationResults.map((item) => <div key={`${item.platform}-${item.publication_id ?? item.status}`} className={`rounded-xl p-3 text-sm ${item.status === "published" ? "bg-emerald-50 text-emerald-800" : item.status === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"}`}><p className="font-black">{item.platform} - {item.status}</p><p className="mt-1">{item.message}</p>{item.permalink && <a className="mt-1 inline-block font-bold underline" href={item.permalink} target="_blank" rel="noreferrer">View post</a>}</div>)}</div>}
-        </Card> : <Card><p className="text-sm text-[#746b82]">Your editable caption and hashtags will appear here.</p></Card>}
+        </Card>}
       </div>
     </div>
   </>;
@@ -475,7 +481,7 @@ function Analyze({ session }: { session: Session }) {
   return <>
     <Title>Analyze a tracked post</Title>
     <ErrorText value={error} />
-    <div className="grid gap-6 xl:grid-cols-[.85fr_1.15fr]">
+    <div className="grid items-start gap-6 lg:grid-cols-[.95fr_1.05fr]">
       <div className="space-y-6">
         <Card>
           <label className="text-sm font-bold">Tracked post</label>
@@ -502,27 +508,56 @@ function Analyze({ session }: { session: Session }) {
           </div>}
         </Card>
       </div>
-      {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then PostBridge will interpret this post's real performance and content. It will not predict views or assign a viral score.</p></Card>}
+      {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then analyze this post.</p></Card>}
     </div>
     {selected?.analyses?.length ? <AnalysisTimeline analyses={selected.analyses} selectedId={displayedAnalysis?.id} onSelect={setViewingAnalysisId} /> : null}
   </>;
 }
 
 function Insights({ session }: { session: Session }) {
-  const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [insights, setInsights] = useState<AccountInsights | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    getTrackedPosts(session)
-      .then((tracked) => setPosts(tracked.items))
+    getAccountInsights(session)
+      .then(setInsights)
       .catch((e) => setError(e instanceof Error ? e.message : "Insights failed."));
   }, [session]);
   return <>
     <Title>Insights</Title>
     <ErrorText value={error} />
-    <h2 className="mb-4 text-lg font-black">Post performance</h2>
-    {posts.length === 0 ? <Card><p className="text-sm text-[#746b82]">Track an Instagram post to see its individual metrics here.</p></Card> : <div className="grid gap-5 md:grid-cols-2">{posts.map((post) => <Card key={post.tracking.id}><div className="flex gap-4">{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="h-20 w-20 shrink-0 rounded-xl object-cover" />}<div className="min-w-0"><p className="line-clamp-2 text-sm font-black">{post.media.caption || "Instagram post"}</p><p className="mt-1 text-[11px] text-[#80778b]">{post.latest?.captured_at ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}` : "Metrics have not been loaded yet."}</p></div></div><div className="mt-5 grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3"><Metric label="Reach" value={post.latest?.reach} /><Metric label="Views" value={post.latest?.views} /><Metric label="Likes" value={post.latest?.likes} /><Metric label="Comments" value={post.latest?.comments} /><Metric label="Saves" value={post.latest?.saves} /><Metric label="Shares" value={post.latest?.shares} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div></Card>)}</div>}
+    {!insights && !error ? <Card><p className="text-sm text-[#746b82]">Loading insights…</p></Card> : insights && insights.sample_size < insights.required_sample_size ? <Card>
+      <p className="font-black">Analyze more posts to unlock pattern insights.</p>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Progress label="Topics" value={insights.progress.topics} required={insights.required_sample_size} />
+        <Progress label="Hashtags" value={insights.progress.hashtags} required={insights.required_sample_size} />
+        <Progress label="Thumbnails" value={insights.progress.thumbnails} required={insights.required_sample_size} />
+        <Progress label="Posting times" value={insights.progress.posting_times} required={insights.required_sample_size} />
+      </div>
+    </Card> : insights ? <div className="grid items-start gap-5 lg:grid-cols-2">
+      <InsightRanking title="Top performing patterns" items={insights.top_patterns} showCategory />
+      <InsightRanking title="Top hashtags" items={insights.top_hashtags} />
+      <InsightRanking title="Thumbnail insights" items={insights.thumbnail_insights} />
+      <InsightRanking title="Best posting times" items={insights.best_posting_times} />
+      {insights.winning_formula && <div className="lg:col-span-2"><Card dark>
+        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-black text-white">Winning formula</h2><p className="rounded-full bg-white/10 px-4 py-2 text-sm font-black text-violet-100">{insights.winning_formula.confidence}% confidence</p></div>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <FormulaValue label="Topic" value={insights.winning_formula.topic} />
+          <FormulaValue label="Thumbnail" value={insights.winning_formula.thumbnail} />
+          <FormulaValue label="Caption" value={insights.winning_formula.caption} />
+          <FormulaValue label="CTA" value={insights.winning_formula.cta} />
+          <FormulaValue label="Posting time" value={insights.winning_formula.posting_time} />
+        </div>
+      </Card></div>}
+    </div> : null}
   </>;
 }
+
+function InsightRanking({ title, items, showCategory = false }: { title: string; items: PatternInsight[]; showCategory?: boolean }) {
+  return <Card><h2 className="text-lg font-black">{title}</h2><div className="mt-4 divide-y divide-[#eee8fa]">{items.length ? items.map((item, index) => <div key={`${item.category ?? title}-${item.label}`} className="flex items-center gap-4 py-4 first:pt-0 last:pb-0"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee8fa] text-sm font-black text-[#6d28d9]">{index + 1}</span><div className="min-w-0 flex-1">{showCategory && item.category && <p className="text-[10px] font-bold uppercase tracking-wider text-[#80778b]">{item.category}</p>}<p className="truncate font-black">{item.label}</p><p className="mt-1 text-xs text-[#80778b]">{item.posts} posts</p></div><div className="text-right"><p className="text-2xl font-black">{item.average_score}</p><p className={`text-xs font-bold ${item.difference_from_baseline >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.difference_from_baseline >= 0 ? "+" : ""}{item.difference_from_baseline} vs average</p></div></div>) : <p className="py-2 text-sm text-[#746b82]">More varied posts are needed.</p>}</div></Card>;
+}
+
+function Progress({ label, value, required }: { label: string; value: number; required: number }) { return <div className="rounded-2xl bg-[#f7f5ff] p-4"><div className="flex justify-between gap-3"><p className="text-sm font-bold">{label}</p><p className="text-sm font-black">{value}/{required}</p></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8e0f7]"><div className="h-full rounded-full bg-[#7c3aed]" style={{ width: `${Math.min(100, value / required * 100)}%` }} /></div></div>; }
+function FormulaValue({ label, value }: { label: string; value?: string | null }) { return <div><p className="text-[10px] font-bold uppercase tracking-wider text-violet-300">{label}</p><p className="mt-1 font-black text-white">{value || "—"}</p></div>; }
 
 function Settings({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [error, setError] = useState("");

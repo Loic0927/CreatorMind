@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, Field, ValidationError
 
-from backend.services.gemini import GeminiConfigurationError, generate_gemini_content
+from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia
 
 
@@ -39,9 +39,17 @@ class ActionRecommendation(BaseModel):
     expected_impact: str = Field(..., min_length=1, max_length=100)
 
 
+class ContentAttributes(BaseModel):
+    topic: str = Field(default="Unclassified", min_length=1, max_length=80)
+    thumbnail_style: str = Field(default="Unavailable", min_length=1, max_length=80)
+    caption_style: str = Field(default="Standard", min_length=1, max_length=80)
+    cta_usage: str = Field(default="None", min_length=1, max_length=80)
+
+
 class PostAnalysisInterpretation(BaseModel):
     why_it_worked: list[ImpactHypothesis] = Field(default_factory=list, max_length=3)
     recommendations: list[ActionRecommendation] = Field(default_factory=list, max_length=3)
+    content_attributes: ContentAttributes = Field(default_factory=ContentAttributes)
 
 
 class PostAnalysisComputation(BaseModel):
@@ -105,6 +113,45 @@ def _parse_interpretation(raw: str) -> PostAnalysisInterpretation:
         return PostAnalysisInterpretation.model_validate(json.loads(candidate))
     except (json.JSONDecodeError, ValidationError, TypeError) as exc:
         raise PostAnalysisError("Gemini returned an invalid post analysis.") from exc
+
+
+def _caption_attributes(caption: str) -> ContentAttributes:
+    lowered = caption.lower()
+    topic = "Tutorials" if re.search(r"\b(how to|tutorial|guide|steps?|tips?|learn)\b", lowered) else \
+        "Magic" if re.search(r"\b(magic|trick|illusion)\b", lowered) else \
+        "Comedy" if re.search(r"\b(comedy|funny|joke|skit)\b", lowered) else \
+        "Product" if re.search(r"\b(product|launch|shop|buy|review)\b", lowered) else "Unclassified"
+    caption_style = "Question-led" if "?" in caption else "Short" if len(caption) <= 100 else "Long" if len(caption) >= 250 else "Standard"
+    cta_usage = "Question" if "?" in caption else "Explicit CTA" if re.search(r"\b(comment|share|save|follow|click|try|tell me|let me know)\b", lowered) else "None"
+    return ContentAttributes(topic=topic, thumbnail_style="Unavailable", caption_style=caption_style, cta_usage=cta_usage)
+
+
+def _fallback_interpretation(caption: str, benchmarks: list[dict[str, Any]]) -> PostAnalysisInterpretation:
+    ranked = sorted(
+        (item for item in benchmarks if item.get("percent_change") is not None),
+        key=lambda item: abs(float(item["percent_change"])), reverse=True,
+    )
+    strongest = next((item for item in ranked if item["percent_change"] > 0), None)
+    weakest = next((item for item in ranked if item["percent_change"] < 0), None)
+    why = [] if strongest is None else [ImpactHypothesis(
+        factor=strongest["metric"].replace("_", " ").title(), estimated_impact="Positive signal",
+        explanation=f"This signal is {abs(strongest['percent_change']):.0f}% above the tracked-post average.",
+    )]
+    recommendations = [ActionRecommendation(
+        action="Repeat the strongest content structure in the next post." if strongest else "Analyze more posts to establish a reliable baseline.",
+        reason=(f"{strongest['metric'].replace('_', ' ').title()} is the clearest positive signal." if strongest else "There is not enough comparative evidence yet."),
+        expected_impact="Test whether the observed pattern repeats.",
+    )]
+    if weakest:
+        recommendations.append(ActionRecommendation(
+            action=f"Test one change aimed at {weakest['metric'].replace('_', ' ')}.",
+            reason=f"This signal is {abs(weakest['percent_change']):.0f}% below the tracked-post average.",
+            expected_impact="Improve the weakest observed response.",
+        ))
+    return PostAnalysisInterpretation(
+        why_it_worked=why, recommendations=recommendations,
+        content_attributes=_caption_attributes(caption),
+    )
 
 
 def _clamp(value: float) -> int:
@@ -250,8 +297,6 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
     peers = peer_metrics or []
     history_posts = historical_posts or []
     resolved_model = model_name or os.getenv("GEMINI_MODEL", "").strip()
-    if not resolved_model:
-        raise GeminiConfigurationError("GEMINI_MODEL is not configured.")
 
     visual_source = media.thumbnail_url or media.media_url
     loaded = image_loader(visual_source) if visual_source else None
@@ -266,19 +311,31 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
                 "content_patterns": patterns, "caption": media.caption, "media_type": media.media_type}
     prompt = (
         "Act as a creator strategist. Use only the supplied evidence. Return only JSON with exactly "
-        "why_it_worked (maximum 3 objects with factor, estimated_impact, explanation) and recommendations "
+        "why_it_worked (maximum 3 objects with factor, estimated_impact, explanation), recommendations "
         "(maximum 3 objects with action, reason, expected_impact). Treat factors as hypotheses, label impact "
         "as an estimate, never invent metrics, never predict views or viral potential, and make every action "
-        "specific to the evidence. Expected impact may be a cautious directional estimate or range, not a guarantee.\n"
+        "specific to the evidence. Also return content_attributes with topic, thumbnail_style, caption_style, "
+        "and cta_usage. Use 'Unavailable' when visual evidence does not support a thumbnail label. Expected "
+        "impact may be a cautious directional estimate or range, not a guarantee.\n"
         f"EVIDENCE: {json.dumps(evidence, ensure_ascii=False)}"
     )
-    raw = generator(prompt, image_bytes=image_bytes, image_mime_type=image_mime_type, model_name=resolved_model)
-    interpretation = _parse_interpretation(raw)
+    interpretation = None
+    used_model = resolved_model
+    if resolved_model:
+        try:
+            raw = generator(prompt, image_bytes=image_bytes, image_mime_type=image_mime_type, model_name=resolved_model)
+            interpretation = _parse_interpretation(raw)
+        except (GeminiConfigurationError, GeminiUpstreamError, PostAnalysisError):
+            interpretation = None
+    if interpretation is None:
+        interpretation = _fallback_interpretation(media.caption, benchmarks)
+        used_model = "deterministic-fallback-v2"
     output = {"score": score, "top_insights": _top_insights(benchmarks, deltas),
               "why_it_worked": [item.model_dump() for item in interpretation.why_it_worked[:3]],
               "benchmarks": benchmarks, "risks": _risks(benchmarks, deltas),
               "recommendations": [item.model_dump() for item in interpretation.recommendations[:3]],
-              "confidence": _confidence(media, metrics, image_bytes is not None), "content_patterns": patterns}
-    return PostAnalysisComputation(source_snapshot_ids=[item.id for item in source_snapshots], model_name=resolved_model,
+              "confidence": _confidence(media, metrics, image_bytes is not None), "content_patterns": patterns,
+              "content_attributes": interpretation.content_attributes.model_dump()}
+    return PostAnalysisComputation(source_snapshot_ids=[item.id for item in source_snapshots], model_name=used_model,
                                    observed_metrics=metrics, metric_deltas=deltas, content_payload=content_payload,
                                    output_payload=output)

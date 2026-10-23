@@ -24,6 +24,7 @@ export type PostAnalysis = {
     recommendations: Array<string | { action: string; reason: string; expected_impact: string }>;
     confidence?: { score: number; inputs: Array<{ name: string; available: boolean; detail?: string | null }> };
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
+    content_attributes?: { topic: string; thumbnail_style: string; caption_style: string; cta_usage: string };
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
   };
   created_at: string;
@@ -50,6 +51,17 @@ export type PostDraft = {
   status: "draft" | "publishing" | "published" | "failed";
   created_at: string;
   updated_at: string;
+};
+export type PatternInsight = { label: string; average_score: number; posts: number; difference_from_baseline: number; category?: string };
+export type AccountInsights = {
+  sample_size: number;
+  required_sample_size: number;
+  progress: { topics: number; hashtags: number; thumbnails: number; posting_times: number };
+  top_patterns: PatternInsight[];
+  top_hashtags: PatternInsight[];
+  thumbnail_insights: PatternInsight[];
+  best_posting_times: PatternInsight[];
+  winning_formula?: { topic?: string | null; thumbnail?: string | null; caption?: string | null; cta?: string | null; posting_time?: string | null; confidence: number } | null;
 };
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -104,6 +116,7 @@ export const getInstagramMedia = (session: Session) => authRequest<{ items: Arra
 export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const analyzeTrackedPost = (session: Session, trackedId: string) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses`, { method: "POST" });
+export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
 export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
 export const getPublishingCapabilities = (session: Session) => authRequest<{ items: PublishingCapability[] }>(session, "/publishing/capabilities");
 export const publishPost = (session: Session, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ results: PublicationResult[] }>(session, "/publications", { method: "POST", body: JSON.stringify(payload) });

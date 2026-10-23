@@ -63,9 +63,20 @@ def test_analysis_marks_plateau_and_missing_inputs_in_confidence():
     assert unavailable["Watch Time"] is False
 
 
-def test_analysis_rejects_missing_snapshot_and_invalid_model_output():
+def test_analysis_rejects_missing_snapshot_and_falls_back_for_invalid_model_output():
     with pytest.raises(PostAnalysisError):
         analyze_post(_media(), [], model_name="test-model")
-    with pytest.raises(PostAnalysisError):
-        analyze_post(_media(), [_snapshot("snapshot-1", 0, 100, 10)], generator=lambda prompt, **kwargs: "not json",
-                     image_loader=lambda url: None, model_name="test-model")
+    result = analyze_post(_media(), [_snapshot("snapshot-1", 0, 100, 10)], generator=lambda prompt, **kwargs: "not json",
+                          image_loader=lambda url: None, model_name="test-model")
+    assert result.model_name == "deterministic-fallback-v2"
+    assert result.output_payload["recommendations"]
+    assert result.output_payload["content_attributes"]["topic"] == "Tutorials"
+
+
+def test_analysis_works_without_a_configured_model(monkeypatch):
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    result = analyze_post(_media(), [_snapshot("snapshot-1", 0, 100, 10)],
+                          generator=lambda *args, **kwargs: pytest.fail("generator should not run"),
+                          image_loader=lambda url: None)
+    assert result.model_name == "deterministic-fallback-v2"
+    assert result.output_payload["score"]["overall"] >= 0
