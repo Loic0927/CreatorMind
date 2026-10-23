@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.services.instagram import (
     INSTAGRAM_SCOPES,
@@ -22,13 +22,21 @@ from backend.services.instagram import (
     fetch_instagram_media_insights,
     fetch_instagram_profile,
     instagram_configured,
+    publish_instagram_image,
     token_expiry,
+)
+from backend.services.publishing import (
+    InstagramPublishingAdapter,
+    PublishInput,
+    PublishingAdapterRegistry,
+    UnavailablePublishingAdapter,
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
+from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
@@ -342,6 +350,57 @@ class TrackRequest(BaseModel):
     media_id: str
 
 
+class PublishImage(BaseModel):
+    mime_type: str
+    data: str = Field(..., min_length=4)
+
+
+class PublishRequest(BaseModel):
+    platforms: list[str] = Field(..., min_length=1, max_length=5)
+    caption: str = Field(..., min_length=1, max_length=2200)
+    hashtags: str = Field(default="", max_length=1000)
+    image: PublishImage
+
+
+def publishing_registry() -> PublishingAdapterRegistry:
+    return PublishingAdapterRegistry([
+        InstagramPublishingAdapter(
+            account_loader=_active_account,
+            token_loader=_access_token,
+            repository_loader=get_content_repository,
+            uploader=upload_bytes_with_temporary_read_url,
+            provider_publisher=publish_instagram_image,
+        ),
+        *[
+            UnavailablePublishingAdapter(platform)
+            for platform in ("Twitter", "Facebook", "Threads", "YouTube")
+        ],
+    ])
+
+
+@router.get("/publishing/capabilities")
+def publishing_capabilities(user: AuthenticatedUser = Depends(require_user)):
+    capabilities = publishing_registry().capabilities(current_user(user))
+    return {"items": [item.as_dict() for item in capabilities]}
+
+
+@router.post("/publications")
+def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_user)):
+    """Publish to supported selected platforms and report each result independently."""
+    user_id = current_user(user)
+    platforms = list(dict.fromkeys(payload.platforms))
+    registry = publishing_registry()
+    unknown = [item for item in platforms if registry.get(item) is None]
+    if unknown:
+        raise HTTPException(status_code=422, detail={"code": "unsupported_platform", "message": f"Unsupported platform: {unknown[0]}"})
+    request = PublishInput(
+        caption=payload.caption, hashtags=payload.hashtags,
+        mime_type=payload.image.mime_type, encoded_media=payload.image.data,
+    )
+    results = [registry.get(platform).publish(user_id, request).as_dict() for platform in platforms]
+    return {"results": results}
+
+
 @router.post("/tracked-posts")
 def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
@@ -446,8 +505,34 @@ def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
                 "message": "Refresh this post's metrics before running an analysis.",
             },
         )
+    peer_metrics = []
+    historical_posts = []
+    for candidate in tracked_payload(user_id):
+        candidate_latest = candidate.get("latest")
+        candidate_media = candidate.get("media")
+        if candidate_latest is None or candidate_media is None:
+            continue
+        candidate_metrics = {
+            name: getattr(candidate_latest, name)
+            for name in ("likes", "comments", "saves", "shares", "reach", "views", "engagement_rate")
+        }
+        historical_posts.append(
+            {
+                "tracked_post_id": candidate["tracking"].id,
+                "caption": candidate_media.caption,
+                "media_type": candidate_media.media_type,
+                "metrics": candidate_metrics,
+            }
+        )
+        if candidate["tracking"].id != tracked_id:
+            peer_metrics.append(candidate_metrics)
     try:
-        computed = analyze_post(media_item, snapshots)
+        computed = analyze_post(
+            media_item,
+            snapshots,
+            peer_metrics=peer_metrics,
+            historical_posts=historical_posts,
+        )
     except GeminiConfigurationError as exc:
         raise HTTPException(
             status_code=503,

@@ -15,7 +15,17 @@ export type PostAnalysis = {
   observed_metrics: Record<string, number | null>;
   metric_deltas: Record<string, number | null>;
   content_payload: { platform?: string; media_type?: string; caption?: string; published_at?: string; visual_context_used?: boolean; visual_context_kind?: string };
-  output_payload: { summary: string; strengths: string[]; concerns: string[]; recommendations: string[]; missing_inputs: string[] };
+  output_payload: {
+    score?: { overall: number; grade: string; categories: Record<string, number> };
+    top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
+    why_it_worked?: Array<{ factor: string; estimated_impact: string; explanation: string }>;
+    benchmarks?: Array<{ metric: string; current: number | null; average: number | null; percent_change: number | null; direction: string }>;
+    risks?: string[];
+    recommendations: Array<string | { action: string; reason: string; expected_impact: string }>;
+    confidence?: { score: number; inputs: Array<{ name: string; available: boolean; detail?: string | null }> };
+    content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
+    summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
+  };
   created_at: string;
 };
 export type TrackedPost = {
@@ -26,6 +36,21 @@ export type TrackedPost = {
   analyses?: PostAnalysis[];
 };
 export type TrackingRecord = { id: string };
+export type PublishingCapability = { platform: SocialPlatform; available: boolean; reason?: string | null };
+export type PublicationResult = { platform: SocialPlatform; status: "publishing" | "published" | "failed" | "unavailable"; message: string; code?: string | null; permalink?: string; tracked_post_id?: string; provider_post_id?: string | null; publication_id?: string };
+export type MediaAsset = { id: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; original_filename: string; byte_size: number; status: "uploaded" | "ready" | "failed" | "deleted" };
+export type PostDraft = {
+  id: string;
+  media_asset_id?: string | null;
+  target_platforms: SocialPlatform[];
+  content_brief: string;
+  goal: string;
+  caption: string;
+  hashtags: string[];
+  status: "draft" | "publishing" | "published" | "failed";
+  created_at: string;
+  updated_at: string;
+};
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -79,7 +104,14 @@ export const getInstagramMedia = (session: Session) => authRequest<{ items: Arra
 export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const analyzeTrackedPost = (session: Session, trackedId: string) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses`, { method: "POST" });
-export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
+export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
+export const getPublishingCapabilities = (session: Session) => authRequest<{ items: PublishingCapability[] }>(session, "/publishing/capabilities");
+export const publishPost = (session: Session, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ results: PublicationResult[] }>(session, "/publications", { method: "POST", body: JSON.stringify(payload) });
+export const uploadMediaAsset = (session: Session, payload: { filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }) => authRequest<MediaAsset>(session, "/media-assets", { method: "POST", body: JSON.stringify(payload) });
+export const getDrafts = (session: Session) => authRequest<PostDraft[]>(session, "/drafts");
+export const createDraft = (session: Session, payload: { media_asset_id?: string | null; target_platforms: SocialPlatform[]; content_brief: string; goal: string; caption: string; hashtags: string[] }) => authRequest<PostDraft>(session, "/drafts", { method: "POST", body: JSON.stringify(payload) });
+export const updateDraft = (session: Session, draftId: string, payload: { media_asset_id?: string | null; target_platforms?: SocialPlatform[]; content_brief?: string; goal?: string; caption?: string; hashtags?: string[] }) => authRequest<PostDraft>(session, `/drafts/${encodeURIComponent(draftId)}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const publishDraft = (session: Session, draftId: string, payload: { platforms: SocialPlatform[]; idempotency_key: string }) => authRequest<{ draft: PostDraft; results: PublicationResult[] }>(session, `/drafts/${encodeURIComponent(draftId)}/publish`, { method: "POST", body: JSON.stringify(payload) });
 export const connectInstagram = (session: Session) => authRequest<{ authorization_url: string }>(session, "/api/instagram/connect/start?client=web", { method: "POST" });
 export const logout = (session: Session) => authRequest(session, "/auth/logout", { method: "POST" });
 export const deleteAccount = (session: Session) => authRequest(session, "/auth/account", { method: "DELETE" });

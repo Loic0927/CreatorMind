@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { GoalDropdown } from '../components/GoalDropdown';
 import { Button } from '../components/ui';
 import { generateCaption } from '../services/caption';
+import { publishPost } from '../services/api';
 import { Draft, ImageMimeType, InstagramConnection, SocialPlatform } from '../types';
 
 const PLATFORMS: SocialPlatform[] = ['Instagram', 'Twitter', 'Facebook', 'Threads', 'YouTube'];
@@ -14,6 +15,7 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
   const scroll = useRef<ScrollView>(null);
   const [open, setOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   const pick = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -59,6 +61,7 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
         information: draft.information,
         goal: draft.goal === 'Other' ? draft.otherGoal.trim() : draft.goal,
         platform: draft.platform,
+        platforms: draft.platforms,
         image: { mime_type: draft.imageMimeType, data: draft.imageData },
       }, accessToken);
       setDraft({ ...draft, ...result, hasResults: true });
@@ -67,6 +70,31 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
       Alert.alert('Generation failed', error instanceof Error ? error.message : 'Try again.');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const togglePlatform = (platform: SocialPlatform) => {
+    const next = draft.platforms.includes(platform)
+      ? draft.platforms.filter((item) => item !== platform)
+      : [...draft.platforms, platform];
+    setDraft({ ...draft, platforms: next, platform: next[0] ?? 'Instagram', hasResults: false });
+  };
+
+  const publish = async () => {
+    if (!draft.imageData || !draft.imageMimeType || draft.platforms.length === 0) return;
+    setPublishing(true);
+    try {
+      const { results } = await publishPost(accessToken, {
+        platforms: draft.platforms,
+        caption: draft.caption,
+        hashtags: draft.hashtags,
+        image: { mime_type: draft.imageMimeType, data: draft.imageData },
+      });
+      Alert.alert('Publication results', results.map((item) => `${item.platform}: ${item.message}`).join('\n\n'));
+    } catch (error) {
+      Alert.alert('Publishing failed', error instanceof Error ? error.message : 'Try again.');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -92,13 +120,13 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
         <Text style={styles.label}>Social platform</Text>
         <View style={styles.platforms}>
           {PLATFORMS.map((platform) => {
-            const selected = platform === draft.platform;
+            const selected = draft.platforms.includes(platform);
             return (
               <Pressable
                 key={platform}
                 accessibilityRole="button"
                 accessibilityState={{ selected }}
-                onPress={() => setDraft({ ...draft, platform, hasResults: false })}
+                onPress={() => togglePlatform(platform)}
                 style={[styles.platform, selected && styles.platformSelected]}
               >
                 <Text style={[styles.platformText, selected && styles.platformTextSelected]}>{platform}</Text>
@@ -118,11 +146,10 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
           <Text style={styles.resultsTitle}>Generated copy</Text>
           <Field label="Caption" value={draft.caption} onChangeText={(caption) => setDraft({ ...draft, caption })} placeholder="Caption" multiline />
           <Field label="Hashtags" value={draft.hashtags} onChangeText={(hashtags) => setDraft({ ...draft, hashtags })} placeholder="#postbridge" multiline />
-          {draft.platform === 'Instagram' ? (
-            <Button label="Open publish preview" onPress={onPreview} secondary />
-          ) : (
-            <Text style={styles.publishNote}>{draft.platform} publishing will be added after its platform connection is available.</Text>
-          )}
+          <Button label="Open publish preview" onPress={onPreview} secondary />
+          <Button label={publishing ? 'Publishing…' : `Publish to ${draft.platforms.length} selected`} onPress={publish} disabled={publishing || draft.platforms.length === 0} />
+          {draft.imageMimeType !== 'image/jpeg' && <Text style={styles.publishNote}>Instagram publishing currently requires a JPEG. This image can still be used to generate copy.</Text>}
+          {draft.platforms.some((item) => item !== 'Instagram') && <Text style={styles.publishNote}>Platforms without an available publishing integration will be reported as unavailable; PostBridge will not simulate a successful post.</Text>}
         </View>
       )}
     </ScrollView>

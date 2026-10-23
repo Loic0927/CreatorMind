@@ -13,7 +13,7 @@ import { getSession, logout, requestLoginCode, verifyLoginCode, Session } from '
 import { connectInstagram, getConnection } from './src/services/api';
 import { AppScreen, Draft, InstagramConnection, TrackedPost } from './src/types';
 
-const emptyDraft: Draft = { information: '', goal: '', otherGoal: '', platform: 'Instagram', caption: '', hashtags: '', hasResults: false };
+const emptyDraft: Draft = { information: '', goal: '', otherGoal: '', platform: 'Instagram', platforms: ['Instagram'], caption: '', hashtags: '', hasResults: false };
 
 export default function App() { return <SafeAreaProvider><AppContent /></SafeAreaProvider>; }
 

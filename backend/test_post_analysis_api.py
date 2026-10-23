@@ -72,19 +72,13 @@ def test_analyze_tracking_persists_source_snapshot_and_owner(monkeypatch):
     monkeypatch.setattr(
         instagram_api,
         "analyze_post",
-        lambda media, snapshots: PostAnalysisComputation(
+        lambda media, snapshots, **kwargs: PostAnalysisComputation(
             source_snapshot_ids=["snapshot-1"],
             model_name="test-model",
             observed_metrics={"reach": 100},
             metric_deltas={"reach": None},
             content_payload={"caption": media.caption},
-            output_payload={
-                "summary": "Evidence-based summary",
-                "strengths": [],
-                "concerns": [],
-                "recommendations": ["Keep testing."],
-                "missing_inputs": [],
-            },
+            output_payload={"score": {"overall": 75, "grade": "B", "categories": {}}, "recommendations": []},
         ),
     )
 

@@ -60,6 +60,53 @@ class TrackedPostAnalysis(BaseModel):
     created_at: datetime
 
 
+DraftPlatform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
+
+
+class MediaAsset(BaseModel):
+    id: str
+    user_id: str
+    storage_provider: str
+    object_name: str
+    original_filename: str
+    mime_type: str
+    byte_size: int
+    checksum_sha256: str
+    status: Literal["uploaded", "ready", "failed", "deleted"] = "uploaded"
+    created_at: datetime
+    updated_at: datetime
+
+
+class PostDraft(BaseModel):
+    id: str
+    user_id: str
+    media_asset_id: Optional[str] = None
+    target_platforms: list[DraftPlatform] = Field(default_factory=list)
+    content_brief: str = ""
+    goal: str = ""
+    caption: str = ""
+    hashtags: list[str] = Field(default_factory=list)
+    status: Literal["draft", "publishing", "published", "failed"] = "draft"
+    created_at: datetime
+    updated_at: datetime
+
+
+class PostPublication(BaseModel):
+    id: str
+    user_id: str
+    draft_id: str
+    platform: DraftPlatform
+    provider_media_id: Optional[str] = None
+    provider_post_id: Optional[str] = None
+    idempotency_key: str
+    status: Literal["pending", "validating", "publishing", "published", "failed"] = "pending"
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    published_at: Optional[datetime] = None
+
+
 class StoreData(BaseModel):
     schema_version: int = 1
     social_connections: list[SocialConnection] = Field(default_factory=list)

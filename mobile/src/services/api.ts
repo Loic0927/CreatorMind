@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { API_BASE_URL } from '../config/environment';
-import { InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, TrackedPost } from '../types';
+import { ImageMimeType, InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, SocialPlatform, TrackedPost } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -22,6 +22,8 @@ export const trackPost = (userId: string, mediaId: string) => request('/tracked-
 export const stopTracking = (userId: string, id: string) => request(`/tracked-posts/${id}`, userId, { method: 'DELETE' });
 export const refreshTrackedPost = (userId: string, id: string) => request(`/tracked-posts/${id}/refresh`, userId, { method: 'POST' });
 export const analyzeTrackedPost = (userId: string, id: string) => request<PostAnalysis>(`/tracked-posts/${id}/analyses`, userId, { method: 'POST' });
+export type PublicationResult = { platform: SocialPlatform; status: 'published' | 'failed' | 'unavailable'; message: string; code?: string; permalink?: string; tracked_post_id?: string };
+export const publishPost = (userId: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: ImageMimeType; data: string } }) => request<{ results: PublicationResult[] }>('/publications', userId, { method: 'POST', body: JSON.stringify(payload) });
 export const getInstagramInsights = (userId: string) => request<InsightsData>('/insights/instagram?period=7d', userId);
 export const disconnectInstagram = (userId: string) => request('/api/instagram/connection', userId, { method: 'DELETE' });
 export const deleteAccount = (accessToken: string) => request('/auth/account', accessToken, { method: 'DELETE' });

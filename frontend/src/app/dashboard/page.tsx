@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  Connection, PostAnalysis, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
-  deleteAccount, getConnection, getInstagramMedia, getTrackedPost, getTrackedPosts, logout,
-  refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, verifyCode,
+  Connection, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
+  createDraft, deleteAccount, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
+  publishDraft, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, updateDraft, uploadMediaAsset, verifyCode,
 } from "@/lib/postbridge";
 
 type Tab = "home" | "create" | "analyze" | "insights" | "settings";
@@ -147,12 +148,82 @@ function Create({ session }: { session: Session }) {
   const [information, setInformation] = useState("");
   const [goal, setGoal] = useState("Grow engagement");
   const [customGoal, setCustomGoal] = useState("");
-  const [platform, setPlatform] = useState<SocialPlatform>("Instagram");
+  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(["Instagram"]);
+  const [capabilities, setCapabilities] = useState<PublishingCapability[]>([]);
+  const [drafts, setDrafts] = useState<PostDraft[]>([]);
+  const [activeDraftId, setActiveDraftId] = useState("");
+  const [mediaAssetId, setMediaAssetId] = useState<string | null>(null);
   const [image, setImage] = useState<SelectedImage | null>(null);
   const [result, setResult] = useState<{ caption: string; hashtags: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishKey, setPublishKey] = useState("");
+  const [publicationResults, setPublicationResults] = useState<PublicationResult[]>([]);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const effectiveGoal = goal === "Other" ? customGoal.trim() : goal;
+  const publishablePlatforms = selectedPlatforms.filter((platform) => capabilities.some((item) => item.platform === platform && item.available));
+
+  useEffect(() => {
+    Promise.all([getPublishingCapabilities(session), getDrafts(session)])
+      .then(([capabilityResult, draftResult]) => {
+        setCapabilities(capabilityResult.items);
+        setDrafts(draftResult);
+      })
+      .catch(() => {
+        setCapabilities([]);
+        setDrafts([]);
+      });
+  }, [session]);
+
+  const togglePlatform = (item: SocialPlatform) => {
+    setSelectedPlatforms((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item]);
+    setResult(null);
+    setPublishKey("");
+    setPublicationResults([]);
+  };
+
+  const upsertDraftState = (draft: PostDraft) => {
+    setDrafts((current) => [draft, ...current.filter((item) => item.id !== draft.id)]);
+  };
+
+  const newDraft = () => {
+    setActiveDraftId("");
+    setMediaAssetId(null);
+    setInformation("");
+    setGoal("Grow engagement");
+    setCustomGoal("");
+    setSelectedPlatforms(["Instagram"]);
+    setImage(null);
+    setResult(null);
+    setPublicationResults([]);
+    setPublishKey("");
+    setNotice("");
+    setError("");
+  };
+
+  const openDraft = (draftId: string) => {
+    const draft = drafts.find((item) => item.id === draftId);
+    if (!draft) return;
+    setActiveDraftId(draft.id);
+    setMediaAssetId(draft.media_asset_id ?? null);
+    setInformation(draft.content_brief);
+    if (goals.includes(draft.goal)) {
+      setGoal(draft.goal);
+      setCustomGoal("");
+    } else {
+      setGoal("Other");
+      setCustomGoal(draft.goal);
+    }
+    setSelectedPlatforms(draft.target_platforms);
+    setImage(null);
+    setResult(draft.caption || draft.hashtags.length ? { caption: draft.caption, hashtags: draft.hashtags.join(" ") } : null);
+    setPublicationResults([]);
+    setPublishKey("");
+    setNotice("Draft reopened. Its private image remains attached.");
+    setError("");
+  };
 
   const chooseImage = async (file?: File) => {
     if (!file) return;
@@ -177,6 +248,10 @@ function Create({ session }: { session: Session }) {
     const data = preview.split(",", 2)[1];
     if (!data) throw new Error("Could not read this image.");
     setImage({ preview, data, mimeType: file.type as ImageMimeType, name: file.name });
+    setMediaAssetId(null);
+    setPublishKey("");
+    setPublicationResults([]);
+    setNotice("");
   };
 
   const run = async () => {
@@ -187,9 +262,12 @@ function Create({ session }: { session: Session }) {
       setResult(await caption(session, {
         information,
         goal: effectiveGoal,
-        platform,
+        platform: selectedPlatforms[0] ?? "Instagram",
+        platforms: selectedPlatforms,
         image: { mime_type: image.mimeType, data: image.data },
       }));
+      setPublishKey("");
+      setPublicationResults([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Generation failed.");
     } finally {
@@ -197,22 +275,106 @@ function Create({ session }: { session: Session }) {
     }
   };
 
+  const save = async (): Promise<PostDraft> => {
+    if (!effectiveGoal || selectedPlatforms.length === 0) throw new Error("Choose a platform and goal before saving.");
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      let nextMediaAssetId = mediaAssetId;
+      if (image && !nextMediaAssetId) {
+        const asset = await uploadMediaAsset(session, {
+          filename: image.name,
+          mime_type: image.mimeType,
+          data: image.data,
+        });
+        nextMediaAssetId = asset.id;
+        setMediaAssetId(asset.id);
+      }
+      const payload = {
+        media_asset_id: nextMediaAssetId,
+        target_platforms: selectedPlatforms,
+        content_brief: information.trim(),
+        goal: effectiveGoal,
+        caption: result?.caption ?? "",
+        hashtags: (result?.hashtags ?? "").split(/\s+/).filter(Boolean),
+      };
+      const saved = activeDraftId
+        ? await updateDraft(session, activeDraftId, payload)
+        : await createDraft(session, payload);
+      setActiveDraftId(saved.id);
+      upsertDraftState(saved);
+      setNotice("Draft saved. Nothing has been published.");
+      return saved;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveOnly = async () => {
+    try {
+      await save();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save this draft.");
+    }
+  };
+
+  const publish = async () => {
+    if (!result || publishablePlatforms.length === 0) return;
+    if (!window.confirm(`Publish this draft to ${publishablePlatforms.join(", ")}?`)) return;
+    setPublishing(true);
+    setError("");
+    setPublicationResults([]);
+    try {
+      const draft = await save();
+      const idempotencyKey = publishKey || globalThis.crypto.randomUUID();
+      setPublishKey(idempotencyKey);
+      const response = await publishDraft(session, draft.id, {
+        platforms: publishablePlatforms,
+        idempotency_key: idempotencyKey,
+      });
+      setPublicationResults(response.results);
+      upsertDraftState(response.draft);
+      setNotice(response.draft.status === "published" ? "Publication completed and tracking was added." : "Publication finished with one or more failures.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Publishing failed.");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   return <>
     <Title>Create post</Title>
     <ErrorText value={error} />
+    {notice && <p className="mb-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">{notice}</p>}
+    {drafts.some((item) => item.status === "draft" || item.status === "failed") && <Card>
+      <div className="flex items-center justify-between gap-3">
+        <div><h2 className="font-black">Saved drafts</h2><p className="mt-1 text-xs text-[#80778b]">Reopen a saved draft without publishing it.</p></div>
+        <button type="button" onClick={newDraft} className="rounded-xl bg-[#eee8fa] px-4 py-2 text-sm font-bold text-[#5b21b6]">New draft</button>
+      </div>
+      <select value={activeDraftId} onChange={(event) => openDraft(event.target.value)} className="mt-4 w-full rounded-xl border border-[#ddd5e8] bg-white p-3">
+        <option value="">Choose a saved draft</option>
+        {drafts.filter((item) => item.status === "draft" || item.status === "failed").map((draft) => <option key={draft.id} value={draft.id}>{draft.content_brief.slice(0, 70) || "Untitled draft"} - {draft.status}</option>)}
+      </select>
+    </Card>}
     <div className="grid gap-6 xl:grid-cols-[1fr_.9fr]">
       <Card>
         <label className="text-sm font-bold">Image</label>
         <label className="mt-2 grid min-h-44 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-[#b9aec8] bg-[#f7f5ff] text-sm font-bold text-[#5b21b6]">
-          {image ? <img src={image.preview} alt="Selected post" className="h-full max-h-80 w-full object-cover" /> : "Choose an image"}
+          {image ? <img src={image.preview} alt="Selected post" className="h-full max-h-80 w-full object-cover" /> : mediaAssetId ? "Private draft image attached - choose a file to replace it" : "Choose an image"}
           <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => void chooseImage(e.target.files?.[0]).catch((reason) => setError(reason instanceof Error ? reason.message : "Could not read this image."))} />
         </label>
         {image && <p className="mt-2 truncate text-xs text-[#80778b]">{image.name}</p>}
 
-        <label className="mt-5 block text-sm font-bold">Social platform</label>
-        <select value={platform} onChange={(e) => setPlatform(e.target.value as SocialPlatform)} className="mt-2 w-full rounded-2xl border border-[#ddd5e8] bg-white p-4">
-          {platforms.map((item) => <option key={item}>{item}</option>)}
-        </select>
+        <label className="mt-5 block text-sm font-bold">Social platforms</label>
+        <p className="mt-1 text-xs text-[#80778b]">Select one or more. Copy is generated for all selected destinations.</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {platforms.map((item) => {
+            const selected = selectedPlatforms.includes(item);
+            const capability = capabilities.find((value) => value.platform === item);
+            return <button type="button" key={item} onClick={() => togglePlatform(item)} className={`rounded-full border px-4 py-2 text-sm font-bold ${selected ? "border-violet-600 bg-violet-100 text-violet-800" : "border-[#ddd5e8] bg-white text-[#746b82]"}`}>{selected ? "Selected: " : ""}{item}{capability && !capability.available ? " (publish unavailable)" : ""}</button>;
+          })}
+        </div>
 
         <label className="mt-5 block text-sm font-bold">Information</label>
         <textarea value={information} onChange={(e) => setInformation(e.target.value)} className="mt-2 min-h-32 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400" placeholder="Describe your content, audience and key message" />
@@ -223,10 +385,21 @@ function Create({ session }: { session: Session }) {
         </select>
         {goal === "Other" && <input value={customGoal} onChange={(e) => setCustomGoal(e.target.value)} maxLength={200} className="mt-3 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400" placeholder="Write your goal" />}
 
-        <button disabled={busy || !information.trim() || !image || !effectiveGoal} onClick={() => void run()} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white disabled:opacity-50">{busy ? "Creating…" : "Create caption"}</button>
+        <button disabled={busy || !information.trim() || !image || !effectiveGoal || selectedPlatforms.length === 0} onClick={() => void run()} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white disabled:opacity-50">{busy ? "Creating..." : "Create caption"}</button>
       </Card>
       <div className="space-y-6">
-        {result ? <Card><h2 className="text-xl font-black">Caption</h2><textarea className="mt-4 min-h-40 w-full rounded-xl bg-[#f7f5ff] p-4" value={result.caption} onChange={(e) => setResult({ ...result, caption: e.target.value })} /><textarea className="mt-3 min-h-20 w-full rounded-xl bg-[#f7f5ff] p-4 text-[#5b21b6]" value={result.hashtags} onChange={(e) => setResult({ ...result, hashtags: e.target.value })} /></Card> : <Card><p className="text-sm text-[#746b82]">Your editable caption and hashtags will appear here.</p></Card>}
+        {result ? <Card>
+          <h2 className="text-xl font-black">Caption</h2>
+          <textarea className="mt-4 min-h-40 w-full rounded-xl bg-[#f7f5ff] p-4" value={result.caption} onChange={(event) => { setResult({ ...result, caption: event.target.value }); setPublishKey(""); }} />
+          <textarea className="mt-3 min-h-20 w-full rounded-xl bg-[#f7f5ff] p-4 text-[#5b21b6]" value={result.hashtags} onChange={(event) => { setResult({ ...result, hashtags: event.target.value }); setPublishKey(""); }} />
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <button disabled={saving || publishing} onClick={() => void saveOnly()} className="rounded-2xl bg-[#eee8fa] py-4 font-black text-[#5b21b6] disabled:opacity-50">{saving ? "Saving..." : "Save draft"}</button>
+            <button disabled={publishing || saving || publishablePlatforms.length === 0 || (!image && !mediaAssetId)} onClick={() => void publish()} className="rounded-2xl bg-[#201633] py-4 font-black text-white disabled:opacity-50">{publishing ? "Publishing..." : `Publish (${publishablePlatforms.length})`}</button>
+          </div>
+          {selectedPlatforms.some((platform) => !publishablePlatforms.includes(platform)) && <p className="mt-3 text-xs text-amber-700">Unavailable or disconnected platforms remain generation targets but will not be submitted for publishing.</p>}
+          {image && image.mimeType !== "image/jpeg" && <p className="mt-2 text-xs text-amber-700">Instagram publishing currently requires a JPEG. This image can still be saved and used to generate copy.</p>}
+          {publicationResults.length > 0 && <div className="mt-4 space-y-2">{publicationResults.map((item) => <div key={`${item.platform}-${item.publication_id ?? item.status}`} className={`rounded-xl p-3 text-sm ${item.status === "published" ? "bg-emerald-50 text-emerald-800" : item.status === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"}`}><p className="font-black">{item.platform} - {item.status}</p><p className="mt-1">{item.message}</p>{item.permalink && <a className="mt-1 inline-block font-bold underline" href={item.permalink} target="_blank" rel="noreferrer">View post</a>}</div>)}</div>}
+        </Card> : <Card><p className="text-sm text-[#746b82]">Your editable caption and hashtags will appear here.</p></Card>}
       </div>
     </div>
   </>;
@@ -331,7 +504,7 @@ function Analyze({ session }: { session: Session }) {
       </div>
       {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then PostBridge will interpret this post's real performance and content. It will not predict views or assign a viral score.</p></Card>}
     </div>
-    {selected?.analyses?.length ? <section className="mt-8"><h2 className="mb-4 text-lg font-black">Analysis history</h2><div className="space-y-3">{selected.analyses.map((analysis) => <button key={analysis.id} onClick={() => setViewingAnalysisId(analysis.id)} className={`w-full rounded-3xl border bg-white p-5 text-left shadow-sm ${displayedAnalysis?.id === analysis.id ? "border-violet-500 ring-2 ring-violet-200" : "border-[#e7e0f0]"}`}><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="font-bold">{analysis.output_payload.summary}</p><p className="mt-2 text-xs text-[#80778b]">{new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p></div><p className="text-xs font-bold text-[#6d28d9]">Snapshot {analysis.source_snapshot_id.slice(0, 8)}</p></div></button>)}</div></section> : null}
+    {selected?.analyses?.length ? <AnalysisTimeline analyses={selected.analyses} selectedId={displayedAnalysis?.id} onSelect={setViewingAnalysisId} /> : null}
   </>;
 }
 
@@ -358,24 +531,23 @@ function Settings({ session, onLogout }: { session: Session; onLogout: () => voi
 
 function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
   const output = analysis.output_payload;
-  return <Card dark>
-    <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Model interpretation</p>
-    <p className="mt-3 text-lg font-bold leading-8 text-white">{output.summary}</p>
-    <div className="mt-6">
-      <p className="mb-3 text-xs font-bold uppercase tracking-widest text-violet-300">Observed provider data</p>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-        {Object.entries(analysis.observed_metrics).map(([name, value]) => <div key={name}><Metric label={name.replaceAll("_", " ")} value={value} light />{analysis.metric_deltas[name] != null && <p className="mt-1 text-[10px] text-violet-200">Δ {formatDelta(analysis.metric_deltas[name])}</p>}</div>)}
-      </div>
-    </div>
-    <div className="mt-7 grid gap-6 md:grid-cols-2">
-      <AnalysisList title="What performed well" items={output.strengths} />
-      <AnalysisList title="Needs attention" items={output.concerns} />
-      <AnalysisList title="Next actions" items={output.recommendations} />
-      <AnalysisList title="Unavailable inputs" items={output.missing_inputs} />
-    </div>
-    <p className="mt-7 border-t border-white/10 pt-4 text-[11px] text-violet-200">Based on snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p>
-  </Card>;
+  if (!output.score) return <Card><p className="font-black">Legacy analysis</p><p className="mt-2 text-sm text-[#746b82]">{output.summary ?? "Run a new analysis to generate the creator intelligence dashboard."}</p></Card>;
+  const tone = (value: number) => value >= 75 ? "bg-emerald-500" : value >= 50 ? "bg-amber-500" : "bg-red-500";
+  return <div className="space-y-5">
+    <Card dark>
+      <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-widest text-violet-300">Post score</p><p className="mt-2 text-5xl font-black text-white">{output.score.overall}<span className="text-xl text-violet-300"> / 100</span></p></div><div className="rounded-2xl bg-white/10 px-5 py-3 text-center"><p className="text-xs text-violet-300">Grade</p><p className="text-3xl font-black text-white">{output.score.grade}</p></div></div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">{Object.entries(output.score.categories).map(([name, value]) => <div key={name}><div className="mb-1 flex justify-between text-xs font-bold text-violet-100"><span className="capitalize">{name}</span><span>{value}</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full ${tone(value)}`} style={{ width: `${value}%` }} /></div></div>)}</div>
+    </Card>
+    <DashboardSection title="Top insights">{output.top_insights?.map((item) => <p key={item.text} className="rounded-xl bg-[#f7f5ff] p-3 text-sm font-bold">{item.status === "strong" ? "✅" : item.status === "attention" ? "⚠️" : "ℹ️"} {item.text}</p>)}</DashboardSection>
+    <DashboardSection title="Why it worked"><div className="grid gap-3">{output.why_it_worked?.map((item) => <div key={item.factor} className="rounded-2xl border border-[#eee8fa] p-4"><div className="flex justify-between gap-3"><p className="font-black">{item.factor}</p><span className="shrink-0 text-sm font-black text-emerald-700">{item.estimated_impact}</span></div><p className="mt-2 text-sm leading-6 text-[#746b82]">{item.explanation}</p></div>)}</div></DashboardSection>
+    <DashboardSection title="Compared with your average"><div className="grid gap-3 sm:grid-cols-2">{output.benchmarks?.filter((item) => item.current != null).map((item) => <div key={item.metric} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="text-xs font-bold uppercase text-[#80778b]">{item.metric.replaceAll("_", " ")}</p><p className="mt-1 text-2xl font-black">{item.current}</p><p className={`mt-1 text-xs font-bold ${item.percent_change != null && item.percent_change >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.percent_change == null ? "More posts needed for a baseline" : `${item.percent_change >= 0 ? "↑" : "↓"} ${Math.abs(item.percent_change)}% ${item.direction} average`}</p></div>)}</div></DashboardSection>
+    <DashboardSection title="Risks">{output.risks?.length ? output.risks.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">⚠️ {item}</p>) : <p className="text-sm text-[#746b82]">No evidence-backed risk was detected from the available signals.</p>}</DashboardSection>
+    <DashboardSection title="Next post recommendations"><div className="space-y-3">{output.recommendations.map((item, index) => typeof item === "string" ? <p key={item}>{item}</p> : <div key={`${item.action}-${index}`} className="rounded-2xl border border-[#eee8fa] p-4"><p className="font-black">{item.action}</p><p className="mt-2 text-sm text-[#746b82]"><b>Reason:</b> {item.reason}</p><p className="mt-2 text-sm font-bold text-[#6d28d9]"><b>Expected impact:</b> {item.expected_impact}</p></div>)}</div></DashboardSection>
+    <DashboardSection title="AI confidence"><div className="flex items-center gap-4"><p className="text-4xl font-black">{output.confidence?.score ?? 0}%</p><p className="text-sm text-[#746b82]">Confidence reflects available inputs, not certainty that a recommendation will work.</p></div><div className="mt-4 grid gap-2 sm:grid-cols-2">{output.confidence?.inputs.map((item) => <p key={item.name} className="text-sm">{item.available ? "✅" : "❌"} {item.name}{item.detail ? ` · ${item.detail}` : ""}</p>)}</div></DashboardSection>
+    <DashboardSection title="Content pattern winners"><div className="grid gap-3 sm:grid-cols-2">{output.content_patterns?.length ? output.content_patterns.map((item) => <div key={item.pattern} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="font-black">{item.pattern}</p><p className="mt-1 text-2xl font-black text-[#6d28d9]">{item.average_score}</p><p className="text-xs text-[#746b82]">Average score · {item.sample_size} post{item.sample_size === 1 ? "" : "s"} · {item.difference_from_baseline >= 0 ? "+" : ""}{item.difference_from_baseline} vs baseline</p></div>) : <p className="text-sm text-[#746b82]">Track more posts to detect repeatable formats.</p>}</div></DashboardSection>
+    <p className="text-[11px] text-[#80778b]">Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p>
+  </div>;
 }
-function AnalysisList({ title, items }: { title: string; items: string[] }) { return <div><h3 className="font-black text-violet-300">{title}</h3>{items.length ? <ul className="mt-2 space-y-2 text-sm leading-6 text-violet-50">{items.map((item) => <li key={item}>• {item}</li>)}</ul> : <p className="mt-2 text-sm text-violet-200">No item reported.</p>}</div>; }
-function formatDelta(value: number | null) { if (value == null) return "—"; return value > 0 ? `+${value}` : String(value); }
+function DashboardSection({ title, children }: { title: string; children: ReactNode }) { return <Card><h3 className="mb-4 text-lg font-black">{title}</h3><div className="space-y-2">{children}</div></Card>; }
+function AnalysisTimeline({ analyses, selectedId, onSelect }: { analyses: PostAnalysis[]; selectedId?: string; onSelect: (id: string) => void }) { return <section className="mt-8"><h2 className="mb-4 text-lg font-black">Analysis history</h2><div className="flex gap-3 overflow-x-auto pb-2">{[...analyses].reverse().map((analysis, index, ordered) => { const score = analysis.output_payload.score?.overall; const previous = index > 0 ? ordered[index - 1].output_payload.score?.overall : undefined; const direction = score != null && previous != null ? score > previous ? "↑" : score < previous ? "↓" : "→" : ""; const plateau = analysis.output_payload.risks?.some((item) => item.toLowerCase().includes("stalled")); return <button key={analysis.id} onClick={() => onSelect(analysis.id)} className={`min-w-44 rounded-2xl border bg-white p-4 text-left ${selectedId === analysis.id ? "border-violet-500 ring-2 ring-violet-200" : "border-[#e7e0f0]"}`}><p className="text-xs text-[#80778b]">{new Date(analysis.created_at).toLocaleDateString()}</p><p className="mt-1 text-2xl font-black">{score == null ? "Legacy" : `${score} ${direction}`}</p>{plateau && <p className="mt-2 text-xs font-bold text-amber-700">Growth plateau detected</p>}</button>; })}</div></section>; }
 function Metric({ label, value, light = false }: { label: string; value: unknown; light?: boolean }) { return <div><p className={`font-black ${light ? "text-white" : "text-[#201633]"}`}>{value == null ? "—" : String(value)}</p><p className={`text-[10px] font-bold uppercase tracking-wide ${light ? "text-violet-300" : "text-[#80778b]"}`}>{label}</p></div>; }

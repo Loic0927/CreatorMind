@@ -5,6 +5,7 @@ export type CaptionInput = {
   information: string;
   goal: string;
   platform: SocialPlatform;
+  platforms?: SocialPlatform[];
   image: { mime_type: ImageMimeType; data: string };
 };
 export type CaptionResult = { caption: string; hashtags: string };

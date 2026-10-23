@@ -140,3 +140,59 @@ class TrackedPostAnalysisRecord(Base):
     content_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     output_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class MediaAssetRecord(Base):
+    __tablename__ = "media_assets"
+    __table_args__ = (
+        UniqueConstraint("user_id", "object_name", name="uq_media_assets_user_object"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_name: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PostDraftRecord(Base):
+    __tablename__ = "post_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_asset_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("media_assets.id", ondelete="RESTRICT"), index=True)
+    target_platforms: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    content_brief: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    goal: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    hashtags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PostPublicationRecord(Base):
+    __tablename__ = "post_publications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", "idempotency_key", name="uq_post_publications_idempotency"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("post_drafts.id", ondelete="RESTRICT"), nullable=False, index=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_media_id: Mapped[str | None] = mapped_column(String(255))
+    provider_post_id: Mapped[str | None] = mapped_column(String(255))
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

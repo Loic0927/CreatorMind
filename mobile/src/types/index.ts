@@ -13,7 +13,17 @@ export type PostAnalysis = {
   observed_metrics: Record<string, number | null>;
   metric_deltas: Record<string, number | null>;
   content_payload: { visual_context_used?: boolean; visual_context_kind?: string };
-  output_payload: { summary: string; strengths: string[]; concerns: string[]; recommendations: string[]; missing_inputs: string[] };
+  output_payload: {
+    score?: { overall: number; grade: string; categories: Record<string, number> };
+    top_insights?: { status: 'strong' | 'attention' | 'neutral'; text: string }[];
+    why_it_worked?: { factor: string; estimated_impact: string; explanation: string }[];
+    benchmarks?: { metric: string; current: number | null; average: number | null; percent_change: number | null; direction: string }[];
+    risks?: string[];
+    recommendations: (string | { action: string; reason: string; expected_impact: string })[];
+    confidence?: { score: number; inputs: { name: string; available: boolean; detail?: string | null }[] };
+    content_patterns?: { pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }[];
+    summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
+  };
   created_at: string;
 };
 export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[]; analyses?: PostAnalysis[] };
@@ -25,6 +35,7 @@ export type Draft = {
   goal: string;
   otherGoal: string;
   platform: SocialPlatform;
+  platforms: SocialPlatform[];
   caption: string;
   hashtags: string;
   imageUri?: string;

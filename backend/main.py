@@ -37,6 +37,7 @@ from backend.services.youtube import (
     store_youtube_connection,
 )
 from backend.instagram_api import router as instagram_router
+from backend.draft_api import media_router, router as draft_router
 from backend.auth import AuthenticatedUser, require_user
 from backend.auth_api import router as auth_router
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
@@ -75,6 +76,8 @@ log_environment_presence()
 app = FastAPI(title="PostBridge API")
 app.include_router(auth_router)
 app.include_router(instagram_router)
+app.include_router(draft_router)
+app.include_router(media_router)
 
 cors_origins = csv_environment(
     "POSTBRIDGE_CORS_ALLOWED_ORIGINS",
@@ -714,6 +717,7 @@ class MobileCaptionRequest(BaseModel):
     information: str = Field(..., min_length=3, max_length=4000)
     goal: str = Field(..., min_length=2, max_length=200)
     platform: Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"] = "Instagram"
+    platforms: list[Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]] = Field(default_factory=list, max_length=5)
     image: Optional[MobileCaptionImage] = None
 
 
@@ -731,11 +735,13 @@ def mobile_caption(payload: MobileCaptionRequest, user: AuthenticatedUser = Depe
         "Threads": "Write a concise, natural Threads post that invites conversation and uses no more than 3 hashtags.",
         "YouTube": "Write a useful YouTube post description with a strong opening and 3 to 5 relevant hashtags.",
     }
+    targets = list(dict.fromkeys(payload.platforms or [payload.platform]))
+    combined_guidance = " ".join(platform_guidance[item] for item in targets)
     prompt = (
-        f"Create copy for {payload.platform}. Analyze the supplied image together with the user's "
+        f"Create one reusable post for these selected platforms: {', '.join(targets)}. Analyze the supplied image together with the user's "
         "content brief when an image is present. Do not invent names, organizations, achievements, "
         "or other facts that are not supported by those inputs. "
-        f"{platform_guidance[payload.platform]} "
+        f"Satisfy the strictest compatible constraints in this guidance: {combined_guidance} "
         "Return exactly two sections: CAPTION: followed by the post copy, and HASHTAGS: followed only "
         "by the hashtags.\n"
         f"Content brief: {payload.information}\nGoal: {payload.goal}"

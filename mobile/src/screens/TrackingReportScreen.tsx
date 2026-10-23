@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button } from '../components/ui';
 import { analyzeTrackedPost, getTrackedPost, refreshTrackedPost, stopTracking } from '../services/api';
@@ -92,9 +93,9 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
       <Text style={styles.section}>Analysis history</Text>
       {post.analyses?.length ? post.analyses.map((analysis) => (
         <Pressable key={analysis.id} onPress={() => setViewingAnalysisId(analysis.id)} style={[styles.history, displayedAnalysis?.id === analysis.id && styles.historySelected]}>
-          <Text style={styles.historySummary}>{analysis.output_payload.summary}</Text>
-          <Text style={styles.label}>{new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</Text>
-          <Text style={styles.snapshotId}>Snapshot {analysis.source_snapshot_id.slice(0, 8)}</Text>
+          <Text style={styles.historySummary}>{analysis.output_payload.score ? `Score ${analysis.output_payload.score.overall} · Grade ${analysis.output_payload.score.grade}` : 'Legacy analysis'}</Text>
+          <Text style={styles.label}>{new Date(analysis.created_at).toLocaleString()}</Text>
+          {analysis.output_payload.risks?.some((item) => item.toLowerCase().includes('stalled')) && <Text style={styles.riskText}>Growth plateau detected</Text>}
         </Pressable>
       )) : <Text style={styles.label}>No analysis history yet.</Text>}
 
@@ -114,42 +115,24 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
 
 function AnalysisPanel({ analysis }: { analysis: PostAnalysis }) {
   const output = analysis.output_payload;
+  if (!output.score) return <View style={styles.emptyAnalysis}><Text style={styles.emptyTitle}>Legacy analysis</Text><Text style={styles.label}>{output.summary ?? 'Run a new analysis to view the creator intelligence dashboard.'}</Text></View>;
   return (
-    <View style={styles.analysis}>
-      <Text style={styles.eyebrow}>MODEL INTERPRETATION</Text>
-      <Text style={styles.analysisSummary}>{output.summary}</Text>
-      <Text style={styles.analysisTitle}>Observed provider data</Text>
-      <View style={styles.analysisMetrics}>
-        {Object.entries(analysis.observed_metrics).map(([name, value]) => (
-          <View key={name} style={styles.analysisMetric}>
-            <Text style={styles.analysisValue}>{value ?? '—'}</Text>
-            <Text style={styles.analysisLabel}>{name.replaceAll('_', ' ')}</Text>
-            {analysis.metric_deltas[name] != null && <Text style={styles.delta}>Δ {formatDelta(analysis.metric_deltas[name])}</Text>}
-          </View>
-        ))}
+    <View style={styles.dashboard}>
+      <View style={styles.scoreCard}><Text style={styles.eyebrow}>POST SCORE</Text><Text style={styles.score}>{output.score.overall}<Text style={styles.scoreOutOf}> / 100</Text></Text><Text style={styles.grade}>Grade {output.score.grade}</Text>
+        {Object.entries(output.score.categories).map(([name, value]) => <View key={name} style={styles.scoreRow}><Text style={styles.scoreLabel}>{name}</Text><View style={styles.scoreTrack}><View style={[styles.scoreFill, { width: `${value}%`, backgroundColor: value >= 75 ? '#10b981' : value >= 50 ? '#f59e0b' : '#ef4444' }]} /></View><Text style={styles.scoreNumber}>{value}</Text></View>)}
       </View>
-      <AnalysisList title="What performed well" items={output.strengths} />
-      <AnalysisList title="Needs attention" items={output.concerns} />
-      <AnalysisList title="Next actions" items={output.recommendations} />
-      <AnalysisList title="Unavailable inputs" items={output.missing_inputs} />
-      <Text style={styles.source}>Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {analysis.model_name}</Text>
+      <Panel title="Top insights">{output.top_insights?.map((item) => <Text key={item.text} style={styles.panelText}>{item.status === 'strong' ? '✅' : item.status === 'attention' ? '⚠️' : 'ℹ️'} {item.text}</Text>)}</Panel>
+      <Panel title="Why it worked">{output.why_it_worked?.map((item) => <View key={item.factor} style={styles.subcard}><Text style={styles.subcardTitle}>{item.factor} · {item.estimated_impact}</Text><Text style={styles.label}>{item.explanation}</Text></View>)}</Panel>
+      <Panel title="Compared with your average"><View style={styles.benchmarkGrid}>{output.benchmarks?.filter((item) => item.current != null).map((item) => <View key={item.metric} style={styles.benchmark}><Text style={styles.analysisLabel}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.benchmarkValue}>{item.current}</Text><Text style={[styles.label, item.percent_change != null && item.percent_change >= 0 ? styles.positive : styles.negative]}>{item.percent_change == null ? 'More posts needed' : `${item.percent_change >= 0 ? '↑' : '↓'} ${Math.abs(item.percent_change)}% ${item.direction} average`}</Text></View>)}</View></Panel>
+      <Panel title="Risks">{output.risks?.length ? output.risks.map((item) => <Text key={item} style={styles.riskText}>⚠️ {item}</Text>) : <Text style={styles.label}>No evidence-backed risk detected.</Text>}</Panel>
+      <Panel title="Next post recommendations">{output.recommendations.map((item, index) => typeof item === 'string' ? <Text key={item} style={styles.panelText}>{item}</Text> : <View key={`${item.action}-${index}`} style={styles.subcard}><Text style={styles.subcardTitle}>{item.action}</Text><Text style={styles.label}>Reason: {item.reason}</Text><Text style={styles.impact}>Expected impact: {item.expected_impact}</Text></View>)}</Panel>
+      <Panel title={`AI confidence · ${output.confidence?.score ?? 0}%`}>{output.confidence?.inputs.map((item) => <Text key={item.name} style={styles.panelText}>{item.available ? '✅' : '❌'} {item.name}{item.detail ? ` · ${item.detail}` : ''}</Text>)}</Panel>
+      <Panel title="Content pattern winners">{output.content_patterns?.length ? output.content_patterns.map((item) => <View key={item.pattern} style={styles.subcard}><Text style={styles.subcardTitle}>{item.pattern} · {item.average_score}</Text><Text style={styles.label}>{item.sample_size} post{item.sample_size === 1 ? '' : 's'} · {item.difference_from_baseline >= 0 ? '+' : ''}{item.difference_from_baseline} vs baseline</Text></View>) : <Text style={styles.label}>Track more posts to detect repeatable formats.</Text>}</Panel>
     </View>
   );
 }
 
-function AnalysisList({ title, items }: { title: string; items: string[] }) {
-  return (
-    <View style={styles.analysisList}>
-      <Text style={styles.analysisTitle}>{title}</Text>
-      {items.length ? items.map((item) => <Text key={item} style={styles.analysisItem}>• {item}</Text>) : <Text style={styles.analysisMuted}>No item reported.</Text>}
-    </View>
-  );
-}
-
-function formatDelta(value: number | null) {
-  if (value == null) return '—';
-  return value > 0 ? `+${value}` : String(value);
-}
+function Panel({ title, children }: { title: string; children: ReactNode }) { return <View style={styles.panel}><Text style={styles.panelTitle}>{title}</Text><View style={styles.panelBody}>{children}</View></View>; }
 
 const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 32, gap: 14 },
@@ -184,4 +167,27 @@ const styles = StyleSheet.create({
   analysisItem: { color: '#eee8f6', lineHeight: 20 },
   analysisMuted: { color: '#d9d0e5', fontSize: 12 },
   source: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ffffff22', paddingTop: 12, color: '#c4b5fd', fontSize: 10 },
+  dashboard: { gap: 14 },
+  scoreCard: { gap: 10, padding: 18, borderRadius: 20, backgroundColor: '#24163b' },
+  score: { color: 'white', fontSize: 42, fontWeight: '900' },
+  scoreOutOf: { color: '#c4b5fd', fontSize: 17 },
+  grade: { color: 'white', fontSize: 18, fontWeight: '800' },
+  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  scoreLabel: { color: '#ede9fe', width: 82, fontSize: 12, textTransform: 'capitalize' },
+  scoreTrack: { flex: 1, height: 7, borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff22' },
+  scoreFill: { height: '100%', borderRadius: 8 },
+  scoreNumber: { color: 'white', width: 26, textAlign: 'right', fontWeight: '800' },
+  panel: { padding: 16, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e7e0f0' },
+  panelTitle: { fontSize: 18, color: '#201633', fontWeight: '900', marginBottom: 12 },
+  panelBody: { gap: 9 },
+  panelText: { color: '#342846', lineHeight: 20 },
+  subcard: { padding: 12, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
+  subcardTitle: { color: '#201633', fontWeight: '800' },
+  impact: { color: '#6d28d9', fontWeight: '700', fontSize: 12, lineHeight: 18 },
+  benchmarkGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  benchmark: { width: '48%', padding: 11, borderRadius: 12, backgroundColor: '#f7f5ff' },
+  benchmarkValue: { color: '#201633', fontWeight: '900', fontSize: 20, marginVertical: 3 },
+  positive: { color: '#047857' },
+  negative: { color: '#b91c1c' },
+  riskText: { color: '#92400e', lineHeight: 20 },
 });

@@ -31,7 +31,7 @@ PostBridge should let one signed-in user:
 - Content-aware analysis uses observed metrics plus available post content. It must identify unavailable inputs rather than invent them.
 - `viral_score` is removed from current UI, API contracts, persisted output, documentation, and tests. Existing stored history must remain readable during migration.
 - Predicted view counts are not part of the product experience. Creation returns editable copy only; performance analysis must prefer observed provider metrics and clearly labelled interpretation.
-- Caption generation targets one selected platform at a time and uses both the content brief and an uploaded image. Platform selection for generation does not imply that publishing is already connected.
+- Caption generation can target one or more selected platforms and uses both the content brief and an uploaded image. Publication capability is evaluated independently for every selected platform.
 - The first multimodal creation flow supports JPG, PNG, and WebP images up to 5 MB in the web client. Video understanding remains out of scope for this phase.
 - Provider credentials and access tokens remain server-side and encrypted. Client applications never receive permanent provider tokens.
 
@@ -66,43 +66,43 @@ PostBridge should let one signed-in user:
   Acceptance: Generated copy reflects both visible image content and the written brief, follows the selected platform's format, accepts a non-empty custom goal, and never displays a predicted view count in the creation result.
   Verify: Run Gemini adapter tests and the frontend production build; manually generate from one image for each platform, test Other with empty/non-empty input, reject a video, and reject an image over 5 MB.
 
-- [ ] **3. Add persistent draft and publication models**
+- [x] **3. Add persistent draft and publication models**
   Spec ref: `Core > Draft before publish`
   What to build: Add database migrations and repository methods for `post_drafts`, `media_assets`, and `post_publications`. A draft stores owner, media reference, content brief, goal, caption, hashtags, status, and timestamps. A publication stores draft, platform, provider media/post ID, idempotency key, status, error code, and publish timestamps.
   Acceptance: Drafts and publication attempts are account-scoped, survive restarts, support multiple platform targets, and cannot expose another user's records.
   Verify: Run backend tests and migration tests; create two users and prove cross-user reads and writes are rejected.
 
-- [ ] **4. Build the draft API**
+- [x] **4. Build the draft API**
   Spec ref: `Core > Create and edit a post`
   What to build: Add authenticated create/list/get/update/delete draft endpoints. Reuse caption generation but save the generated result only after the user accepts or edits it. Validate caption length, hashtags, media ownership, and draft state transitions.
   Acceptance: A user can generate, edit, save, reopen, and delete an unpublished draft from either client without publishing it.
   Verify: Add API tests for the happy path, invalid media, invalid state transition, expired session, and cross-user access.
 
-- [ ] **5. Make media publishable without making the bucket public**
+- [-] **5. Make media publishable without making the bucket public**
   Spec ref: `Core > Provider-accessible media`
   What to build: Upload selected media to the private OCI bucket, persist metadata, validate MIME type and size, and create a time-limited provider-readable URL for the publishing window. Do not store a permanent public URL when a short-lived URL is sufficient.
   Acceptance: Meta can download the media during container creation, anonymous access stops after expiry, and unsupported or oversized files fail before a publication record is created.
   Verify: Upload a test image, fetch it through the temporary URL, confirm expiry behavior, and run upload/security tests.
 
-- [ ] **6. Introduce a platform publishing adapter contract**
+- [x] **6. Introduce a platform publishing adapter contract**
   Spec ref: `Core > Multi-platform foundation`
   What to build: Define a server-side adapter interface with capability discovery, validation, publish, status, and normalized error methods. Register Instagram first; expose future platforms as unavailable instead of rendering fake connected options.
   Acceptance: The draft/publish service contains no Instagram-specific branching outside the Instagram adapter, and adding a new provider does not require changing the draft schema.
   Verify: Unit-test a fake adapter and the Instagram adapter against the same contract; confirm unavailable adapters cannot be selected.
 
-- [ ] **7. Implement Instagram publishing**
+- [-] **7. Implement Instagram publishing**
   Spec ref: `Core > Publish to Instagram`
   What to build: Use the connected account token and the granted content-publish permission to create an Instagram media container, poll processing status when required, publish the container, persist the provider post ID, and return normalized success/failure state. Start with one supported media type and add video/carousel only after the image flow is reliable.
   Acceptance: Repeating the same client request does not create duplicate Instagram posts, failures remain retryable where safe, and a successful provider post becomes available for tracking.
   Verify: Publish to a designated Instagram test/professional account, confirm one provider post exists, retry the request, and inspect the publication/audit record.
 
-- [ ] **8. Build platform selection and publication status UI**
+- [-] **8. Build platform selection and publication status UI**
   Spec ref: `Core > Choose where to publish`
   What to build: Turn Create post into a draft workflow with generated editable copy, media preview, connected-platform checkboxes, Save draft, and Publish actions. Show per-platform validation, publishing, published, and failed states.
   Acceptance: A user can save without publishing, select Instagram, confirm publication, and see a provider-specific result. Disconnected or unsupported platforms are visible only as unavailable and cannot be submitted.
   Verify: Complete save-only, successful publish, disconnected-platform, provider-failure, and retry scenarios on responsive web.
 
-- [ ] **9. Link publications to tracking automatically**
+- [x] **9. Link publications to tracking automatically**
   Spec ref: `Core > Publish then track`
   What to build: After a confirmed provider publication, import/upsert the provider media record and create one account-scoped tracking record. Do not mark a publication tracked until the provider post ID is available.
   Acceptance: A successfully published Instagram post appears once in Tracked posts; retries and callbacks do not create duplicates.
@@ -126,7 +126,7 @@ PostBridge should let one signed-in user:
   Acceptance: No user-facing screen or current API contract displays viral score or predicted views, old rows do not crash history pages, and a repository search finds only intentional legacy migration references.
   Verify: Run `rg -n "viral_score|Viral score|Viral Score|predicted views|Predicted views" backend frontend mobile README.md` and review every remaining match; run all backend, frontend, and mobile checks.
 
-- [ ] **13. Bring the same workflow to mobile**
+- [-] **13. Bring the same workflow to mobile**
   Spec ref: `Cross-platform > Web and app parity`
   What to build: Add shared draft, platform selection, publication status, tracked-post detail, refresh, and content-analysis flows to Expo. Keep mobile navigation and two-column actions usable on small screens.
   Acceptance: The same draft created on web can be edited/published on mobile, and the resulting tracked post and analysis are visible on both clients for the same account.
@@ -181,3 +181,7 @@ PostBridge should let one signed-in user:
 - 2026-10-22: Brought the same creation changes to Expo: platform selection, expanded/custom goals, image payloads, and no prediction card. Mobile typecheck, direct ESLint, and both Jest suites passed.
 - 2026-10-22: Replaced the dashboard's generic caption-length prediction form with tracked-post analysis based on real Instagram snapshots, metric deltas, caption, publish time, and available image/thumbnail context.
 - 2026-10-22: Added account-scoped `tracked_post_analyses` persistence tied to tracked posts and source snapshots, plus chronological analysis history on web and mobile post detail. Production migration and live Gemini verification remain.
+- 2026-10-22: Added multi-select generation and per-platform publication results on web and Expo. Instagram JPEG publishing now uploads to the private OCI bucket, creates a one-hour object-read URL for Meta, publishes through the official API, and automatically creates the tracked-post record. Other platforms explicitly return unavailable until their official OAuth/publishing adapters exist. Durable drafts, publication records, idempotency, production verification, and adapter extraction remain.
+- 2026-10-22: Upgraded tracked-post analysis to creator intelligence v2: deterministic post/category scores, creator-average benchmarking, concise top insights, evidence-backed risks, structured next-post actions, input-based AI confidence, content-pattern detection, and score history on web and mobile. Existing v1 reports render as legacy history instead of breaking.
+- 2026-10-22: Added durable account-scoped `media_assets`, `post_drafts`, and `post_publications` models with Alembic migration, idempotent publication attempts, and controlled state transitions. Added authenticated draft CRUD/list/history APIs with media ownership, platform caption, hashtag, and immutable-state validation. Extracted publishing behind a shared adapter registry with Instagram and explicit unavailable-provider adapters. Empty/populated migration tests and the complete backend suite passed locally.
+- 2026-10-22: Connected the durable vertical slice on web: validated JPG/PNG/WebP uploads are stored privately with metadata and checksums, drafts can be saved and reopened, publishing requires confirmation and submits only available connected platforms, and Instagram receives a one-hour object-read URL for the stored asset. Publication attempts now persist provider IDs, failures, timestamps, and idempotency state. Successful Instagram results upsert media and create exactly one tracked post; an integration test proved that repeating the same request produces one provider call, one media row, and one tracked row. Live OCI expiry, responsive browser review, and designated Instagram test-account publishing remain.

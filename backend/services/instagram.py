@@ -337,6 +337,39 @@ def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
+def publish_instagram_image(
+    access_token: str,
+    instagram_user_id: str,
+    image_url: str,
+    caption: str,
+) -> dict[str, Any]:
+    """Publish one provider-readable JPEG through Instagram's official API."""
+    container = _request_json(
+        "POST",
+        f"{INSTAGRAM_GRAPH_URL}/{instagram_user_id}/media",
+        form={"image_url": image_url, "caption": caption, "access_token": access_token},
+    )
+    container_id = container.get("id")
+    if not isinstance(container_id, str) or not container_id:
+        raise InstagramServiceError("instagram_publish_failed", "Instagram did not create a media container.", 502)
+    published = _request_json(
+        "POST",
+        f"{INSTAGRAM_GRAPH_URL}/{instagram_user_id}/media_publish",
+        form={"creation_id": container_id, "access_token": access_token},
+    )
+    media_id = published.get("id")
+    if not isinstance(media_id, str) or not media_id:
+        raise InstagramServiceError("instagram_publish_failed", "Instagram did not publish the media container.", 502)
+    return _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/{media_id}",
+        query={
+            "fields": "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp",
+            "access_token": access_token,
+        },
+    )
+
+
 def fetch_instagram_media_insights(access_token: str, instagram_media_id: str) -> dict[str, int]:
     """Fetch the metrics supported for a media item without fabricating missing values."""
     metrics: dict[str, int] = {}
