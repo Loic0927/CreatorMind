@@ -28,15 +28,16 @@ class PostAnalysisError(RuntimeError):
 
 
 class ImpactHypothesis(BaseModel):
-    factor: str = Field(..., min_length=1, max_length=80)
-    estimated_impact: str = Field(..., min_length=1, max_length=40)
-    explanation: str = Field(..., min_length=1, max_length=280)
+    title: str = Field(..., min_length=1, max_length=80)
+    evidence: str = Field(..., min_length=1, max_length=220)
+    interpretation: str = Field(..., min_length=1, max_length=280)
+    why_it_matters: str = Field(..., min_length=1, max_length=280)
 
 
 class ActionRecommendation(BaseModel):
     action: str = Field(..., min_length=1, max_length=220)
     reason: str = Field(..., min_length=1, max_length=280)
-    expected_impact: str = Field(..., min_length=1, max_length=100)
+    expected_outcome: str = Field(..., min_length=1, max_length=160)
 
 
 class ContentAttributes(BaseModel):
@@ -126,7 +127,7 @@ def _caption_attributes(caption: str) -> ContentAttributes:
     return ContentAttributes(topic=topic, thumbnail_style="Unavailable", caption_style=caption_style, cta_usage=cta_usage)
 
 
-def _fallback_interpretation(caption: str, benchmarks: list[dict[str, Any]]) -> PostAnalysisInterpretation:
+def _fallback_interpretation(caption: str, benchmarks: list[dict[str, Any]], image_available: bool) -> PostAnalysisInterpretation:
     ranked = sorted(
         (item for item in benchmarks if item.get("percent_change") is not None),
         key=lambda item: abs(float(item["percent_change"])), reverse=True,
@@ -134,19 +135,28 @@ def _fallback_interpretation(caption: str, benchmarks: list[dict[str, Any]]) -> 
     strongest = next((item for item in ranked if item["percent_change"] > 0), None)
     weakest = next((item for item in ranked if item["percent_change"] < 0), None)
     why = [] if strongest is None else [ImpactHypothesis(
-        factor=strongest["metric"].replace("_", " ").title(), estimated_impact="Positive signal",
-        explanation=f"This signal is {abs(strongest['percent_change']):.0f}% above the tracked-post average.",
+        title=f"Strong {strongest['metric'].replace('_', ' ').title()}",
+        evidence=f"{strongest['metric'].replace('_', ' ').title()} is {abs(strongest['percent_change']):.0f}% above the account average.",
+        interpretation="The audience responded more strongly to this part of the post than they usually do.",
+        why_it_matters="A repeatable positive response is a useful signal for the next content experiment.",
     )]
+    if image_available and len(why) < 3:
+        why.append(ImpactHypothesis(
+            title="Visible Creative Context",
+            evidence="A post thumbnail was available alongside the performance data.",
+            interpretation="The analysis could consider how the visible creative supports the post message.",
+            why_it_matters="Combining creative context with metrics produces a more useful hypothesis than metrics alone.",
+        ))
     recommendations = [ActionRecommendation(
         action="Repeat the strongest content structure in the next post." if strongest else "Analyze more posts to establish a reliable baseline.",
         reason=(f"{strongest['metric'].replace('_', ' ').title()} is the clearest positive signal." if strongest else "There is not enough comparative evidence yet."),
-        expected_impact="Test whether the observed pattern repeats.",
+        expected_outcome="Measure whether the observed positive response repeats.",
     )]
     if weakest:
         recommendations.append(ActionRecommendation(
             action=f"Test one change aimed at {weakest['metric'].replace('_', ' ')}.",
             reason=f"This signal is {abs(weakest['percent_change']):.0f}% below the tracked-post average.",
-            expected_impact="Improve the weakest observed response.",
+            expected_outcome="Determine whether the change improves the weakest response signal.",
         ))
     return PostAnalysisInterpretation(
         why_it_worked=why, recommendations=recommendations,
@@ -267,17 +277,56 @@ def _content_patterns(historical_posts: list[dict[str, Any]]) -> list[dict[str, 
     return sorted(({"pattern": name, "sample_size": len(values), "average_score": round(mean(values)), "difference_from_baseline": round(mean(values) - overall)} for name, values in groups.items()), key=lambda item: (item["average_score"], item["sample_size"]), reverse=True)[:5]
 
 
-def _confidence(media: InstagramMedia, metrics: dict[str, int | float | None], image_available: bool) -> dict[str, Any]:
+def _confidence(media: InstagramMedia, metrics: dict[str, int | float | None], image_available: bool, history_available: bool) -> dict[str, Any]:
     metric_coverage = sum(value is not None for value in metrics.values()) / len(metrics)
-    score = _clamp(35 + metric_coverage * 35 + (10 if media.caption.strip() else 0) + (20 if image_available else 0))
-    is_video = media.media_type.upper() == "VIDEO"
-    return {"score": score, "inputs": [
-        {"name": "Thumbnail", "available": image_available}, {"name": "Caption", "available": bool(media.caption.strip())},
-        {"name": "Metrics", "available": metric_coverage > 0},
-        {"name": "Full Video", "available": False, "detail": "Only the thumbnail is analyzed." if is_video and image_available else None},
-        {"name": "Audio Analysis", "available": False}, {"name": "Watch Time", "available": False},
-        {"name": "Retention Curve", "available": False},
-    ]}
+    inputs = [
+        {"name": "Metrics", "available": metric_coverage > 0, "weight": 30, "earned": round(30 * metric_coverage)},
+        {"name": "Caption", "available": bool(media.caption.strip()), "weight": 20, "earned": 20 if media.caption.strip() else 0},
+        {"name": "Thumbnail", "available": image_available, "weight": 20, "earned": 20 if image_available else 0},
+        {"name": "Metric History", "available": history_available, "weight": 15, "earned": 15 if history_available else 0},
+        {"name": "Watch Time", "available": False, "weight": 10, "earned": 0},
+        {"name": "Retention", "available": False, "weight": 5, "earned": 0},
+    ]
+    score = sum(item["earned"] for item in inputs)
+    level = "High" if score >= 80 else "Medium" if score >= 50 else "Low"
+    return {"score": score, "level": level, "inputs": inputs}
+
+
+def _score_context(score: int, peer_metrics: list[dict[str, int | float | None]]) -> dict[str, Any]:
+    if not peer_metrics:
+        return {"account_average": None, "points_difference": None, "rank": 1, "total": 1, "percentile_label": "More tracked posts needed"}
+    peer_scores = [int(_score(item, [other for other in peer_metrics if other is not item], None)["overall"]) for item in peer_metrics]
+    account_average = round(mean(peer_scores))
+    all_scores = peer_scores + [score]
+    rank = 1 + sum(value > score for value in all_scores)
+    total = len(all_scores)
+    bottom_percent = round(rank / total * 100)
+    return {
+        "account_average": account_average,
+        "points_difference": score - account_average,
+        "rank": rank,
+        "total": total,
+        "percentile_label": f"Bottom {bottom_percent}% of tracked posts" if rank > (total + 1) / 2 else f"Top {max(1, 100 - bottom_percent)}% of tracked posts",
+    }
+
+
+def _executive_summary(score: int, context: dict[str, Any], benchmarks: list[dict[str, Any]], deltas: dict[str, int | float | None]) -> list[str]:
+    items = []
+    difference = context.get("points_difference")
+    if difference is not None:
+        items.append(f"This post is {abs(difference)} points {'above' if difference >= 0 else 'below'} your tracked-post average.")
+    ranked = sorted((item for item in benchmarks if item.get("percent_change") is not None), key=lambda item: item["percent_change"], reverse=True)
+    if ranked:
+        strongest = ranked[0]
+        items.append(f"{strongest['metric'].replace('_', ' ').title()} is the strongest relative performance signal.")
+        weakest = ranked[-1]
+        if weakest["percent_change"] < 0:
+            items.append(f"{weakest['metric'].replace('_', ' ').title()} is {abs(weakest['percent_change']):.0f}% below average.")
+    if deltas.get("reach") == 0 and all((deltas.get(name) or 0) == 0 for name in ("likes", "comments", "saves", "shares")):
+        items.append("Growth has plateaued since the previous snapshot.")
+    if not items:
+        items.append(f"This post currently has a score of {score}/100.")
+    return items[:4]
 
 
 def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot], *,
@@ -303,6 +352,7 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
     image_bytes, image_mime_type = loaded if loaded else (None, None)
     benchmarks = _benchmark(metrics, peers)
     score = _score(metrics, peers, previous)
+    score_context = _score_context(score["overall"], peers)
     patterns = _content_patterns(history_posts)
     content_payload = {"platform": "Instagram", "media_type": media.media_type, "caption": media.caption,
                        "published_at": media.published_at.isoformat(), "visual_context_used": image_bytes is not None,
@@ -311,9 +361,10 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
                 "content_patterns": patterns, "caption": media.caption, "media_type": media.media_type}
     prompt = (
         "Act as a creator strategist. Use only the supplied evidence. Return only JSON with exactly "
-        "why_it_worked (maximum 3 objects with factor, estimated_impact, explanation), recommendations "
-        "(maximum 3 objects with action, reason, expected_impact). Treat factors as hypotheses, label impact "
-        "as an estimate, never invent metrics, never predict views or viral potential, and make every action "
+        "why_it_worked (maximum 3 objects with title, evidence, interpretation, why_it_matters), recommendations "
+        "(maximum 3 objects with action, reason, expected_outcome). Each reason must connect observed evidence "
+        "to audience behavior and explain why it matters; do not merely restate a metric. Treat factors as hypotheses, "
+        "never invent metrics, never predict views or viral potential, and make every action "
         "specific to the evidence. Also return content_attributes with topic, thumbnail_style, caption_style, "
         "and cta_usage. Use 'Unavailable' when visual evidence does not support a thumbnail label. Expected "
         "impact may be a cautious directional estimate or range, not a guarantee.\n"
@@ -328,13 +379,15 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
         except (GeminiConfigurationError, GeminiUpstreamError, PostAnalysisError):
             interpretation = None
     if interpretation is None:
-        interpretation = _fallback_interpretation(media.caption, benchmarks)
+        interpretation = _fallback_interpretation(media.caption, benchmarks, image_bytes is not None)
         used_model = "deterministic-fallback-v2"
-    output = {"score": score, "top_insights": _top_insights(benchmarks, deltas),
+    output = {"score": score, "score_context": score_context,
+              "executive_summary": _executive_summary(score["overall"], score_context, benchmarks, deltas),
+              "top_insights": _top_insights(benchmarks, deltas),
               "why_it_worked": [item.model_dump() for item in interpretation.why_it_worked[:3]],
               "benchmarks": benchmarks, "risks": _risks(benchmarks, deltas),
               "recommendations": [item.model_dump() for item in interpretation.recommendations[:3]],
-              "confidence": _confidence(media, metrics, image_bytes is not None), "content_patterns": patterns,
+              "confidence": _confidence(media, metrics, image_bytes is not None, previous is not None),
               "content_attributes": interpretation.content_attributes.model_dump()}
     return PostAnalysisComputation(source_snapshot_ids=[item.id for item in source_snapshots], model_name=used_model,
                                    observed_metrics=metrics, metric_deltas=deltas, content_payload=content_payload,

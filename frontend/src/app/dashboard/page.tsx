@@ -82,7 +82,9 @@ function Home({ session, onConnect }: { session: Session; onConnect: () => Promi
   const choosePost = async () => {
     try {
       setError("");
-      setMedia((await getInstagramMedia(session)).items);
+      const items = (await getInstagramMedia(session)).items;
+      const trackedMediaIds = new Set(posts.map((post) => post.media.id));
+      setMedia(items.filter((item) => !trackedMediaIds.has(item.id)));
       setChoosing(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load Instagram posts.");
@@ -124,7 +126,7 @@ function Home({ session, onConnect }: { session: Session; onConnect: () => Promi
       {connection?.connected && <button onClick={() => void choosePost()} className="rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button>}
     </div>
     <ErrorText value={error} />
-    {choosing && <Card><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-black">Choose an Instagram post</h2><button disabled={addingMediaId !== null} onClick={() => setChoosing(false)} className="text-sm font-bold text-[#5b21b6] disabled:opacity-50">Close</button></div><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{media.map((item) => <button key={item.id} disabled={addingMediaId !== null} onClick={() => void addPost(item.id)} className="overflow-hidden rounded-2xl bg-[#eee8fa] text-left disabled:cursor-wait disabled:opacity-60">{(item.thumbnail_url || item.media_url) ? <img alt="Instagram post" src={item.thumbnail_url || item.media_url} className="aspect-square w-full object-cover" /> : <div className="aspect-square" />}<p className="line-clamp-2 p-3 text-xs font-bold">{addingMediaId === item.id ? "Adding and loading metrics…" : item.caption || "Instagram post"}</p></button>)}</div></Card>}
+    {choosing && <Card><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-black">Choose an Instagram post</h2><button disabled={addingMediaId !== null} onClick={() => setChoosing(false)} className="text-sm font-bold text-[#5b21b6] disabled:opacity-50">Close</button></div>{media.length ? <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{media.map((item) => <button key={item.id} disabled={addingMediaId !== null} onClick={() => void addPost(item.id)} className="overflow-hidden rounded-2xl bg-[#eee8fa] text-left disabled:cursor-wait disabled:opacity-60">{(item.thumbnail_url || item.media_url) ? <img alt="Instagram post" src={item.thumbnail_url || item.media_url} className="aspect-square w-full object-cover" /> : <div className="aspect-square" />}<p className="line-clamp-2 p-3 text-xs font-bold">{addingMediaId === item.id ? "Adding and loading metrics…" : item.caption || "Instagram post"}</p></button>)}</div> : <p className="py-8 text-center text-sm font-bold text-[#746b82]">All Instagram posts are already tracked.</p>}</Card>}
     {loading ? <Card>Loading your account…</Card> : !connection?.connected ? <Card><h2 className="text-xl font-black">Connect Instagram</h2><button onClick={() => void onConnect()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Connect Instagram</button></Card> : posts.length === 0 ? <Card><h2 className="text-xl font-black">No tracked posts yet</h2><button onClick={() => void choosePost()} className="mt-5 rounded-xl bg-[#7c3aed] px-5 py-3 font-bold text-white">Add a post</button></Card> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{posts.map((post) => <Card key={post.tracking.id}>{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" />}<p className="line-clamp-2 font-bold">{post.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><Metric label="Likes" value={post.latest?.likes} /><Metric label="Reach" value={post.latest?.reach} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-[#eee8fa] pt-4"><p className="text-[11px] text-[#80778b]">{post.latest?.captured_at ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}` : "Metrics have not been loaded yet."}</p><button disabled={refreshingId !== null} onClick={() => void refreshPost(post.tracking.id)} className="shrink-0 rounded-lg bg-[#eee8fa] px-3 py-2 text-xs font-bold text-[#5b21b6] disabled:cursor-wait disabled:opacity-60">{refreshingId === post.tracking.id ? "Refreshing…" : "Refresh metrics"}</button></div></Card>)}</div>}
   </>;
 }
@@ -403,7 +405,6 @@ function Create({ session }: { session: Session }) {
             <button disabled={publishing || saving || publishablePlatforms.length === 0 || (!image && !mediaAssetId)} onClick={() => void publish()} className="rounded-2xl bg-[#201633] py-4 font-black text-white disabled:opacity-50">{publishing ? "Publishing..." : `Publish (${publishablePlatforms.length})`}</button>
           </div>
           {selectedPlatforms.some((platform) => !publishablePlatforms.includes(platform)) && <p className="mt-3 text-xs text-amber-700">Unavailable or disconnected platforms remain generation targets but will not be submitted for publishing.</p>}
-          {image && image.mimeType !== "image/jpeg" && <p className="mt-2 text-xs text-amber-700">Instagram publishing currently requires a JPEG. This image can still be saved and used to generate copy.</p>}
           {publicationResults.length > 0 && <div className="mt-4 space-y-2">{publicationResults.map((item) => <div key={`${item.platform}-${item.publication_id ?? item.status}`} className={`rounded-xl p-3 text-sm ${item.status === "published" ? "bg-emerald-50 text-emerald-800" : item.status === "failed" ? "bg-red-50 text-red-800" : "bg-amber-50 text-amber-800"}`}><p className="font-black">{item.platform} - {item.status}</p><p className="mt-1">{item.message}</p>{item.permalink && <a className="mt-1 inline-block font-bold underline" href={item.permalink} target="_blank" rel="noreferrer">View post</a>}</div>)}</div>}
         </Card>}
       </div>
@@ -428,11 +429,8 @@ function Analyze({ session }: { session: Session }) {
   useEffect(() => {
     setLoading(true);
     getTrackedPosts(session)
-      .then(async ({ items }) => {
+      .then(({ items }) => {
         setPosts(items);
-        const nextId = items[0]?.tracking.id || "";
-        setSelectedId(nextId);
-        if (nextId) await loadDetail(nextId);
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load tracked posts."))
       .finally(() => setLoading(false));
@@ -440,6 +438,7 @@ function Analyze({ session }: { session: Session }) {
 
   const choose = async (trackedId: string) => {
     setSelectedId(trackedId);
+    setSelected(null);
     setViewingAnalysisId("");
     setError("");
     try {
@@ -447,6 +446,12 @@ function Analyze({ session }: { session: Session }) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not load this post.");
     }
+  };
+  const goBack = () => {
+    setSelectedId("");
+    setSelected(null);
+    setViewingAnalysisId("");
+    setError("");
   };
   const refresh = async () => {
     if (!selectedId) return;
@@ -475,20 +480,21 @@ function Analyze({ session }: { session: Session }) {
     }
   };
 
-  if (loading) return <><Title>Analyze a tracked post</Title><Card>Loading tracked posts…</Card></>;
-  if (posts.length === 0) return <><Title>Analyze a tracked post</Title><Card><p className="font-bold">Track an Instagram post first.</p><p className="mt-2 text-sm text-[#746b82]">PostBridge needs real post metrics before it can explain performance.</p></Card></>;
+  if (loading) return <><Title>Choose one post to analyze</Title><Card>Loading tracked posts…</Card></>;
+  if (posts.length === 0) return <><Title>Choose one post to analyze</Title><Card><p className="font-bold">Track an Instagram post first.</p></Card></>;
+  if (!selectedId) return <>
+    <Title>Choose one post to analyze</Title>
+    <ErrorText value={error} />
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{posts.map((post) => <button key={post.tracking.id} onClick={() => void choose(post.tracking.id)} className="text-left"><Card>{(post.media.thumbnail_url || post.media.media_url) && <img alt="Instagram post" src={post.media.thumbnail_url || post.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" />}<p className="line-clamp-2 font-bold">{post.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><Metric label="Likes" value={post.latest?.likes} /><Metric label="Reach" value={post.latest?.reach} /><Metric label="Engagement" value={post.latest?.engagement_rate == null ? undefined : `${post.latest.engagement_rate}%`} /></div></Card></button>)}</div>
+  </>;
   const displayedAnalysis = selected?.analyses?.find((item) => item.id === viewingAnalysisId) ?? selected?.analyses?.[0];
   return <>
-    <Title>Analyze a tracked post</Title>
-    <ErrorText value={error} />
-    <div className="grid items-start gap-6 lg:grid-cols-[.95fr_1.05fr]">
-      <div className="space-y-6">
+    <div className="mx-auto w-full lg:w-[70%]">
+      <div className="mb-7 flex items-center justify-between gap-4"><Title className="mb-0">Analyze a tracked post</Title><button onClick={goBack} className="shrink-0 rounded-xl bg-[#eee8fa] px-4 py-3 text-sm font-black text-[#5b21b6]">Back</button></div>
+      <ErrorText value={error} />
+      {!selected ? <Card>Loading post…</Card> : <div className="space-y-6">
         <Card>
-          <label className="text-sm font-bold">Tracked post</label>
-          <select value={selectedId} onChange={(event) => void choose(event.target.value)} className="mt-2 w-full rounded-2xl border border-[#ddd5e8] bg-white p-4">
-            {posts.map((post) => <option key={post.tracking.id} value={post.tracking.id}>{post.media.caption?.slice(0, 70) || "Instagram post"}</option>)}
-          </select>
-          {selected && <div className="mt-5">
+          <div>
             {(selected.media.thumbnail_url || selected.media.media_url) && <img alt="Selected Instagram post" src={selected.media.thumbnail_url || selected.media.media_url} className="aspect-video w-full rounded-2xl object-cover" />}
             <p className="mt-4 line-clamp-4 text-sm leading-6">{selected.media.caption || "No caption"}</p>
             <p className="mt-2 text-xs text-[#80778b]">Published {new Date(selected.media.published_at).toLocaleString()}</p>
@@ -505,12 +511,12 @@ function Analyze({ session }: { session: Session }) {
               <button disabled={working !== null} onClick={() => void refresh()} className="rounded-xl bg-[#eee8fa] px-3 py-3 text-sm font-bold text-[#5b21b6] disabled:opacity-50">{working === "refresh" ? "Refreshing…" : "Refresh metrics"}</button>
               <button disabled={working !== null || !selected.latest} onClick={() => void analyze()} className="rounded-xl bg-[#7c3aed] px-3 py-3 text-sm font-bold text-white disabled:opacity-50">{working === "analyze" ? "Analyzing…" : "Analyze post"}</button>
             </div>
-          </div>}
+          </div>
         </Card>
-      </div>
-      {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then analyze this post.</p></Card>}
+        {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then analyze this post.</p></Card>}
+        {selected.analyses?.length ? <AnalysisTimeline analyses={selected.analyses} selectedId={displayedAnalysis?.id} onSelect={setViewingAnalysisId} /> : null}
+      </div>}
     </div>
-    {selected?.analyses?.length ? <AnalysisTimeline analyses={selected.analyses} selectedId={displayedAnalysis?.id} onSelect={setViewingAnalysisId} /> : null}
   </>;
 }
 
@@ -568,18 +574,26 @@ function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
   const output = analysis.output_payload;
   if (!output.score) return <Card><p className="font-black">Legacy analysis</p><p className="mt-2 text-sm text-[#746b82]">{output.summary ?? "Run a new analysis to generate the creator intelligence dashboard."}</p></Card>;
   const tone = (value: number) => value >= 75 ? "bg-emerald-500" : value >= 50 ? "bg-amber-500" : "bg-red-500";
+  const difference = output.score_context?.points_difference;
+  const context = difference == null
+    ? output.score_context?.percentile_label
+    : `${difference >= 0 ? "↑" : "↓"} ${Math.abs(difference)} points ${difference >= 0 ? "above" : "below"} account average`;
   return <div className="space-y-5">
     <Card dark>
-      <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-widest text-violet-300">Post score</p><p className="mt-2 text-5xl font-black text-white">{output.score.overall}<span className="text-xl text-violet-300"> / 100</span></p></div><div className="rounded-2xl bg-white/10 px-5 py-3 text-center"><p className="text-xs text-violet-300">Grade</p><p className="text-3xl font-black text-white">{output.score.grade}</p></div></div>
+      <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-widest text-violet-300">Post score</p><p className="mt-2 text-5xl font-black text-white">{output.score.overall}<span className="text-xl text-violet-300"> / 100</span></p>{context && <p className="mt-2 text-sm font-bold text-violet-200">{context}</p>}{output.score_context && output.score_context.total > 1 && <p className="mt-1 text-xs text-violet-300">Ranked #{output.score_context.rank} of {output.score_context.total}</p>}</div><div className="rounded-2xl bg-white/10 px-5 py-3 text-center"><p className="text-xs text-violet-300">Grade</p><p className="text-3xl font-black text-white">{output.score.grade}</p></div></div>
       <div className="mt-6 grid gap-4 sm:grid-cols-2">{Object.entries(output.score.categories).map(([name, value]) => <div key={name}><div className="mb-1 flex justify-between text-xs font-bold text-violet-100"><span className="capitalize">{name}</span><span>{value}</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full ${tone(value)}`} style={{ width: `${value}%` }} /></div></div>)}</div>
+      {output.executive_summary?.length ? <div className="mt-6 border-t border-white/10 pt-5"><p className="font-black text-white">Summary</p><ul className="mt-3 grid gap-2 text-sm text-violet-100 sm:grid-cols-2">{output.executive_summary.slice(0, 4).map((item) => <li key={item} className="flex gap-2"><span className="text-violet-300">•</span><span>{item}</span></li>)}</ul></div> : null}
     </Card>
     <DashboardSection title="Top insights">{output.top_insights?.map((item) => <p key={item.text} className="rounded-xl bg-[#f7f5ff] p-3 text-sm font-bold">{item.status === "strong" ? "✅" : item.status === "attention" ? "⚠️" : "ℹ️"} {item.text}</p>)}</DashboardSection>
-    <DashboardSection title="Why it worked"><div className="grid gap-3">{output.why_it_worked?.map((item) => <div key={item.factor} className="rounded-2xl border border-[#eee8fa] p-4"><div className="flex justify-between gap-3"><p className="font-black">{item.factor}</p><span className="shrink-0 text-sm font-black text-emerald-700">{item.estimated_impact}</span></div><p className="mt-2 text-sm leading-6 text-[#746b82]">{item.explanation}</p></div>)}</div></DashboardSection>
-    <DashboardSection title="Compared with your average"><div className="grid gap-3 sm:grid-cols-2">{output.benchmarks?.filter((item) => item.current != null).map((item) => <div key={item.metric} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="text-xs font-bold uppercase text-[#80778b]">{item.metric.replaceAll("_", " ")}</p><p className="mt-1 text-2xl font-black">{item.current}</p><p className={`mt-1 text-xs font-bold ${item.percent_change != null && item.percent_change >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.percent_change == null ? "More posts needed for a baseline" : `${item.percent_change >= 0 ? "↑" : "↓"} ${Math.abs(item.percent_change)}% ${item.direction} average`}</p></div>)}</div></DashboardSection>
-    <DashboardSection title="Risks">{output.risks?.length ? output.risks.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">⚠️ {item}</p>) : <p className="text-sm text-[#746b82]">No evidence-backed risk was detected from the available signals.</p>}</DashboardSection>
-    <DashboardSection title="Next post recommendations"><div className="space-y-3">{output.recommendations.map((item, index) => typeof item === "string" ? <p key={item}>{item}</p> : <div key={`${item.action}-${index}`} className="rounded-2xl border border-[#eee8fa] p-4"><p className="font-black">{item.action}</p><p className="mt-2 text-sm text-[#746b82]"><b>Reason:</b> {item.reason}</p><p className="mt-2 text-sm font-bold text-[#6d28d9]"><b>Expected impact:</b> {item.expected_impact}</p></div>)}</div></DashboardSection>
-    <DashboardSection title="AI confidence"><div className="flex items-center gap-4"><p className="text-4xl font-black">{output.confidence?.score ?? 0}%</p><p className="text-sm text-[#746b82]">Confidence reflects available inputs, not certainty that a recommendation will work.</p></div><div className="mt-4 grid gap-2 sm:grid-cols-2">{output.confidence?.inputs.map((item) => <p key={item.name} className="text-sm">{item.available ? "✅" : "❌"} {item.name}{item.detail ? ` · ${item.detail}` : ""}</p>)}</div></DashboardSection>
-    <DashboardSection title="Content pattern winners"><div className="grid gap-3 sm:grid-cols-2">{output.content_patterns?.length ? output.content_patterns.map((item) => <div key={item.pattern} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="font-black">{item.pattern}</p><p className="mt-1 text-2xl font-black text-[#6d28d9]">{item.average_score}</p><p className="text-xs text-[#746b82]">Average score · {item.sample_size} post{item.sample_size === 1 ? "" : "s"} · {item.difference_from_baseline >= 0 ? "+" : ""}{item.difference_from_baseline} vs baseline</p></div>) : <p className="text-sm text-[#746b82]">Track more posts to detect repeatable formats.</p>}</div></DashboardSection>
+    <div className="grid items-start gap-5 lg:grid-cols-2">
+      <DashboardSection title="Why it worked"><div className="grid gap-3">{output.why_it_worked?.slice(0, 3).map((item, index) => <div key={item.title ?? item.factor ?? index} className="rounded-2xl border border-[#eee8fa] p-4"><p className="font-black">{item.title ?? item.factor}</p>{item.evidence ? <><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Evidence</p><p className="mt-1 text-sm leading-6">{item.evidence}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Interpretation</p><p className="mt-1 text-sm leading-6">{item.interpretation}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Why it matters</p><p className="mt-1 text-sm leading-6 text-[#5b21b6]">{item.why_it_matters}</p></> : <p className="mt-2 text-sm leading-6 text-[#746b82]">{item.explanation}</p>}</div>)}</div></DashboardSection>
+      <DashboardSection title="Risks">{output.risks?.length ? output.risks.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">⚠️ {item}</p>) : <p className="text-sm text-[#746b82]">No evidence-backed risk was detected.</p>}</DashboardSection>
+    </div>
+    <div className="grid items-start gap-5 lg:grid-cols-2">
+      <DashboardSection title="Recommendations"><div className="space-y-3">{output.recommendations.map((item, index) => typeof item === "string" ? <p key={item}>{item}</p> : <div key={`${item.action}-${index}`} className="rounded-2xl border border-[#eee8fa] p-4"><p className="text-xs font-black uppercase tracking-wide text-[#7c3aed]">Experiment {index + 1}</p><p className="mt-2 font-black">Action</p><p className="mt-1 text-sm">{item.action}</p><p className="mt-3 text-sm text-[#746b82]"><b>Reason:</b> {item.reason}</p><p className="mt-2 text-sm font-bold text-[#6d28d9]"><b>Expected outcome:</b> {item.expected_outcome ?? item.expected_impact}</p></div>)}</div></DashboardSection>
+      <DashboardSection title="Benchmark details"><div className="grid gap-3 sm:grid-cols-2">{output.benchmarks?.filter((item) => item.current != null).map((item) => <div key={item.metric} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="text-xs font-bold uppercase text-[#80778b]">{item.metric.replaceAll("_", " ")}</p><p className="mt-1 text-2xl font-black">{item.current}</p><p className={`mt-1 text-xs font-bold ${item.percent_change != null && item.percent_change >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.percent_change == null ? "Baseline unavailable" : `${item.percent_change >= 0 ? "↑" : "↓"} ${Math.abs(item.percent_change)}% ${item.direction} average`}</p></div>)}</div></DashboardSection>
+    </div>
+    <DashboardSection title="AI confidence"><div className="flex flex-wrap items-end gap-4"><p className="text-4xl font-black">{output.confidence?.score ?? 0}%</p><p className="pb-1 text-lg font-black text-[#6d28d9]">{output.confidence?.level ?? ((output.confidence?.score ?? 0) >= 80 ? "High" : (output.confidence?.score ?? 0) >= 50 ? "Medium" : "Low")} Confidence</p></div><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{output.confidence?.inputs.map((item) => <div key={item.name} className="flex items-center justify-between rounded-xl bg-[#f7f5ff] px-3 py-2 text-sm"><span>{item.available ? "✓" : "—"} {item.name}</span>{item.weight != null && <span className="font-bold text-[#80778b]">{item.earned ?? 0}/{item.weight}</span>}</div>)}</div></DashboardSection>
     <p className="text-[11px] text-[#80778b]">Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p>
   </div>;
 }

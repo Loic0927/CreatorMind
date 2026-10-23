@@ -261,11 +261,11 @@ def test_durable_publish_is_idempotent_and_records_provider_result(draft_reposit
     assert publications[0].provider_post_id == "provider-1"
 
 
-def test_platform_media_validation_happens_before_publication_record(draft_repository, monkeypatch):
+def test_unsupported_platform_media_validation_happens_before_publication_record(draft_repository, monkeypatch):
     repository, _ = draft_repository
     asset = repository.create_media_asset(
         "user-1", storage_provider="oci", object_name="draft-assets/user-1/image.png",
-        original_filename="image.png", mime_type="image/png", byte_size=100,
+        original_filename="image.gif", mime_type="image/gif", byte_size=100,
         checksum_sha256="b" * 64, status="ready",
     )
     draft = _draft(repository, media_asset_id=asset.id)
@@ -277,8 +277,8 @@ def test_platform_media_validation_happens_before_publication_record(draft_repos
 
         def validate(self, request):
             return PublicationResult(
-                "Instagram", "failed", "Instagram publishing currently supports JPEG images only.",
-                code="instagram_jpeg_required",
+                "Instagram", "failed", "Choose a JPG, PNG or WebP image.",
+                code="unsupported_image_format",
             )
 
         def publish(self, user_id, request):
@@ -295,6 +295,6 @@ def test_platform_media_validation_happens_before_publication_record(draft_repos
         platforms=["Instagram"], idempotency_key="invalid-media-1",
     ), draft.id, user)
 
-    assert result["results"][0]["code"] == "instagram_jpeg_required"
+    assert result["results"][0]["code"] == "unsupported_image_format"
     assert repository.list_publications("user-1", draft.id) == []
     assert repository.get_draft("user-1", draft.id).status == "draft"

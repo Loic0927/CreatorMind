@@ -13,5 +13,6 @@ SQLAlchemy>=2.0,<3.0
 alembic>=1.13,<2.0
 psycopg[binary]>=3.1,<4.0
 gunicorn>=22,<24
+Pillow>=10.4,<13.0
 # Official OCI SDK; pure-Python and supported on linux/amd64 and linux/arm64.
 oci>=2.150,<3.0

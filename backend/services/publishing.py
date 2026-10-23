@@ -6,10 +6,12 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any, Callable
 from uuid import uuid4
 
 from fastapi import HTTPException
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from backend.services.instagram import InstagramServiceError, publish_instagram_image
 from backend.storage.content_repository import ContentRepository, get_content_repository
@@ -17,8 +19,36 @@ from backend.storage.models import InstagramMedia
 from backend.storage.oci_object_storage import (
     OCIStorageConfigurationError,
     create_temporary_read_url,
+    download_private_bytes,
     upload_bytes_with_temporary_read_url,
 )
+
+
+SUPPORTED_INSTAGRAM_SOURCE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def convert_to_instagram_jpeg(body: bytes, mime_type: str) -> bytes:
+    """Normalize a supported source image to a standard RGB JPEG for Meta."""
+    if mime_type not in SUPPORTED_INSTAGRAM_SOURCE_TYPES:
+        raise ValueError("Unsupported source image format.")
+    try:
+        with Image.open(BytesIO(body)) as source:
+            source = ImageOps.exif_transpose(source)
+            source.load()
+            if source.width * source.height > 40_000_000:
+                raise ValueError("Image dimensions exceed the processing limit.")
+            if source.mode in {"RGBA", "LA"} or "transparency" in source.info:
+                rgba = source.convert("RGBA")
+                flattened = Image.new("RGB", rgba.size, "white")
+                flattened.paste(rgba, mask=rgba.getchannel("A"))
+                image = flattened
+            else:
+                image = source.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=92, optimize=True)
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError) as exc:
+        raise ValueError("Uploaded image could not be converted to JPEG.") from exc
 
 
 @dataclass(frozen=True)
@@ -108,6 +138,7 @@ class InstagramPublishingAdapter(PublishingAdapter):
         token_loader: Callable[[Any], str],
         repository_loader: Callable[[], ContentRepository] = get_content_repository,
         uploader: Callable[[bytes, str, str], str] = upload_bytes_with_temporary_read_url,
+        object_loader: Callable[[str], bytes] = download_private_bytes,
         temporary_url_factory: Callable[..., str] = create_temporary_read_url,
         provider_publisher: Callable[[str, str, str, str], dict[str, Any]] = publish_instagram_image,
     ):
@@ -115,6 +146,7 @@ class InstagramPublishingAdapter(PublishingAdapter):
         self._token_loader = token_loader
         self._repository_loader = repository_loader
         self._uploader = uploader
+        self._object_loader = object_loader
         self._temporary_url_factory = temporary_url_factory
         self._provider_publisher = provider_publisher
 
@@ -130,10 +162,10 @@ class InstagramPublishingAdapter(PublishingAdapter):
         )
 
     def validate(self, request: PublishInput) -> PublicationResult | None:
-        if request.mime_type != "image/jpeg":
+        if request.mime_type not in SUPPORTED_INSTAGRAM_SOURCE_TYPES:
             return PublicationResult(
-                self.platform, "failed", "Instagram publishing currently supports JPEG images only.",
-                code="instagram_jpeg_required",
+                self.platform, "failed", "Choose a JPG, PNG or WebP image.",
+                code="unsupported_image_format",
             )
         if request.object_name:
             return None
@@ -154,10 +186,11 @@ class InstagramPublishingAdapter(PublishingAdapter):
             return invalid
         try:
             account = self._account_loader(user_id)
-            if request.object_name:
+            if request.object_name and request.mime_type == "image/jpeg":
                 image_url = self._temporary_url_factory(request.object_name, lifetime_minutes=60)
             else:
-                image_bytes = base64.b64decode(request.encoded_media or "", validate=True)
+                source_bytes = self._object_loader(request.object_name) if request.object_name else base64.b64decode(request.encoded_media or "", validate=True)
+                image_bytes = convert_to_instagram_jpeg(source_bytes, request.mime_type)
                 object_name = f"publication-assets/{user_id}/{uuid4()}.jpg"
                 image_url = self._uploader(image_bytes, object_name, "image/jpeg")
             full_caption = "\n\n".join(

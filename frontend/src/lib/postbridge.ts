@@ -17,12 +17,14 @@ export type PostAnalysis = {
   content_payload: { platform?: string; media_type?: string; caption?: string; published_at?: string; visual_context_used?: boolean; visual_context_kind?: string };
   output_payload: {
     score?: { overall: number; grade: string; categories: Record<string, number> };
+    score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
+    executive_summary?: string[];
     top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
-    why_it_worked?: Array<{ factor: string; estimated_impact: string; explanation: string }>;
+    why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
     benchmarks?: Array<{ metric: string; current: number | null; average: number | null; percent_change: number | null; direction: string }>;
     risks?: string[];
-    recommendations: Array<string | { action: string; reason: string; expected_impact: string }>;
-    confidence?: { score: number; inputs: Array<{ name: string; available: boolean; detail?: string | null }> };
+    recommendations: Array<string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string }>;
+    confidence?: { score: number; level?: "High" | "Medium" | "Low"; inputs: Array<{ name: string; available: boolean; weight?: number; earned?: number; detail?: string | null }> };
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
     content_attributes?: { topic: string; thumbnail_style: string; caption_style: string; cta_usage: string };
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];

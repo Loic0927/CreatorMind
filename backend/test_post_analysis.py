@@ -24,8 +24,8 @@ def _snapshot(identifier: str, minutes: int, reach: int, likes: int) -> Instagra
 
 def _model_output() -> str:
     return json.dumps({
-        "why_it_worked": [{"factor": "Tutorial framing", "estimated_impact": "positive estimate", "explanation": "The useful format aligns with above-average saves."}],
-        "recommendations": [{"action": "Ask one specific question.", "reason": "Comments trail the account average.", "expected_impact": "Likely higher comment participation."}],
+        "why_it_worked": [{"title": "Shareable tutorial", "evidence": "Saves are above the account average.", "interpretation": "Viewers found the tutorial useful enough to keep.", "why_it_matters": "Saved posts can indicate durable audience value."}],
+        "recommendations": [{"action": "Ask one specific question.", "reason": "Comments trail the account average.", "expected_outcome": "Test whether comment participation increases."}],
     })
 
 
@@ -45,8 +45,11 @@ def test_analysis_builds_scores_benchmarks_patterns_and_confidence_without_predi
     assert result.metric_deltas["reach"] == 60
     assert result.output_payload["score"]["overall"] >= 0
     assert next(item for item in result.output_payload["benchmarks"] if item["metric"] == "reach")["percent_change"] == 60.0
-    assert result.output_payload["confidence"]["score"] > 80
-    assert any(item["pattern"] == "Tutorial posts" for item in result.output_payload["content_patterns"])
+    assert result.output_payload["confidence"]["score"] == 85
+    assert result.output_payload["confidence"]["level"] == "High"
+    assert "content_patterns" not in result.output_payload
+    assert result.output_payload["executive_summary"]
+    assert result.output_payload["score_context"]["total"] == 2
     assert len(result.output_payload["recommendations"]) == 1
     assert "never predict views" in received["prompt"]
     assert received["image_bytes"] == b"image"
@@ -59,8 +62,10 @@ def test_analysis_marks_plateau_and_missing_inputs_in_confidence():
                           image_loader=lambda url: None, model_name="test-model")
     assert any("stalled" in item for item in result.output_payload["risks"])
     unavailable = {item["name"]: item["available"] for item in result.output_payload["confidence"]["inputs"]}
-    assert unavailable["Full Video"] is False
+    assert unavailable["Thumbnail"] is False
     assert unavailable["Watch Time"] is False
+    assert unavailable["Retention"] is False
+    assert result.output_payload["confidence"]["score"] == 56
 
 
 def test_analysis_rejects_missing_snapshot_and_falls_back_for_invalid_model_output():
