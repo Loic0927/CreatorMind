@@ -34,7 +34,7 @@ from backend.services.publishing import (
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
 from backend.services.account_insights import build_account_insights
-from backend.auth import AuthenticatedUser, require_user
+from backend.auth import AuthenticatedUser, get_account_context, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
 from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
@@ -503,7 +503,7 @@ def account_pattern_insights(
 
 
 @router.post("/tracked-posts/{tracked_id}/analyses")
-def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user), use_account_context: bool = True):
     user_id = current_user(user)
     item = _tracked_item(user_id, tracked_id)
     media_item = item.get("media")
@@ -537,17 +537,27 @@ def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
                 "tracked_post_id": candidate["tracking"].id,
                 "caption": candidate_media.caption,
                 "media_type": candidate_media.media_type,
+                "published_at": candidate_media.published_at.isoformat(),
+                "captured_at": candidate_latest.captured_at.isoformat(),
                 "metrics": candidate_metrics,
             }
         )
         if candidate["tracking"].id != tracked_id:
-            peer_metrics.append(candidate_metrics)
+            peer_metrics.append(
+                {
+                    "media_type": candidate_media.media_type,
+                    "published_at": candidate_media.published_at.isoformat(),
+                    "captured_at": candidate_latest.captured_at.isoformat(),
+                    "metrics": candidate_metrics,
+                }
+            )
     try:
         computed = analyze_post(
             media_item,
             snapshots,
             peer_metrics=peer_metrics,
             historical_posts=historical_posts,
+            account_context=get_account_context(user_id) if use_account_context else "",
         )
     except GeminiConfigurationError as exc:
         raise HTTPException(

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AccountInsights, Connection, PatternInsight, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
-  createDraft, deleteAccount, getAccountInsights, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
-  publishDraft, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, updateDraft, uploadMediaAsset, verifyCode,
+  createDraft, deleteAccount, getAccountContext, getAccountInsights, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
+  publishDraft, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, updateAccountContext, updateDraft, uploadMediaAsset, verifyCode,
 } from "@/lib/postbridge";
 
 type Tab = "home" | "create" | "analyze" | "insights" | "settings";
@@ -150,6 +150,7 @@ function Create({ session }: { session: Session }) {
   const [information, setInformation] = useState("");
   const [goal, setGoal] = useState("Grow engagement");
   const [customGoal, setCustomGoal] = useState("");
+  const [useAccountContext, setUseAccountContext] = useState(true);
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>(["Instagram"]);
   const [capabilities, setCapabilities] = useState<PublishingCapability[]>([]);
   const [drafts, setDrafts] = useState<PostDraft[]>([]);
@@ -196,6 +197,7 @@ function Create({ session }: { session: Session }) {
     setInformation("");
     setGoal("Grow engagement");
     setCustomGoal("");
+    setUseAccountContext(true);
     setSelectedPlatforms(["Instagram"]);
     setImage(null);
     setResult(null);
@@ -209,6 +211,7 @@ function Create({ session }: { session: Session }) {
     const draft = drafts.find((item) => item.id === draftId);
     if (!draft) return;
     setActiveDraftId(draft.id);
+    setUseAccountContext(true);
     setMediaAssetId(draft.media_asset_id ?? null);
     setInformation(draft.content_brief);
     if (goals.includes(draft.goal)) {
@@ -266,6 +269,7 @@ function Create({ session }: { session: Session }) {
         goal: effectiveGoal,
         platform: selectedPlatforms[0] ?? "Instagram",
         platforms: selectedPlatforms,
+        use_account_context: useAccountContext,
         image: { mime_type: image.mimeType, data: image.data },
       }));
       setPublishKey("");
@@ -359,7 +363,7 @@ function Create({ session }: { session: Session }) {
         {drafts.filter((item) => item.status === "draft" || item.status === "failed").map((draft) => <option key={draft.id} value={draft.id}>{draft.content_brief.slice(0, 70) || "Untitled draft"} - {draft.status}</option>)}
       </select>
     </Card>}
-    <div className={result ? "grid gap-6 xl:grid-cols-[1fr_.9fr]" : ""}>
+    <div className="grid items-start gap-6 lg:grid-cols-2">
       <Card>
         <label className="text-sm font-bold">Image</label>
         <label className="mt-2 grid min-h-44 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-[#b9aec8] bg-[#f7f5ff] text-sm font-bold text-[#5b21b6]">
@@ -393,6 +397,8 @@ function Create({ session }: { session: Session }) {
         </select>
         {goal === "Other" && <input value={customGoal} onChange={(e) => setCustomGoal(e.target.value)} maxLength={200} className="mt-3 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400" placeholder="Write your goal" />}
 
+        <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-2xl bg-[#f7f5ff] px-4 py-3 text-sm font-bold"><input type="checkbox" checked={useAccountContext} onChange={(event) => setUseAccountContext(event.target.checked)} className="h-4 w-4 accent-violet-600" />Use account context</label>
+
         <button disabled={busy || !information.trim() || !image || !effectiveGoal || selectedPlatforms.length === 0} onClick={() => void run()} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white disabled:opacity-50">{busy ? "Creating..." : "Create caption"}</button>
       </Card>
       <div className="space-y-6">
@@ -419,6 +425,7 @@ function Analyze({ session }: { session: Session }) {
   const [viewingAnalysisId, setViewingAnalysisId] = useState("");
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState<"refresh" | "analyze" | null>(null);
+  const [useAccountContext, setUseAccountContext] = useState(true);
   const [error, setError] = useState("");
 
   const loadDetail = useCallback(async (trackedId: string) => {
@@ -470,7 +477,7 @@ function Analyze({ session }: { session: Session }) {
     setWorking("analyze");
     setError("");
     try {
-      const result = await analyzeTrackedPost(session, selectedId);
+      const result = await analyzeTrackedPost(session, selectedId, useAccountContext);
       setSelected((current) => current ? { ...current, analyses: [result, ...(current.analyses ?? [])] } : current);
       setViewingAnalysisId(result.id);
     } catch (reason) {
@@ -507,6 +514,7 @@ function Analyze({ session }: { session: Session }) {
               <Metric label="Shares" value={selected.latest?.shares} />
             </div>
             <p className="mt-4 text-xs text-[#80778b]">{selected.latest ? `Metrics captured ${new Date(selected.latest.captured_at).toLocaleString()}` : "Refresh metrics before analyzing this post."}</p>
+            <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-xl bg-[#f7f5ff] px-4 py-3 text-sm font-bold"><input type="checkbox" checked={useAccountContext} onChange={(event) => setUseAccountContext(event.target.checked)} className="h-4 w-4 accent-violet-600" />Use account context</label>
             <div className="mt-5 grid grid-cols-2 gap-3">
               <button disabled={working !== null} onClick={() => void refresh()} className="rounded-xl bg-[#eee8fa] px-3 py-3 text-sm font-bold text-[#5b21b6] disabled:opacity-50">{working === "refresh" ? "Refreshing…" : "Refresh metrics"}</button>
               <button disabled={working !== null || !selected.latest} onClick={() => void analyze()} className="rounded-xl bg-[#7c3aed] px-3 py-3 text-sm font-bold text-white disabled:opacity-50">{working === "analyze" ? "Analyzing…" : "Analyze post"}</button>
@@ -533,22 +541,19 @@ function Insights({ session }: { session: Session }) {
     <ErrorText value={error} />
     {!insights && !error ? <Card><p className="text-sm text-[#746b82]">Loading insights…</p></Card> : insights && insights.sample_size < insights.required_sample_size ? <Card>
       <p className="font-black">Analyze more posts to unlock pattern insights.</p>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
         <Progress label="Topics" value={insights.progress.topics} required={insights.required_sample_size} />
         <Progress label="Hashtags" value={insights.progress.hashtags} required={insights.required_sample_size} />
-        <Progress label="Thumbnails" value={insights.progress.thumbnails} required={insights.required_sample_size} />
         <Progress label="Posting times" value={insights.progress.posting_times} required={insights.required_sample_size} />
       </div>
     </Card> : insights ? <div className="grid items-start gap-5 lg:grid-cols-2">
       <InsightRanking title="Top performing patterns" items={insights.top_patterns} showCategory />
       <InsightRanking title="Top hashtags" items={insights.top_hashtags} />
-      <InsightRanking title="Thumbnail insights" items={insights.thumbnail_insights} />
       <InsightRanking title="Best posting times" items={insights.best_posting_times} />
       {insights.winning_formula && <div className="lg:col-span-2"><Card dark>
         <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-black text-white">Winning formula</h2><p className="rounded-full bg-white/10 px-4 py-2 text-sm font-black text-violet-100">{insights.winning_formula.confidence}% confidence</p></div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <FormulaValue label="Topic" value={insights.winning_formula.topic} />
-          <FormulaValue label="Thumbnail" value={insights.winning_formula.thumbnail} />
           <FormulaValue label="Caption" value={insights.winning_formula.caption} />
           <FormulaValue label="CTA" value={insights.winning_formula.cta} />
           <FormulaValue label="Posting time" value={insights.winning_formula.posting_time} />
@@ -567,7 +572,26 @@ function FormulaValue({ label, value }: { label: string; value?: string | null }
 
 function Settings({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [error, setError] = useState("");
-  return <><Title>Settings</Title><ErrorText value={error} /><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p><div className="mt-6 grid grid-cols-2 gap-3 sm:flex"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-3 py-3 text-sm font-bold sm:px-5 sm:text-base">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700 sm:px-5 sm:text-base">Delete account</button></div></Card></>;
+  const [accountContext, setAccountContext] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => {
+    getAccountContext(session)
+      .then((result) => setAccountContext(result.account_context))
+      .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load account context."))
+      .finally(() => setLoading(false));
+  }, [session]);
+  const saveContext = async () => {
+    setSaving(true); setSaved(false); setError("");
+    try {
+      const result = await updateAccountContext(session, accountContext);
+      setAccountContext(result.account_context); setSaved(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save account context.");
+    } finally { setSaving(false); }
+  };
+  return <><Title>Settings</Title><ErrorText value={error} /><div className="space-y-5"><Card><h2 className="text-lg font-black">Account context</h2><textarea disabled={loading || saving} maxLength={4000} value={accountContext} onChange={(event) => { setAccountContext(event.target.value); setSaved(false); }} className="mt-4 min-h-44 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400 disabled:opacity-60" placeholder="Describe your account, audience, topics, tone and brand voice" /><div className="mt-3 flex items-center justify-between gap-4"><p className="text-xs text-[#80778b]">{accountContext.length}/4000</p><button disabled={loading || saving} onClick={() => void saveContext()} className="rounded-xl bg-[#7c3aed] px-5 py-3 text-sm font-black text-white disabled:opacity-50">{saving ? "Saving..." : saved ? "Saved" : "Save"}</button></div></Card><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p><div className="mt-6 grid grid-cols-2 gap-3 sm:flex"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-3 py-3 text-sm font-bold sm:px-5 sm:text-base">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700 sm:px-5 sm:text-base">Delete account</button></div></Card></div></>;
 }
 
 function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
@@ -578,25 +602,31 @@ function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
   const context = difference == null
     ? output.score_context?.percentile_label
     : `${difference >= 0 ? "↑" : "↓"} ${Math.abs(difference)} points ${difference >= 0 ? "above" : "below"} account average`;
+  const scoreLabel = (name: string) => name === "interaction_quality" ? "Interaction per reach" : name.replaceAll("_", " ");
+  const formatDate = (value: string | null) => value ? new Date(value).toLocaleDateString() : "Unavailable";
   return <div className="space-y-5">
     <Card dark>
       <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-widest text-violet-300">Post score</p><p className="mt-2 text-5xl font-black text-white">{output.score.overall}<span className="text-xl text-violet-300"> / 100</span></p>{context && <p className="mt-2 text-sm font-bold text-violet-200">{context}</p>}{output.score_context && output.score_context.total > 1 && <p className="mt-1 text-xs text-violet-300">Ranked #{output.score_context.rank} of {output.score_context.total}</p>}</div><div className="rounded-2xl bg-white/10 px-5 py-3 text-center"><p className="text-xs text-violet-300">Grade</p><p className="text-3xl font-black text-white">{output.score.grade}</p></div></div>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">{Object.entries(output.score.categories).map(([name, value]) => <div key={name}><div className="mb-1 flex justify-between text-xs font-bold text-violet-100"><span className="capitalize">{name}</span><span>{value}</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full ${tone(value)}`} style={{ width: `${value}%` }} /></div></div>)}</div>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">{Object.entries(output.score.categories).map(([name, value]) => <div key={name}><div className="mb-1 flex justify-between text-xs font-bold text-violet-100"><span className="capitalize">{scoreLabel(name)}</span><span>{value}</span></div><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full ${tone(value)}`} style={{ width: `${value}%` }} /></div><p className="mt-1 text-[11px] leading-4 text-violet-300">{output.score?.category_meanings?.[name]}</p></div>)}</div>
+      {output.score.method && <p className="mt-5 rounded-xl bg-white/10 p-3 text-xs leading-5 text-violet-100"><b>How scoring works:</b> {output.score.method}</p>}
       {output.executive_summary?.length ? <div className="mt-6 border-t border-white/10 pt-5"><p className="font-black text-white">Summary</p><ul className="mt-3 grid gap-2 text-sm text-violet-100 sm:grid-cols-2">{output.executive_summary.slice(0, 4).map((item) => <li key={item} className="flex gap-2"><span className="text-violet-300">•</span><span>{item}</span></li>)}</ul></div> : null}
     </Card>
+    {output.baseline && <DashboardSection title="Comparison basis"><div className={`rounded-2xl p-4 ${output.baseline.limited_sample ? "bg-amber-50 text-amber-950" : "bg-[#f7f5ff]"}`}><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-black">{output.baseline.label}</p><p className="rounded-full bg-white px-3 py-1 text-xs font-black">{output.baseline.sample_size} comparison posts</p></div><p className="mt-2 text-sm leading-6">{output.baseline.sample_notice}</p><p className="mt-2 text-xs">Published range: {formatDate(output.baseline.published_range.start)} – {formatDate(output.baseline.published_range.end)}</p><p className="mt-1 text-xs">Metric snapshot range: {formatDate(output.baseline.snapshot_range.start)} – {formatDate(output.baseline.snapshot_range.end)}</p><p className="mt-1 text-xs">Primary comparison: median · Mean shown as a secondary reference</p></div><ul className="mt-3 space-y-1 text-xs leading-5 text-[#746b82]">{output.baseline.limitations.map((item) => <li key={item}>• {item}</li>)}</ul></DashboardSection>}
     <DashboardSection title="Top insights">{output.top_insights?.map((item) => <p key={item.text} className="rounded-xl bg-[#f7f5ff] p-3 text-sm font-bold">{item.status === "strong" ? "✅" : item.status === "attention" ? "⚠️" : "ℹ️"} {item.text}</p>)}</DashboardSection>
     <div className="grid items-start gap-5 lg:grid-cols-2">
-      <DashboardSection title="Why it worked"><div className="grid gap-3">{output.why_it_worked?.slice(0, 3).map((item, index) => <div key={item.title ?? item.factor ?? index} className="rounded-2xl border border-[#eee8fa] p-4"><p className="font-black">{item.title ?? item.factor}</p>{item.evidence ? <><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Evidence</p><p className="mt-1 text-sm leading-6">{item.evidence}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Interpretation</p><p className="mt-1 text-sm leading-6">{item.interpretation}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Why it matters</p><p className="mt-1 text-sm leading-6 text-[#5b21b6]">{item.why_it_matters}</p></> : <p className="mt-2 text-sm leading-6 text-[#746b82]">{item.explanation}</p>}</div>)}</div></DashboardSection>
+      <DashboardSection title="Possible explanations"><p className="mb-3 text-xs leading-5 text-[#746b82]">These are hypotheses suggested by the available content and metrics, not proven causes.</p>{!output.why_it_worked?.length && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950">There is not enough supporting evidence for a content explanation. No hook, pacing, or retention diagnosis was added.</p>}<div className="grid gap-3">{output.why_it_worked?.slice(0, 3).map((item, index) => <div key={item.title ?? item.factor ?? index} className="rounded-2xl border border-[#eee8fa] p-4"><p className="text-[10px] font-black uppercase tracking-wide text-[#7c3aed]">{item.classification ?? "Possible explanation"}</p><p className="mt-1 font-black">{item.title ?? item.factor}</p>{item.evidence ? <><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Observed evidence</p><p className="mt-1 text-sm leading-6">{item.evidence}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">Hypothesis</p><p className="mt-1 text-sm leading-6">{item.interpretation}</p><p className="mt-3 text-xs font-black uppercase tracking-wide text-[#80778b]">How to use it</p><p className="mt-1 text-sm leading-6 text-[#5b21b6]">{item.why_it_matters}</p></> : <p className="mt-2 text-sm leading-6 text-[#746b82]">{item.explanation}</p>}</div>)}</div></DashboardSection>
       <DashboardSection title="Risks">{output.risks?.length ? output.risks.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">⚠️ {item}</p>) : <p className="text-sm text-[#746b82]">No evidence-backed risk was detected.</p>}</DashboardSection>
     </div>
     <div className="grid items-start gap-5 lg:grid-cols-2">
-      <DashboardSection title="Recommendations"><div className="space-y-3">{output.recommendations.map((item, index) => typeof item === "string" ? <p key={item}>{item}</p> : <div key={`${item.action}-${index}`} className="rounded-2xl border border-[#eee8fa] p-4"><p className="text-xs font-black uppercase tracking-wide text-[#7c3aed]">Experiment {index + 1}</p><p className="mt-2 font-black">Action</p><p className="mt-1 text-sm">{item.action}</p><p className="mt-3 text-sm text-[#746b82]"><b>Reason:</b> {item.reason}</p><p className="mt-2 text-sm font-bold text-[#6d28d9]"><b>Expected outcome:</b> {item.expected_outcome ?? item.expected_impact}</p></div>)}</div></DashboardSection>
-      <DashboardSection title="Benchmark details"><div className="grid gap-3 sm:grid-cols-2">{output.benchmarks?.filter((item) => item.current != null).map((item) => <div key={item.metric} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="text-xs font-bold uppercase text-[#80778b]">{item.metric.replaceAll("_", " ")}</p><p className="mt-1 text-2xl font-black">{item.current}</p><p className={`mt-1 text-xs font-bold ${item.percent_change != null && item.percent_change >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.percent_change == null ? "Baseline unavailable" : `${item.percent_change >= 0 ? "↑" : "↓"} ${Math.abs(item.percent_change)}% ${item.direction} average`}</p></div>)}</div></DashboardSection>
+      <DashboardSection title="Recommended experiment"><div className="space-y-3">{output.recommendations.map((item, index) => typeof item === "string" ? <p key={item}>{item}</p> : <div key={`${item.action}-${index}`} className="rounded-2xl border border-[#eee8fa] p-4"><p className="text-xs font-black uppercase tracking-wide text-[#7c3aed]">One primary variable</p><p className="mt-2 font-black">{item.test_variable ?? `Experiment ${index + 1}`}</p><p className="mt-1 text-sm leading-6">{item.action}</p><p className="mt-3 text-sm text-[#746b82]"><b>Why test it:</b> {item.reason}</p>{item.metric_to_watch && <p className="mt-2 text-sm"><b>Watch:</b> {item.metric_to_watch}</p>}{item.comparison && <p className="mt-2 text-sm"><b>Compare:</b> {item.comparison}</p>}<p className="mt-2 text-sm font-bold text-[#6d28d9]"><b>Decision:</b> {item.expected_outcome ?? item.expected_impact}</p></div>)}</div></DashboardSection>
+      <DashboardSection title="Benchmark details"><div className="grid gap-3 sm:grid-cols-2">{output.benchmarks?.filter((item) => item.current != null).map((item) => <div key={item.metric} className="rounded-2xl bg-[#f7f5ff] p-4"><p className="text-xs font-bold uppercase text-[#80778b]">{item.metric.replaceAll("_", " ")}</p><p className="mt-1 text-2xl font-black">{item.current}</p><p className={`mt-1 text-xs font-bold ${item.percent_change != null && item.percent_change >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.percent_change == null ? "Baseline unavailable" : `${item.percent_change >= 0 ? "↑" : "↓"} ${Math.abs(item.percent_change)}% ${item.direction} median`}</p><p className="mt-2 text-xs text-[#746b82]">Median {item.median ?? "—"} · Mean {item.average ?? "—"} · n={item.sample_size ?? 0}</p></div>)}</div></DashboardSection>
     </div>
-    <DashboardSection title="AI confidence"><div className="flex flex-wrap items-end gap-4"><p className="text-4xl font-black">{output.confidence?.score ?? 0}%</p><p className="pb-1 text-lg font-black text-[#6d28d9]">{output.confidence?.level ?? ((output.confidence?.score ?? 0) >= 80 ? "High" : (output.confidence?.score ?? 0) >= 50 ? "Medium" : "Low")} Confidence</p></div><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{output.confidence?.inputs.map((item) => <div key={item.name} className="flex items-center justify-between rounded-xl bg-[#f7f5ff] px-3 py-2 text-sm"><span>{item.available ? "✓" : "—"} {item.name}</span>{item.weight != null && <span className="font-bold text-[#80778b]">{item.earned ?? 0}/{item.weight}</span>}</div>)}</div></DashboardSection>
+    {output.trend && <DashboardSection title="Post metric history"><p className="rounded-xl bg-[#f7f5ff] p-3 text-sm leading-6">{output.trend.summary}</p><p className="mt-2 text-xs text-[#746b82]">{output.trend.observation_count} observations · {output.trend.span_hours} hours · This does not measure account growth.</p></DashboardSection>}
+    {output.evidence_quality ? <DashboardSection title="Evidence quality"><div className="flex flex-wrap items-end gap-4"><p className="text-4xl font-black">{output.evidence_quality.score}<span className="text-lg"> / 100</span></p><p className="pb-1 text-lg font-black text-[#6d28d9]">{output.evidence_quality.level}</p></div><p className="mt-2 text-sm leading-6 text-[#746b82]">{output.evidence_quality.meaning}</p><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{output.evidence_quality.inputs.map((item) => <div key={item.name} className="rounded-xl bg-[#f7f5ff] px-3 py-2 text-sm"><div className="flex justify-between gap-2"><span>{item.available ? "✓" : "—"} {item.name}</span><span className="font-bold text-[#80778b]">{item.earned}/{item.weight}</span></div>{item.detail && <p className="mt-1 text-xs text-[#80778b]">{item.detail}</p>}</div>)}</div></DashboardSection> : output.confidence && <DashboardSection title="Legacy AI confidence"><p className="text-sm text-[#746b82]">This older report used input availability as a confidence score. Run a new analysis for evidence quality.</p></DashboardSection>}
+    {output.data_gaps?.length ? <DashboardSection title="Missing evidence"><div className="space-y-2">{output.data_gaps.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950">— {item}</p>)}</div></DashboardSection> : null}
     <p className="text-[11px] text-[#80778b]">Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p>
   </div>;
 }
 function DashboardSection({ title, children }: { title: string; children: ReactNode }) { return <Card><h3 className="mb-4 text-lg font-black">{title}</h3><div className="space-y-2">{children}</div></Card>; }
-function AnalysisTimeline({ analyses, selectedId, onSelect }: { analyses: PostAnalysis[]; selectedId?: string; onSelect: (id: string) => void }) { return <section className="mt-8"><h2 className="mb-4 text-lg font-black">Analysis history</h2><div className="flex gap-3 overflow-x-auto pb-2">{[...analyses].reverse().map((analysis, index, ordered) => { const score = analysis.output_payload.score?.overall; const previous = index > 0 ? ordered[index - 1].output_payload.score?.overall : undefined; const direction = score != null && previous != null ? score > previous ? "↑" : score < previous ? "↓" : "→" : ""; const plateau = analysis.output_payload.risks?.some((item) => item.toLowerCase().includes("stalled")); return <button key={analysis.id} onClick={() => onSelect(analysis.id)} className={`min-w-44 rounded-2xl border bg-white p-4 text-left ${selectedId === analysis.id ? "border-violet-500 ring-2 ring-violet-200" : "border-[#e7e0f0]"}`}><p className="text-xs text-[#80778b]">{new Date(analysis.created_at).toLocaleDateString()}</p><p className="mt-1 text-2xl font-black">{score == null ? "Legacy" : `${score} ${direction}`}</p>{plateau && <p className="mt-2 text-xs font-bold text-amber-700">Growth plateau detected</p>}</button>; })}</div></section>; }
+function AnalysisTimeline({ analyses, selectedId, onSelect }: { analyses: PostAnalysis[]; selectedId?: string; onSelect: (id: string) => void }) { return <section className="mt-8"><h2 className="mb-4 text-lg font-black">Analysis history</h2><div className="flex gap-3 overflow-x-auto pb-2">{[...analyses].reverse().map((analysis, index, ordered) => { const score = analysis.output_payload.score?.overall; const previous = index > 0 ? ordered[index - 1].output_payload.score?.overall : undefined; const direction = score != null && previous != null ? score > previous ? "↑" : score < previous ? "↓" : "→" : ""; return <button key={analysis.id} onClick={() => onSelect(analysis.id)} className={`min-w-44 rounded-2xl border bg-white p-4 text-left ${selectedId === analysis.id ? "border-violet-500 ring-2 ring-violet-200" : "border-[#e7e0f0]"}`}><p className="text-xs text-[#80778b]">{new Date(analysis.created_at).toLocaleDateString()}</p><p className="mt-1 text-2xl font-black">{score == null ? "Legacy" : `${score} ${direction}`}</p><p className="mt-2 text-xs text-[#80778b]">Post score snapshot</p></button>; })}</div></section>; }
 function Metric({ label, value, light = false }: { label: string; value: unknown; light?: boolean }) { return <div><p className={`font-black ${light ? "text-white" : "text-[#201633]"}`}>{value == null ? "—" : String(value)}</p><p className={`text-[10px] font-bold uppercase tracking-wide ${light ? "text-violet-300" : "text-[#80778b]"}`}>{label}</p></div>; }

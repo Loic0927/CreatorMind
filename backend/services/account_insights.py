@@ -25,7 +25,6 @@ def _attributes(item: dict[str, Any]) -> dict[str, str]:
     )
     return {
         "topic": str(topic),
-        "thumbnail": str(stored.get("thumbnail_style") or "Unavailable"),
         "caption": str(stored.get("caption_style") or ("Question-led" if "?" in caption else "Short" if len(caption) <= 100 else "Long" if len(caption) >= 250 else "Standard")),
         "cta": str(stored.get("cta_usage") or ("Question" if "?" in caption else "Explicit CTA" if re.search(r"\b(comment|share|save|follow|click|try|tell me|let me know)\b", lowered) else "None")),
         "category": "Video" if item["media"].media_type.upper() == "VIDEO" else "Image",
@@ -73,14 +72,13 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
     progress = {
         "topics": sum(attrs["topic"] != "Unclassified" for attrs, _, _ in attribute_rows),
         "hashtags": sum(bool(re.findall(r"#[\w]+", item["media"].caption or "")) for _, _, item in attribute_rows),
-        "thumbnails": sum(attrs["thumbnail"] != "Unavailable" for attrs, _, _ in attribute_rows),
         "posting_times": sample_size,
     }
     base = {
         "sample_size": sample_size,
         "required_sample_size": REQUIRED_ANALYZED_POSTS,
         "progress": progress,
-        "top_patterns": [], "top_hashtags": [], "thumbnail_insights": [],
+        "top_patterns": [], "top_hashtags": [],
         "best_posting_times": [], "winning_formula": None,
     }
     if sample_size < REQUIRED_ANALYZED_POSTS:
@@ -88,18 +86,17 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
 
     baseline = mean(score for _, score, _ in attribute_rows)
     groups: dict[str, dict[str, list[int]]] = {
-        name: defaultdict(list) for name in ("topic", "thumbnail", "caption", "cta", "category", "time")
+        name: defaultdict(list) for name in ("topic", "caption", "cta", "category", "time")
     }
     hashtags: dict[str, list[int]] = defaultdict(list)
     for attrs, score, item in attribute_rows:
-        for name in ("topic", "thumbnail", "caption", "cta", "category"):
+        for name in ("topic", "caption", "cta", "category"):
             groups[name][attrs[name]].append(score)
         groups["time"][_posting_window(item["media"].published_at, timezone_offset_minutes)].append(score)
         for hashtag in set(value.lower() for value in re.findall(r"#[\w]+", item["media"].caption or "")):
             hashtags[hashtag].append(score)
 
     topic_rank = _rank(groups["topic"], baseline)
-    thumbnail_rank = _rank(groups["thumbnail"], baseline)
     caption_rank = _rank(groups["caption"], baseline)
     cta_rank = _rank(groups["cta"], baseline)
     category_rank = _rank(groups["category"], baseline)
@@ -115,8 +112,8 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
         return rows[0]["label"] if rows else None
 
     formula_values = {
-        "topic": winner(topic_rank), "thumbnail": winner(thumbnail_rank),
-        "caption": winner(caption_rank), "cta": winner(cta_rank), "posting_time": winner(time_rank),
+        "topic": winner(topic_rank), "caption": winner(caption_rank),
+        "cta": winner(cta_rank), "posting_time": winner(time_rank),
     }
     available_formula_values = sum(value is not None for value in formula_values.values())
     winning_formula = None if available_formula_values < 3 else {
@@ -127,7 +124,6 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
         **base,
         "top_patterns": top_patterns[:8],
         "top_hashtags": meaningful_hashtags[:8],
-        "thumbnail_insights": thumbnail_rank[:5],
         "best_posting_times": time_rank[:5],
         "winning_formula": winning_formula,
     }

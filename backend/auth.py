@@ -144,3 +144,22 @@ def revoke_session(token_hash: str) -> None:
         record = session.get(AuthSessionRecord, token_hash)
         if record:
             record.revoked_at = datetime.now(timezone.utc)
+
+
+def get_account_context(user_id: str) -> str:
+    factory = session_factory()
+    with factory() as session:
+        user = session.get(UserRecord, user_id)
+        return (user.account_context or "").strip() if user else ""
+
+
+def update_account_context(user_id: str, value: str) -> str:
+    normalized = value.strip()
+    factory = session_factory()
+    with factory.begin() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "Account was not found."})
+        user.account_context = normalized
+        user.updated_at = datetime.now(timezone.utc)
+    return normalized

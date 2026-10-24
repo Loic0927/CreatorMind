@@ -16,15 +16,19 @@ export type PostAnalysis = {
   metric_deltas: Record<string, number | null>;
   content_payload: { platform?: string; media_type?: string; caption?: string; published_at?: string; visual_context_used?: boolean; visual_context_kind?: string };
   output_payload: {
-    score?: { overall: number; grade: string; categories: Record<string, number> };
+    score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
+    baseline?: { sample_size: number; available_account_posts: number; metric_coverage: number; group: "same_media_type" | "overall_account"; label: string; statistic: string; secondary_statistic: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
     executive_summary?: string[];
     top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
-    why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
-    benchmarks?: Array<{ metric: string; current: number | null; average: number | null; percent_change: number | null; direction: string }>;
+    why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; classification?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
+    benchmarks?: Array<{ metric: string; current: number | null; average: number | null; median?: number | null; sample_size?: number; comparator?: string; percent_change: number | null; direction: string }>;
+    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
     risks?: string[];
-    recommendations: Array<string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string }>;
+    recommendations: Array<string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string; test_variable?: string; metric_to_watch?: string; comparison?: string }>;
+    evidence_quality?: { score: number; level: "Strong" | "Moderate" | "Limited"; label: string; meaning: string; inputs: Array<{ name: string; available: boolean; weight: number; earned: number; detail?: string | null }>; missing_evidence: string[] };
     confidence?: { score: number; level?: "High" | "Medium" | "Low"; inputs: Array<{ name: string; available: boolean; weight?: number; earned?: number; detail?: string | null }> };
+    data_gaps?: string[];
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
     content_attributes?: { topic: string; thumbnail_style: string; caption_style: string; cta_usage: string };
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
@@ -58,12 +62,11 @@ export type PatternInsight = { label: string; average_score: number; posts: numb
 export type AccountInsights = {
   sample_size: number;
   required_sample_size: number;
-  progress: { topics: number; hashtags: number; thumbnails: number; posting_times: number };
+  progress: { topics: number; hashtags: number; posting_times: number };
   top_patterns: PatternInsight[];
   top_hashtags: PatternInsight[];
-  thumbnail_insights: PatternInsight[];
   best_posting_times: PatternInsight[];
-  winning_formula?: { topic?: string | null; thumbnail?: string | null; caption?: string | null; cta?: string | null; posting_time?: string | null; confidence: number } | null;
+  winning_formula?: { topic?: string | null; caption?: string | null; cta?: string | null; posting_time?: string | null; confidence: number } | null;
 };
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -117,9 +120,9 @@ export const getTrackedPost = (session: Session, trackedId: string) => authReque
 export const getInstagramMedia = (session: Session) => authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(session, "/api/instagram/media");
 export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
-export const analyzeTrackedPost = (session: Session, trackedId: string) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses`, { method: "POST" });
+export const analyzeTrackedPost = (session: Session, trackedId: string, useAccountContext = true) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses?use_account_context=${useAccountContext}`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
-export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
+export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; use_account_context: boolean; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
 export const getPublishingCapabilities = (session: Session) => authRequest<{ items: PublishingCapability[] }>(session, "/publishing/capabilities");
 export const publishPost = (session: Session, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ results: PublicationResult[] }>(session, "/publications", { method: "POST", body: JSON.stringify(payload) });
 export const uploadMediaAsset = (session: Session, payload: { filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }) => authRequest<MediaAsset>(session, "/media-assets", { method: "POST", body: JSON.stringify(payload) });
@@ -128,5 +131,7 @@ export const createDraft = (session: Session, payload: { media_asset_id?: string
 export const updateDraft = (session: Session, draftId: string, payload: { media_asset_id?: string | null; target_platforms?: SocialPlatform[]; content_brief?: string; goal?: string; caption?: string; hashtags?: string[] }) => authRequest<PostDraft>(session, `/drafts/${encodeURIComponent(draftId)}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const publishDraft = (session: Session, draftId: string, payload: { platforms: SocialPlatform[]; idempotency_key: string }) => authRequest<{ draft: PostDraft; results: PublicationResult[] }>(session, `/drafts/${encodeURIComponent(draftId)}/publish`, { method: "POST", body: JSON.stringify(payload) });
 export const connectInstagram = (session: Session) => authRequest<{ authorization_url: string }>(session, "/api/instagram/connect/start?client=web", { method: "POST" });
+export const getAccountContext = (session: Session) => authRequest<{ account_context: string }>(session, "/auth/account-context");
+export const updateAccountContext = (session: Session, accountContext: string) => authRequest<{ account_context: string }>(session, "/auth/account-context", { method: "PATCH", body: JSON.stringify({ account_context: accountContext }) });
 export const logout = (session: Session) => authRequest(session, "/auth/logout", { method: "POST" });
 export const deleteAccount = (session: Session) => authRequest(session, "/auth/account", { method: "DELETE" });

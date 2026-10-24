@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
-from backend.auth import AuthenticatedUser, create_login_code, normalize_email, require_user, revoke_session, verify_login_code
+from backend.auth import AuthenticatedUser, create_login_code, get_account_context, normalize_email, require_user, revoke_session, update_account_context, verify_login_code
 from backend.config import is_production
 from backend.services.email_login import EmailDeliveryError, send_login_code
 from backend.storage.database import session_factory
@@ -25,6 +25,10 @@ class EmailRequest(BaseModel):
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str = Field(pattern=r"^\d{6}$")
+
+
+class AccountContextRequest(BaseModel):
+    account_context: str = Field(default="", max_length=4000)
 
 
 @router.post("/request-code")
@@ -51,6 +55,16 @@ def verify_code(payload: VerifyCodeRequest) -> dict:
 @router.get("/session")
 def session(user: AuthenticatedUser = Depends(require_user)) -> dict:
     return {"user": {"id": user.id, "email": user.email}}
+
+
+@router.get("/account-context")
+def account_context(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    return {"account_context": get_account_context(user.id)}
+
+
+@router.patch("/account-context")
+def save_account_context(payload: AccountContextRequest, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    return {"account_context": update_account_context(user.id, payload.account_context)}
 
 
 @router.post("/logout")

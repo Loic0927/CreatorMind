@@ -7,7 +7,7 @@ from backend.storage.models import InstagramMedia, TrackedPostAnalysis
 NOW = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
 
 
-def _item(index: int, score: int, *, topic: str, thumbnail: str, hashtag: str, hour: int):
+def _item(index: int, score: int, *, topic: str, hashtag: str, hour: int):
     media = InstagramMedia(
         id=f"media-{index}", account_id="account-1", instagram_media_id=str(index), media_type="VIDEO",
         media_url=None, caption=f"{topic} tutorial? {hashtag}", published_at=NOW.replace(hour=hour) - timedelta(days=index),
@@ -19,8 +19,7 @@ def _item(index: int, score: int, *, topic: str, thumbnail: str, hashtag: str, h
         output_payload={
             "score": {"overall": score},
             "content_attributes": {
-                "topic": topic, "thumbnail_style": thumbnail,
-                "caption_style": "Short", "cta_usage": "Question",
+                "topic": topic, "caption_style": "Short", "cta_usage": "Question",
             },
         },
     )
@@ -29,11 +28,11 @@ def _item(index: int, score: int, *, topic: str, thumbnail: str, hashtag: str, h
 
 def test_insights_require_ten_analyzed_posts_and_report_progress():
     result = build_account_insights([
-        _item(1, 80, topic="Magic Tricks", thumbnail="Face Close-Up", hashtag="#magic", hour=19),
-        _item(2, 70, topic="Tutorials", thumbnail="Object Demonstration", hashtag="#tutorial", hour=12),
+        _item(1, 80, topic="Magic Tricks", hashtag="#magic", hour=19),
+        _item(2, 70, topic="Tutorials", hashtag="#tutorial", hour=12),
     ])
     assert result["sample_size"] == 2
-    assert result["progress"] == {"topics": 2, "hashtags": 2, "thumbnails": 2, "posting_times": 2}
+    assert result["progress"] == {"topics": 2, "hashtags": 2, "posting_times": 2}
     assert result["top_patterns"] == []
     assert result["winning_formula"] is None
 
@@ -42,7 +41,6 @@ def test_insights_rank_account_patterns_without_individual_post_metrics():
     items = [
         _item(index, 90 if index < 6 else 60,
               topic="Magic Tricks" if index < 6 else "Tutorials",
-              thumbnail="Face Close-Up" if index < 6 else "Object Demonstration",
               hashtag="#magic" if index < 6 else "#tutorial",
               hour=19 if index < 6 else 12)
         for index in range(10)
@@ -51,8 +49,9 @@ def test_insights_rank_account_patterns_without_individual_post_metrics():
     assert result["sample_size"] == 10
     assert result["top_patterns"][0]["label"] == "Magic Tricks"
     assert result["top_hashtags"][0]["label"] == "#magic"
-    assert result["thumbnail_insights"][0]["label"] == "Face Close-Up"
     assert result["best_posting_times"][0]["label"] == "6 PM - 8 PM"
     assert result["winning_formula"]["topic"] == "Magic Tricks"
+    assert "thumbnail_insights" not in result
+    assert "thumbnail" not in result["winning_formula"]
     forbidden = {"reach", "views", "likes", "comments", "saves", "shares", "engagement_rate"}
     assert forbidden.isdisjoint(result)
