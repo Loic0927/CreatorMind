@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { API_BASE_URL } from '../config/environment';
-import { ImageMimeType, InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, SocialPlatform, TrackedPost } from '../types';
+import { AccountInsightsData, ImageMimeType, InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, SocialPlatform, TrackedPost } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -25,6 +25,8 @@ export const analyzeTrackedPost = (userId: string, id: string) => request<PostAn
 export type PublicationResult = { platform: SocialPlatform; status: 'published' | 'failed' | 'unavailable'; message: string; code?: string; permalink?: string; tracked_post_id?: string };
 export const publishPost = (userId: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: ImageMimeType; data: string } }) => request<{ results: PublicationResult[] }>('/publications', userId, { method: 'POST', body: JSON.stringify(payload) });
 export const getInstagramInsights = (userId: string) => request<InsightsData>('/insights/instagram?period=7d', userId);
+export const getAccountInsights = (userId: string) => request<AccountInsightsData>(`/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`, userId);
+export const regenerateInsightThemes = (userId: string) => request<{ themes: string[] }>('/insights/themes/regenerate', userId, { method: 'POST' });
 export const disconnectInstagram = (userId: string) => request('/api/instagram/connection', userId, { method: 'DELETE' });
 export const deleteAccount = (accessToken: string) => request('/auth/account', accessToken, { method: 'DELETE' });
 

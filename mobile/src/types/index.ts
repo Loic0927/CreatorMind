@@ -2,7 +2,7 @@ export type ConnectionStatus = 'not_connected' | 'connected' | 'expired' | 'reco
 export type InstagramConnection = { connected: boolean; configured: boolean; status: ConnectionStatus; username?: string; profile_picture_url?: string; account_type?: string; last_synced_at?: string };
 export type MetricValue = number | null;
 export type InstagramMedia = { id: string; instagram_media_id: string; media_type: string; media_url?: string; thumbnail_url?: string; caption: string; published_at: string; last_synced_at: string };
-export type Snapshot = { id: string; captured_at: string; likes: MetricValue; comments: MetricValue; saves: MetricValue; shares: MetricValue; reach: MetricValue; views: MetricValue; engagement_rate: number };
+export type Snapshot = { id: string; captured_at: string; likes: MetricValue; comments: MetricValue; saves: MetricValue; shares: MetricValue; reach: MetricValue; views: MetricValue; engagement_rate: number | null; average_watch_time_ms?: MetricValue; total_watch_time_ms?: MetricValue };
 export type PostAnalysis = {
   id: string;
   tracked_post_id: string;
@@ -14,6 +14,13 @@ export type PostAnalysis = {
   metric_deltas: Record<string, number | null>;
   content_payload: { visual_context_used?: boolean; visual_context_kind?: string };
   output_payload: {
+    conclusion?: string;
+    strongest_metric?: MetricComparison | null;
+    what_worked?: AnalysisFinding[];
+    what_to_improve?: AnalysisFinding[];
+    metric_comparisons?: MetricComparison[];
+    experiment?: { test_variable: string; metric_to_watch: string; action: string; reason: string; comparison: string; decision_rule: string }[];
+    methodology?: { noise_rule: string; significant_rule: string; ranking_basis: string };
     score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
     baseline?: { sample_size: number; available_account_posts: number; metric_coverage: number; group: 'same_media_type' | 'overall_account'; label: string; statistic: string; secondary_statistic: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
@@ -21,10 +28,10 @@ export type PostAnalysis = {
     top_insights?: { status: 'strong' | 'attention' | 'neutral'; text: string }[];
     why_it_worked?: { title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; classification?: string; factor?: string; estimated_impact?: string; explanation?: string }[];
     benchmarks?: { metric: string; current: number | null; average: number | null; median?: number | null; sample_size?: number; comparator?: string; percent_change: number | null; direction: string }[];
-    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
+    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; metric_changes?: Record<string, number | null>; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
     risks?: string[];
     recommendations: (string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string; test_variable?: string; metric_to_watch?: string; comparison?: string })[];
-    evidence_quality?: { score: number; level: 'Strong' | 'Moderate' | 'Limited'; label: string; meaning: string; inputs: { name: string; available: boolean; weight: number; earned: number; detail?: string | null }[]; missing_evidence: string[] };
+    evidence_quality?: { score?: number; level: 'Strong' | 'Moderate' | 'Limited'; label?: string; meaning?: string; plain_language?: string; inputs?: { name: string; available: boolean; weight: number; earned: number; detail?: string | null }[]; missing_evidence?: string[] };
     confidence?: { score: number; inputs: { name: string; available: boolean; detail?: string | null }[] };
     data_gaps?: string[];
     content_patterns?: { pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }[];
@@ -32,8 +39,18 @@ export type PostAnalysis = {
   };
   created_at: string;
 };
+export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; direction: string; comparison_text?: string; rank?: number | null; group_size?: number; percentile_label?: string; basis?: string };
+export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: 'positive' | 'neutral' | 'improve' };
 export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[]; analyses?: PostAnalysis[] };
 export type InsightsData = { status: ConnectionStatus; period: '7d'; start?: string; end?: string; posts?: number; metrics?: Record<string, MetricValue>; trend?: { date: string; value: number }[]; top_posts?: TrackedPost[] };
+export type AccountInsightsData = {
+  sample_size: number; required_sample_size: number; sample_notice: string;
+  progress: { patterns: number; mature_posts: number; posting_times: number };
+  themes: string[]; theme_method: string;
+  patterns: { label: string; category: string; value: number; posts: number; baseline: number; difference: number; basis: string; sample_note: string }[];
+  performance_posts: { tracked_post_id?: string | null; instagram_media_id: string; thumbnail_url?: string | null; media_type_label: string; theme: string; caption_excerpt: string; published_at: string; comparison_basis: string; age_days?: number | null; metrics?: { views: MetricValue; reach: MetricValue; engagement_rate: MetricValue; shares: MetricValue; saves: MetricValue; average_watch_time_ms?: MetricValue } | null; comparison?: { rank: number; group_size: number; metric: string; group: string } | null }[];
+  methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
+};
 export type SocialPlatform = 'Instagram' | 'Twitter' | 'Facebook' | 'Threads' | 'YouTube';
 export type ImageMimeType = 'image/jpeg' | 'image/png' | 'image/webp';
 export type Draft = {

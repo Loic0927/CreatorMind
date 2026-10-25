@@ -45,6 +45,8 @@ class InstagramRepository(Protocol):
 
     def delete_connection(self, user_id: str) -> bool: ...
 
+    def set_insight_themes(self, user_id: str, themes: list[str]) -> InstagramAccount | None: ...
+
 
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
@@ -154,6 +156,8 @@ class SQLAlchemyInstagramRepository:
                         encrypted_access_token=encrypted_token,
                         token_expires_at=account.token_expires_at,
                         scopes=list(scopes or account.scopes),
+                        insight_themes=list(account.insight_themes),
+                        insight_themes_updated_at=account.insight_themes_updated_at,
                         status=account.status,
                         created_at=account.connected_at,
                         updated_at=now,
@@ -179,6 +183,20 @@ class SQLAlchemyInstagramRepository:
             raise InstagramRepositoryError(
                 "PostBridge database operation failed."
             ) from None
+
+    def set_insight_themes(self, user_id: str, themes: list[str]) -> InstagramAccount | None:
+        try:
+            with self._session_factory.begin() as session:
+                record = session.scalar(select(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user_id))
+                if record is None:
+                    return None
+                record.insight_themes = list(themes)
+                record.insight_themes_updated_at = datetime.now(timezone.utc)
+                record.updated_at = datetime.now(timezone.utc)
+                session.flush()
+                return self._to_account(record)
+        except Exception:
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def get_encrypted_token(self, connection_id: str) -> str | None:
         try:
@@ -220,6 +238,8 @@ class SQLAlchemyInstagramRepository:
             encrypted_access_token="",
             token_expires_at=_as_utc(record.token_expires_at),
             scopes=list(record.scopes or []),
+            insight_themes=list(record.insight_themes or []),
+            insight_themes_updated_at=_as_utc(record.insight_themes_updated_at),
             status=record.status,
             connected_at=_as_utc(record.created_at),
             last_synced_at=_as_utc(record.updated_at),
@@ -291,6 +311,16 @@ class LocalDevelopmentInstagramRepository:
         json_store.update_store(mutate)
         token_store.delete_encrypted_token(existing.id)
         return True
+
+    def set_insight_themes(self, user_id: str, themes: list[str]) -> InstagramAccount | None:
+        existing = self.get_connection(user_id)
+        if existing is None:
+            return None
+        updated = existing.model_copy(update={
+            "insight_themes": list(themes),
+            "insight_themes_updated_at": datetime.now(timezone.utc),
+        })
+        return json_store.upsert_instagram_account(updated)
 
 
 _local_repository = LocalDevelopmentInstagramRepository()

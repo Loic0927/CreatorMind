@@ -34,7 +34,7 @@ from backend.services.publishing import (
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
-from backend.services.account_insights import build_account_insights
+from backend.services.account_insights import build_account_insights, generate_account_themes
 from backend.auth import AuthenticatedUser, get_account_context, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
@@ -572,18 +572,41 @@ def account_pattern_insights(
     user: AuthenticatedUser = Depends(require_user),
 ):
     user_id = current_user(user)
+    account = stored_connection(user_id)
     items = []
     for item in tracked_payload(user_id, active_only=False):
+        snapshots = get_content_repository().snapshots([item["tracking"].media_id])
         items.append({
             **item,
             "analyses": get_content_repository().analyses(user_id, item["tracking"].id),
-            "snapshots": get_content_repository().snapshots([item["tracking"].media_id]),
+            "snapshots": snapshots,
+            "post_publish_tracking": _tracking_schedule(item["tracking"].id, snapshots),
         })
+    themes = list(account.insight_themes) if account else []
+    if account and not themes:
+        themes = generate_account_themes(items)
+        if themes:
+            get_instagram_repository().set_insight_themes(user_id, themes)
     return build_account_insights(
         items,
         timezone_offset_minutes,
         account_context=get_account_context(user_id),
+        themes=themes,
     )
+
+
+@router.post("/insights/themes/regenerate")
+def regenerate_insight_themes(user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    account = stored_connection(user_id)
+    if account is None:
+        raise HTTPException(status_code=409, detail={"code": "instagram_not_connected", "message": "Connect Instagram before regenerating themes."})
+    items = []
+    for item in tracked_payload(user_id, active_only=False):
+        items.append({**item, "analyses": get_content_repository().analyses(user_id, item["tracking"].id)})
+    themes = generate_account_themes(items)
+    get_instagram_repository().set_insight_themes(user_id, themes)
+    return {"themes": themes}
 
 
 @router.post("/tracked-posts/{tracked_id}/analyses")
@@ -710,6 +733,8 @@ def refresh_tracking(
         likes=metrics.get("likes"), comments=metrics.get("comments"), saves=metrics.get("saves"),
         shares=metrics.get("shares"), reach=metrics.get("reach"), views=metrics.get("views"),
         engagement_rate=engagement_rate(metrics), raw_metrics=safe_raw_metrics(metrics),
+        average_watch_time_ms=metrics.get("average_watch_time_ms"),
+        total_watch_time_ms=metrics.get("total_watch_time_ms"),
         metric_status=dict(metrics.get("_metric_status") or {}),
         collection_type="manual_current", target_hour=None, scheduled_for=None,
     )

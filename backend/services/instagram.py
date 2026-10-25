@@ -410,7 +410,10 @@ def fetch_instagram_media_insights(
 ) -> dict[str, Any]:
     """Fetch the metrics supported for a media item without fabricating missing values."""
     metrics: dict[str, Any] = {}
-    status = {name: "unavailable" for name in ("likes", "comments", "reach", "saves", "shares", "views")}
+    status = {name: "unavailable" for name in (
+        "likes", "comments", "reach", "saves", "shares", "views",
+        "average_watch_time_ms", "total_watch_time_ms",
+    )}
     retryable_codes = {"instagram_token_invalid", "instagram_rate_limited", "instagram_upstream_error"}
     try:
         basic = _request_json(
@@ -452,6 +455,31 @@ def fetch_instagram_media_insights(
             if exc.code in retryable_codes:
                 raise
             status[local_name] = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
+    if (media_type or "").upper() in {"VIDEO", "REELS"}:
+        for upstream_name, local_name in (
+            ("ig_reels_avg_watch_time", "average_watch_time_ms"),
+            ("ig_reels_video_view_total_time", "total_watch_time_ms"),
+        ):
+            try:
+                payload = _request_json(
+                    "GET",
+                    f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/insights",
+                    query={"metric": upstream_name, "access_token": access_token},
+                )
+                data = payload.get("data")
+                if not isinstance(data, list) or not data:
+                    continue
+                metric = data[0] if isinstance(data[0], dict) else {}
+                value = metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
+                if value is None and isinstance(metric.get("values"), list) and metric["values"]:
+                    value = metric["values"][0].get("value")
+                if isinstance(value, (int, float)):
+                    metrics[local_name] = int(value)
+                    status[local_name] = "available"
+            except InstagramServiceError as exc:
+                if exc.code in retryable_codes:
+                    raise
+                status[local_name] = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
     metrics["_metric_status"] = status
     metrics["_media_type"] = (media_type or "UNKNOWN").upper()
     if not any(isinstance(metrics.get(name), int) for name in status):
@@ -510,7 +538,10 @@ def engagement_rate(metrics: dict[str, Any]) -> float | None:
 
 
 def safe_raw_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    allowed = {"likes", "comments", "saves", "shares", "reach", "views", "impressions"}
+    allowed = {
+        "likes", "comments", "saves", "shares", "reach", "views", "impressions",
+        "average_watch_time_ms", "total_watch_time_ms",
+    }
     return {key: value for key, value in metrics.items() if key in allowed}
 
 

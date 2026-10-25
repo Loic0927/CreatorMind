@@ -467,6 +467,30 @@ def test_media_insights_transient_views_error_retries_whole_capture(monkeypatch)
     assert failure.value.code == "instagram_upstream_error"
 
 
+def test_reels_watch_time_metrics_are_requested_and_preserved(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        metric = kwargs.get("query", {}).get("metric")
+        if metric is None:
+            return {"like_count": 4, "comments_count": 1}
+        values = {
+            "reach": 100,
+            "views": 120,
+            "saved": 3,
+            "shares": 2,
+            "ig_reels_avg_watch_time": 12500,
+            "ig_reels_video_view_total_time": 250000,
+        }
+        return {"data": [{"total_value": {"value": values[metric]}}]}
+
+    monkeypatch.setattr(instagram, "_request_json", fake_request)
+    result = fetch_instagram_media_insights("secret", "media-1", "REELS")
+
+    assert result["average_watch_time_ms"] == 12500
+    assert result["total_watch_time_ms"] == 250000
+    assert result["_metric_status"]["average_watch_time_ms"] == "available"
+    assert safe_raw_metrics(result)["total_watch_time_ms"] == 250000
+
+
 def test_tracking_schedule_calculates_only_adjacent_snapshot_view_increases(monkeypatch):
     captured = datetime(2026, 10, 25, tzinfo=timezone.utc)
     snapshots = [

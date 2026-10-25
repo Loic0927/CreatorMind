@@ -131,6 +131,8 @@ class InstagramAccount(BaseModel):
     encrypted_access_token: str
     token_expires_at: Optional[datetime] = None
     scopes: list[str] = Field(default_factory=list)
+    insight_themes: list[str] = Field(default_factory=list)
+    insight_themes_updated_at: Optional[datetime] = None
     status: Literal[
         "connected", "expired", "reconnect_required", "disconnected", "error"
     ] = "connected"
@@ -172,6 +174,8 @@ class InstagramInsightSnapshot(BaseModel):
     reach: Optional[int] = None
     views: Optional[int] = None
     engagement_rate: Optional[float] = None
+    average_watch_time_ms: Optional[int] = None
+    total_watch_time_ms: Optional[int] = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
     metric_status: dict[str, str] = Field(default_factory=dict)
     collection_type: Literal["manual_current", "milestone"] = "manual_current"

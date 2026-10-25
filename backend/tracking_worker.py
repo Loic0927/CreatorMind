@@ -101,7 +101,7 @@ def process_job(repository: TrackingRepository, job: InstagramInsightCollectionJ
         metrics = fetch_instagram_media_insights(token, media.instagram_media_id, media.media_type)
         captured_at = datetime.now(timezone.utc)
         metric_status = dict(metrics.get("_metric_status") or {})
-        for name in ("likes", "comments", "saves", "shares", "reach", "views"):
+        for name in ("likes", "comments", "saves", "shares", "reach", "views", "average_watch_time_ms", "total_watch_time_ms"):
             metric_status.setdefault(
                 name,
                 "available" if isinstance(metrics.get(name), (int, float)) else "unavailable",
@@ -112,6 +112,8 @@ def process_job(repository: TrackingRepository, job: InstagramInsightCollectionJ
             saves=metrics.get("saves"), shares=metrics.get("shares"),
             reach=metrics.get("reach"), views=metrics.get("views"),
             engagement_rate=engagement_rate(metrics), raw_metrics=safe_raw_metrics(metrics),
+            average_watch_time_ms=metrics.get("average_watch_time_ms"),
+            total_watch_time_ms=metrics.get("total_watch_time_ms"),
             metric_status=metric_status,
             collection_type="milestone", target_hour=job.target_hour,
             scheduled_for=job.due_at,

@@ -13,6 +13,8 @@ export type InsightSnapshot = {
   reach?: number | null;
   views?: number | null;
   engagement_rate?: number | null;
+  average_watch_time_ms?: number | null;
+  total_watch_time_ms?: number | null;
   captured_at: string;
   metric_status?: Record<string, "available" | "unavailable" | "permission_required">;
   collection_type?: "manual_current" | "milestone";
@@ -49,23 +51,32 @@ export type PostAnalysis = {
   output_payload: {
     score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
-    baseline?: { sample_size: number; available_account_posts: number; metric_coverage: number; group: "same_media_type" | "overall_account"; label: string; statistic: string; secondary_statistic: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
+    conclusion?: string;
+    strongest_metric?: MetricComparison | null;
+    what_worked?: AnalysisFinding[];
+    what_to_improve?: AnalysisFinding[];
+    metric_comparisons?: MetricComparison[];
+    experiment?: Array<{ test_variable: string; metric_to_watch: string; action: string; reason: string; comparison: string; decision_rule: string }>;
+    methodology?: { noise_rule: string; significant_rule: string; ranking_basis: string };
+    baseline?: { sample_size: number; available_account_posts: number; same_format_posts?: number; metric_coverage: number; group: string; label: string; age_basis?: string; current_post_age_hours?: number | null; statistic: string; secondary_statistic?: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
     executive_summary?: string[];
     top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
     why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; classification?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
-    benchmarks?: Array<{ metric: string; current: number | null; average: number | null; median?: number | null; sample_size?: number; comparator?: string; percent_change: number | null; direction: string }>;
-    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
+    benchmarks?: MetricComparison[];
+    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; metric_changes?: Record<string, number | null>; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
     risks?: string[];
     recommendations: Array<string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string; test_variable?: string; metric_to_watch?: string; comparison?: string }>;
-    evidence_quality?: { score: number; level: "Strong" | "Moderate" | "Limited"; label: string; meaning: string; inputs: Array<{ name: string; available: boolean; weight: number; earned: number; detail?: string | null }>; missing_evidence: string[] };
+    evidence_quality?: { score?: number; level: "Strong" | "Moderate" | "Limited"; label?: string; meaning?: string; plain_language?: string; sample_size?: number; metric_fields?: number; snapshot_count?: number; visual_available?: boolean; inputs: Array<{ name: string; available: boolean; weight: number; earned: number; detail?: string | null }>; missing_evidence?: string[] };
     confidence?: { score: number; level?: "High" | "Medium" | "Low"; inputs: Array<{ name: string; available: boolean; weight?: number; earned?: number; detail?: string | null }> };
     data_gaps?: string[];
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
-    content_attributes?: { topic: string; thumbnail_style: string; caption_style: string; cta_usage: string };
+    content_attributes?: { thumbnail_style: string; caption_style: string; cta_usage: string };
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
   };
   created_at: string;
 };
+export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
+export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: "positive" | "neutral" | "improve" };
 export type TrackedPost = {
   tracking: { id: string };
   media: { id: string; media_type?: string; caption: string; media_url?: string; thumbnail_url?: string; permalink?: string | null; published_at: string };
@@ -92,8 +103,16 @@ export type PostDraft = {
 };
 export type PatternInsight = {
   label: string;
-  average_score: number;
+  value: number;
   posts: number;
+  baseline: number;
+  difference: number;
+  basis: string;
+  sample_note: string;
+  metric_label: string;
+  distribution: { minimum: number; median: number; maximum: number };
+  category?: string | null;
+  average_score: number;
   baseline_score: number;
   difference_from_baseline: number;
   benchmark: string;
@@ -101,10 +120,7 @@ export type PatternInsight = {
   confidence_label: string;
   confidence_meaning: string;
   evidence: string;
-  metric_label: string;
-  distribution: { minimum: number; median: number; maximum: number };
   difference_interpretation: string;
-  category?: string | null;
 };
 export type AccountContext = {
   account_theme: string;
@@ -125,10 +141,10 @@ export type ContentOpportunity = {
   capture_timing: string;
   decision_method: string;
   repetitions_required: number;
-  effect_estimate: number | null;
-  effect_estimate_label: string;
+  effect_estimate?: number | null;
+  effect_estimate_label?: string;
 };
-export type PerformanceMetrics = { views: number | null; reach: number | null; likes: number | null; comments: number | null; saves: number | null; shares: number | null; engagement_rate: number | null };
+export type PerformanceMetrics = { views: number | null; reach: number | null; likes: number | null; comments: number | null; saves: number | null; shares: number | null; engagement_rate: number | null; average_watch_time_ms?: number | null; total_watch_time_ms?: number | null };
 export type PerformanceMilestone = {
   target_hour: 1 | 3 | 6 | 12 | 24;
   status: string;
@@ -145,16 +161,22 @@ export type PerformancePost = {
   permalink?: string | null;
   media_type: string;
   media_type_label: string;
-  topic: string;
+  thumbnail_url?: string | null;
+  theme: string;
+  topic?: string;
   published_at: string;
   posting_window: string;
   caption_excerpt: string;
-  observation_kind: "24-hour milestone" | "Latest cumulative snapshot" | "No snapshot";
+  observation_kind: "Mature lifetime snapshot" | "Latest cumulative snapshot" | "No snapshot";
+  comparison_basis: string;
+  mature: boolean;
+  age_days?: number | null;
   snapshot_captured_at?: string | null;
   tracking_period_hours?: number | null;
   metrics?: PerformanceMetrics | null;
   metric_status: Record<string, "available" | "unavailable" | "permission_required">;
   milestones: PerformanceMilestone[];
+  historical_backfill_unavailable: boolean;
   comparison?: { rank: number; group_size: number; metric: "views" | "reach"; group: string } | null;
 };
 export type AccountInsights = {
@@ -163,9 +185,11 @@ export type AccountInsights = {
   enough_data: boolean;
   heading: string;
   sample_notice: string;
-  confidence_explanation: string;
+  confidence_explanation?: string;
   observation_period: { start?: string | null; end?: string | null; timezone: string };
-  progress: { patterns: number; posting_times: number };
+  progress: { patterns: number; posting_times: number; mature_posts: number };
+  themes: string[];
+  theme_method: string;
   patterns: PatternInsight[];
   posting_time_insights: PatternInsight[];
   untested_posting_windows: string[];
@@ -176,11 +200,12 @@ export type AccountInsights = {
     required_scope: string;
     definitions: { views: string; reach: string };
     currently_collected: string[];
-    advanced_metrics: Array<{ key: string; status: "not_collected"; reason: string }>;
+    advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable"; reason: string }>;
   };
   performance_posts: PerformancePost[];
   content_opportunities: ContentOpportunity[];
   tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
+  methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
 };
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -236,6 +261,7 @@ export const trackInstagramPost = (session: Session, mediaId: string) => authReq
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const analyzeTrackedPost = (session: Session, trackedId: string, useAccountContext = true) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses?use_account_context=${useAccountContext}`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
+export const regenerateInsightThemes = (session: Session) => authRequest<{ themes: string[] }>(session, "/insights/themes/regenerate", { method: "POST" });
 export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; use_account_context: boolean; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
 export const getPublishingCapabilities = (session: Session) => authRequest<{ items: PublishingCapability[] }>(session, "/publishing/capabilities");
 export const publishPost = (session: Session, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ results: PublicationResult[] }>(session, "/publications", { method: "POST", body: JSON.stringify(payload) });
