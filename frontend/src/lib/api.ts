@@ -5,7 +5,6 @@ export type PredictionRequest = {
   platform: string;
   contentType: string;
   captionLength: number;
-  hashtagsCount: number;
   postingHour: number;
 };
 
@@ -17,7 +16,6 @@ export type AuditContentRequest = {
   url: string;
   platform?: string;
   caption?: string;
-  hashtags: string[];
   views?: number;
   likes?: number;
   comments?: number;

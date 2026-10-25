@@ -4,7 +4,37 @@ const STORAGE_KEY = "postbridge.web.session";
 export type Session = { accessToken: string; expiresAt: string; user: { id: string; email: string } };
 export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
 export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string };
-export type InsightSnapshot = { id: string; likes?: number | null; comments?: number | null; saves?: number | null; shares?: number | null; reach?: number | null; views?: number | null; engagement_rate?: number | null; captured_at: string };
+export type InsightSnapshot = {
+  id: string;
+  likes?: number | null;
+  comments?: number | null;
+  saves?: number | null;
+  shares?: number | null;
+  reach?: number | null;
+  views?: number | null;
+  engagement_rate?: number | null;
+  captured_at: string;
+  metric_status?: Record<string, "available" | "unavailable" | "permission_required">;
+  collection_type?: "manual_current" | "milestone";
+  target_hour?: number | null;
+  scheduled_for?: string | null;
+};
+export type TrackingMilestone = {
+  target_hour: 1 | 3 | 6 | 12 | 24;
+  scheduled_for: string;
+  deadline_at: string;
+  status: "pending" | "running" | "retry" | "completed" | "missed" | "cancelled" | "blocked_reauthorization" | "permission_required" | "unavailable";
+  attempt_count: number;
+  actual_captured_at?: string | null;
+  snapshot?: InsightSnapshot | null;
+  error_code?: string | null;
+};
+export type PostPublishTracking = {
+  automatic_collection: boolean;
+  status: "scheduler_unavailable" | "tracking" | "complete" | "blocked_reauthorization" | "permission_required";
+  next_capture_at?: string | null;
+  milestones: TrackingMilestone[];
+};
 export type PostAnalysis = {
   id: string;
   tracked_post_id: string;
@@ -14,7 +44,7 @@ export type PostAnalysis = {
   schema_version: string;
   observed_metrics: Record<string, number | null>;
   metric_deltas: Record<string, number | null>;
-  content_payload: { platform?: string; media_type?: string; caption?: string; published_at?: string; visual_context_used?: boolean; visual_context_kind?: string };
+  content_payload: { platform?: string; media_type?: string; caption?: string; published_at?: string; visual_context_used?: boolean; visual_context_kind?: string; account_context_used?: boolean; account_context_relevance?: "none" | "low" | "related" };
   output_payload: {
     score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
@@ -41,6 +71,7 @@ export type TrackedPost = {
   latest?: InsightSnapshot;
   snapshots?: InsightSnapshot[];
   analyses?: PostAnalysis[];
+  post_publish_tracking?: PostPublishTracking;
 };
 export type TrackingRecord = { id: string };
 export type PublishingCapability = { platform: SocialPlatform; available: boolean; reason?: string | null };
@@ -58,15 +89,53 @@ export type PostDraft = {
   created_at: string;
   updated_at: string;
 };
-export type PatternInsight = { label: string; average_score: number; posts: number; difference_from_baseline: number; category?: string };
+export type PatternInsight = {
+  label: string;
+  average_score: number;
+  posts: number;
+  baseline_score: number;
+  difference_from_baseline: number;
+  benchmark: string;
+  confidence: "LOW" | "MEDIUM" | "HIGH";
+  confidence_label: string;
+  evidence: string;
+  metric_label: string;
+  category?: string | null;
+};
+export type AccountContext = {
+  account_theme: string;
+  about_this_account: string;
+  target_audience: string;
+  brand_voice: string;
+  analysis_guidance: string;
+  creation_guidance: string;
+};
+export type ContentOpportunity = {
+  title: string;
+  status: "HYPOTHESIS";
+  evidence: string;
+  sample_size: number;
+  action: string;
+  metric_to_watch: string;
+  success_criteria: string;
+  potential_effect: number | null;
+  potential_effect_label: string;
+};
 export type AccountInsights = {
   sample_size: number;
   required_sample_size: number;
-  progress: { topics: number; hashtags: number; posting_times: number };
-  top_patterns: PatternInsight[];
-  top_hashtags: PatternInsight[];
-  best_posting_times: PatternInsight[];
-  winning_formula?: { topic?: string | null; caption?: string | null; cta?: string | null; posting_time?: string | null; confidence: number } | null;
+  enough_data: boolean;
+  heading: string;
+  sample_notice: string;
+  observation_period: { start?: string | null; end?: string | null; timezone: string };
+  progress: { patterns: number; posting_times: number };
+  patterns: PatternInsight[];
+  posting_time_insights: PatternInsight[];
+  untested_posting_windows: string[];
+  posting_time_metadata: { timezone: string; period_start?: string | null; period_end?: string | null; metric: string; complete_posts: number; incomplete_posts: number };
+  tracking_24h: { available: boolean; complete_posts: number; total_posts: number; target_hours: number[]; automatic_collection: boolean; status: "LIMITED" | "AVAILABLE"; message: string };
+  content_opportunities: ContentOpportunity[];
+  tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
 };
 
 async function responseJson<T>(response: Response): Promise<T> {
@@ -131,7 +200,7 @@ export const createDraft = (session: Session, payload: { media_asset_id?: string
 export const updateDraft = (session: Session, draftId: string, payload: { media_asset_id?: string | null; target_platforms?: SocialPlatform[]; content_brief?: string; goal?: string; caption?: string; hashtags?: string[] }) => authRequest<PostDraft>(session, `/drafts/${encodeURIComponent(draftId)}`, { method: "PATCH", body: JSON.stringify(payload) });
 export const publishDraft = (session: Session, draftId: string, payload: { platforms: SocialPlatform[]; idempotency_key: string }) => authRequest<{ draft: PostDraft; results: PublicationResult[] }>(session, `/drafts/${encodeURIComponent(draftId)}/publish`, { method: "POST", body: JSON.stringify(payload) });
 export const connectInstagram = (session: Session) => authRequest<{ authorization_url: string }>(session, "/api/instagram/connect/start?client=web", { method: "POST" });
-export const getAccountContext = (session: Session) => authRequest<{ account_context: string }>(session, "/auth/account-context");
-export const updateAccountContext = (session: Session, accountContext: string) => authRequest<{ account_context: string }>(session, "/auth/account-context", { method: "PATCH", body: JSON.stringify({ account_context: accountContext }) });
+export const getAccountContext = (session: Session) => authRequest<AccountContext>(session, "/auth/account-context");
+export const updateAccountContext = (session: Session, accountContext: AccountContext) => authRequest<AccountContext>(session, "/auth/account-context", { method: "PATCH", body: JSON.stringify(accountContext) });
 export const logout = (session: Session) => authRequest(session, "/auth/logout", { method: "POST" });
 export const deleteAccount = (session: Session) => authRequest(session, "/auth/account", { method: "DELETE" });

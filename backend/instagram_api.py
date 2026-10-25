@@ -23,6 +23,7 @@ from backend.services.instagram import (
     fetch_instagram_profile,
     instagram_configured,
     publish_instagram_image,
+    safe_raw_metrics,
     token_expiry,
 )
 from backend.services.publishing import (
@@ -41,11 +42,20 @@ from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
+    SQLAlchemyInstagramRepository,
     get_instagram_repository,
 )
+from backend.storage.tracking_repository import get_tracking_repository
 
 
 router = APIRouter()
+
+
+def _automatic_tracking_available() -> bool:
+    try:
+        return isinstance(get_instagram_repository(), SQLAlchemyInstagramRepository)
+    except InstagramRepositoryError:
+        return False
 
 
 def upsert_instagram_media(items: list[InstagramMedia]) -> list[InstagramMedia]:
@@ -163,6 +173,8 @@ def _mark_reconnect_required(account: InstagramAccount) -> None:
         repository().upsert_connection(updated)
     except InstagramRepositoryError:
         raise repository_error() from None
+    if _automatic_tracking_available():
+        get_tracking_repository().block_user_for_reauthorization(account.user_id)
 
 
 def _handle_connected_service_error(
@@ -224,6 +236,12 @@ def connect_callback(
         long_payload = exchange_long_lived_token(short_payload["access_token"])
         access_token = long_payload["access_token"]
         profile = fetch_instagram_profile(access_token)
+        if str(profile.get("account_type", "")).upper() not in {"BUSINESS", "MEDIA_CREATOR"}:
+            raise InstagramServiceError(
+                "instagram_professional_account_required",
+                "Connect an Instagram Business or Creator account.",
+                403,
+            )
         repo = repository()
         try:
             existing = repo.get_connection(user_id)
@@ -255,6 +273,8 @@ def connect_callback(
             )
         except InstagramRepositoryError:
             raise repository_error() from None
+        if isinstance(repo, SQLAlchemyInstagramRepository):
+            get_tracking_repository().resume_user_jobs(user_id)
         return RedirectResponse(build_app_return_url("success", client=client), status_code=302)
     except InstagramServiceError as exc:
         return RedirectResponse(build_app_return_url("error", exc.code, client), status_code=302)
@@ -328,6 +348,8 @@ def media(user: AuthenticatedUser = Depends(require_user)):
 
 
 def _disconnect(user_id: str) -> dict:
+    if _automatic_tracking_available():
+        get_tracking_repository().cancel_user_jobs(user_id)
     try:
         disconnected = repository().delete_connection(user_id)
     except InstagramRepositoryError:
@@ -414,10 +436,46 @@ def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)
             status_code=404,
             detail={"code": "media_not_found", "message": "Instagram post was not found."},
         )
-    return get_content_repository().create_tracked(user_id, payload.media_id)
+    tracked = get_content_repository().create_tracked(user_id, payload.media_id)
+    if _automatic_tracking_available():
+        get_tracking_repository().ensure_jobs_for_tracking(tracked.id)
+    return tracked
 
 
-def tracked_payload(user_id: str):
+def _tracking_schedule(tracked_id: str, snapshots: list[InstagramInsightSnapshot] | None = None) -> dict:
+    if not _automatic_tracking_available():
+        return {
+            "automatic_collection": False,
+            "status": "scheduler_unavailable",
+            "next_capture_at": None,
+            "milestones": [],
+        }
+    jobs = get_tracking_repository().jobs_for_tracking(tracked_id)
+    by_id = {item.id: item for item in (snapshots or [])}
+    milestones = []
+    for job in jobs:
+        snapshot = by_id.get(job.snapshot_id) if job.snapshot_id else None
+        milestones.append({
+            "target_hour": job.target_hour,
+            "scheduled_for": job.due_at,
+            "deadline_at": job.deadline_at,
+            "status": job.status,
+            "attempt_count": job.attempt_count,
+            "actual_captured_at": snapshot.captured_at if snapshot else None,
+            "snapshot": snapshot,
+            "error_code": job.last_error_code,
+        })
+    next_jobs = [job for job in jobs if job.status in {"pending", "retry", "running"}]
+    blocked = next((job.status for job in jobs if job.status in {"blocked_reauthorization", "permission_required"}), None)
+    return {
+        "automatic_collection": True,
+        "status": blocked or ("complete" if jobs and all(job.status in {"completed", "missed", "cancelled", "unavailable"} for job in jobs) else "tracking"),
+        "next_capture_at": min((job.next_attempt_at for job in next_jobs), default=None),
+        "milestones": milestones,
+    }
+
+
+def tracked_payload(user_id: str, active_only: bool = True):
     account = stored_connection(user_id)
     media = get_content_repository().media_for_account(account.id) if account else []
     media_by_id = {item.id: item for item in media}
@@ -428,14 +486,17 @@ def tracked_payload(user_id: str):
             or item.captured_at > snapshots_by_media[item.media_id].captured_at
         ):
             snapshots_by_media[item.media_id] = item
-    return [
+    payload = [
         {
             "tracking": tracked,
             "media": media_by_id.get(tracked.media_id),
             "latest": snapshots_by_media.get(tracked.media_id),
         }
-        for tracked in get_content_repository().tracked(user_id)
+        for tracked in get_content_repository().tracked(user_id, active_only=active_only)
     ]
+    for item in payload:
+        item["post_publish_tracking"] = _tracking_schedule(item["tracking"].id)
+    return payload
 
 
 def _tracked_item(user_id: str, tracked_id: str) -> dict:
@@ -477,6 +538,7 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
         reverse=True,
     )
     item["analyses"] = get_content_repository().analyses(user_id, tracked_id)
+    item["post_publish_tracking"] = _tracking_schedule(tracked_id, item["snapshots"])
     return item
 
 
@@ -494,12 +556,17 @@ def account_pattern_insights(
 ):
     user_id = current_user(user)
     items = []
-    for item in tracked_payload(user_id):
+    for item in tracked_payload(user_id, active_only=False):
         items.append({
             **item,
             "analyses": get_content_repository().analyses(user_id, item["tracking"].id),
+            "snapshots": get_content_repository().snapshots([item["tracking"].media_id]),
         })
-    return build_account_insights(items, timezone_offset_minutes)
+    return build_account_insights(
+        items,
+        timezone_offset_minutes,
+        account_context=get_account_context(user_id),
+    )
 
 
 @router.post("/tracked-posts/{tracked_id}/analyses")
@@ -600,6 +667,8 @@ def stop_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_use
                 "message": "Tracked post was not found.",
             },
         )
+    if _automatic_tracking_available():
+        get_tracking_repository().cancel_tracking_jobs(tracked_id)
     return {"stopped": True}
 
 
@@ -614,14 +683,18 @@ def refresh_tracking(
     if media_item is None:
         raise HTTPException(status_code=404, detail={"code": "media_not_found", "message": "Instagram post was not found."})
     try:
-        metrics = fetch_instagram_media_insights(_access_token(account), media_item.instagram_media_id)
+        metrics = fetch_instagram_media_insights(
+            _access_token(account), media_item.instagram_media_id, media_item.media_type
+        )
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
     snapshot = InstagramInsightSnapshot(
         id=str(uuid4()), media_id=media_item.id, captured_at=datetime.now(timezone.utc),
         likes=metrics.get("likes"), comments=metrics.get("comments"), saves=metrics.get("saves"),
         shares=metrics.get("shares"), reach=metrics.get("reach"), views=metrics.get("views"),
-        engagement_rate=engagement_rate(metrics), raw_metrics=metrics,
+        engagement_rate=engagement_rate(metrics), raw_metrics=safe_raw_metrics(metrics),
+        metric_status=dict(metrics.get("_metric_status") or {}),
+        collection_type="manual_current", target_hour=None, scheduled_for=None,
     )
     get_content_repository().append_snapshot(snapshot)
     return tracked_detail(tracked_id, user)

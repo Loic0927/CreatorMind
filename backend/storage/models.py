@@ -171,5 +171,32 @@ class InstagramInsightSnapshot(BaseModel):
     shares: Optional[int] = None
     reach: Optional[int] = None
     views: Optional[int] = None
-    engagement_rate: float = 0.0
+    engagement_rate: Optional[float] = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
+    metric_status: dict[str, str] = Field(default_factory=dict)
+    collection_type: Literal["manual_current", "milestone"] = "manual_current"
+    target_hour: Optional[int] = None
+    scheduled_for: Optional[datetime] = None
+
+
+class InstagramInsightCollectionJob(BaseModel):
+    id: str
+    user_id: str
+    tracked_post_id: str
+    media_id: str
+    target_hour: int
+    due_at: datetime
+    deadline_at: datetime
+    next_attempt_at: datetime
+    attempt_count: int = 0
+    status: Literal[
+        "pending", "running", "retry", "completed", "missed", "cancelled",
+        "blocked_reauthorization", "permission_required", "unavailable",
+    ]
+    snapshot_id: Optional[str] = None
+    last_error_code: Optional[str] = None
+    locked_at: Optional[datetime] = None
+    locked_by: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime

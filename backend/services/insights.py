@@ -9,7 +9,6 @@ def generate_content_insights(input_data: Dict, prediction: Dict) -> Dict:
     platform = input_data.get("platform", "")
     content_type = input_data.get("contentType", "")
     caption_length = input_data.get("captionLength", 0)
-    hashtags_count = input_data.get("hashtagsCount", 0)
     posting_hour = input_data.get("postingHour", 0)
 
     views = prediction.get("views", 0)
@@ -48,15 +47,6 @@ def generate_content_insights(input_data: Dict, prediction: Dict) -> Dict:
     elif caption_length > 250:
         weaknesses.append("The caption may be longer than needed for quick social consumption.")
         recommendations.append("Tighten the caption so the main value is obvious at a glance.")
-
-    if 3 <= hashtags_count <= 8:
-        strengths.append("The hashtag count is focused enough to support discoverability without looking spammy.")
-    elif hashtags_count == 0:
-        weaknesses.append("No hashtags are included, which may reduce discoverability.")
-        recommendations.append("Add a few niche-relevant hashtags that match the topic and audience.")
-    elif hashtags_count > 12:
-        weaknesses.append("Too many hashtags can make the post feel unfocused.")
-        recommendations.append("Reduce the hashtag list to a smaller, more targeted set.")
 
     if views >= 10000:
         analysis = (

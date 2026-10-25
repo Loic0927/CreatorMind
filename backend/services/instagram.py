@@ -31,11 +31,12 @@ INSTAGRAM_SCOPES = (
 
 
 class InstagramServiceError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 502):
+    def __init__(self, code: str, message: str, status_code: int = 502, retry_after_seconds: int | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _required_env(name: str) -> str:
@@ -208,10 +209,17 @@ def _request_json(
         with urlopen(request, timeout=15) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
+        retry_after = None
+        try:
+            retry_after = int(exc.headers.get("Retry-After", ""))
+        except (TypeError, ValueError):
+            pass
         try:
             error_payload = json.loads(exc.read().decode("utf-8"))
             provider_error = error_payload.get("error", {})
             error_code = provider_error.get("code")
+            if isinstance(error_code, str) and error_code.isdigit():
+                error_code = int(error_code)
         except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
             error_code = None
         if error_code == 190:
@@ -219,6 +227,31 @@ def _request_json(
                 "instagram_token_invalid",
                 "Instagram authorization is no longer valid.",
                 401,
+            ) from None
+        if exc.code == 429 or error_code in {4, 17, 32, 613}:
+            raise InstagramServiceError(
+                "instagram_rate_limited",
+                "Instagram is temporarily rate limiting insight requests.",
+                429,
+                retry_after_seconds=retry_after,
+            ) from None
+        if error_code in {10, 200}:
+            raise InstagramServiceError(
+                "instagram_permission_required",
+                "Instagram insight permission is required.",
+                403,
+            ) from None
+        if exc.code == 404:
+            raise InstagramServiceError(
+                "instagram_media_unavailable",
+                "This Instagram post is no longer accessible.",
+                404,
+            ) from None
+        if exc.code < 500:
+            raise InstagramServiceError(
+                "instagram_request_rejected",
+                "Instagram did not provide this field for the post.",
+                400,
             ) from None
         raise InstagramServiceError(
             "instagram_upstream_error",
@@ -370,9 +403,15 @@ def publish_instagram_image(
     )
 
 
-def fetch_instagram_media_insights(access_token: str, instagram_media_id: str) -> dict[str, int]:
+def fetch_instagram_media_insights(
+    access_token: str,
+    instagram_media_id: str,
+    media_type: str | None = None,
+) -> dict[str, Any]:
     """Fetch the metrics supported for a media item without fabricating missing values."""
-    metrics: dict[str, int] = {}
+    metrics: dict[str, Any] = {}
+    status = {name: "unavailable" for name in ("likes", "comments", "reach", "saves", "shares", "views")}
+    retryable_codes = {"instagram_token_invalid", "instagram_rate_limited", "instagram_upstream_error"}
     try:
         basic = _request_json(
             "GET",
@@ -381,10 +420,16 @@ def fetch_instagram_media_insights(access_token: str, instagram_media_id: str) -
         )
         if isinstance(basic.get("like_count"), int):
             metrics["likes"] = basic["like_count"]
+            status["likes"] = "available"
         if isinstance(basic.get("comments_count"), int):
             metrics["comments"] = basic["comments_count"]
-    except InstagramServiceError:
-        pass
+            status["comments"] = "available"
+    except InstagramServiceError as exc:
+        if exc.code in retryable_codes:
+            raise
+        value = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
+        status["likes"] = value
+        status["comments"] = value
 
     for upstream_name, local_name in (("reach", "reach"), ("saved", "saves"), ("shares", "shares"), ("views", "views")):
         try:
@@ -402,10 +447,17 @@ def fetch_instagram_media_insights(access_token: str, instagram_media_id: str) -
                 value = metric["values"][0].get("value")
             if isinstance(value, (int, float)):
                 metrics[local_name] = int(value)
-        except InstagramServiceError:
-            continue
-    if not metrics:
-        raise InstagramServiceError("instagram_insights_unavailable", "Instagram did not return insights for this post.", 502)
+                status[local_name] = "available"
+        except InstagramServiceError as exc:
+            if exc.code in retryable_codes:
+                raise
+            status[local_name] = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
+    metrics["_metric_status"] = status
+    metrics["_media_type"] = (media_type or "UNKNOWN").upper()
+    if not any(isinstance(metrics.get(name), int) for name in status):
+        if "permission_required" in status.values():
+            raise InstagramServiceError("instagram_permission_required", "Instagram insight permission is required.", 403)
+        raise InstagramServiceError("instagram_media_unavailable", "This Instagram post is no longer accessible or has no available insights.", 404)
     return metrics
 
 
@@ -440,13 +492,20 @@ def token_expiry(payload: dict[str, Any]) -> Optional[datetime]:
     return datetime.fromtimestamp(time.time() + float(expires_in), timezone.utc)
 
 
-def engagement_rate(metrics: dict[str, Optional[int]]) -> float:
+def engagement_rate(metrics: dict[str, Any]) -> float | None:
+    """Return observed interactions / reach, excluding unavailable components.
+
+    At least one actual interaction count and a positive reach value are required.
+    Missing values are never converted to zero.
+    """
     reach = metrics.get("reach")
-    if not reach:
-        return 0.0
-    interactions = sum(
-        metrics.get(name) or 0 for name in ("likes", "comments", "saves", "shares")
-    )
+    if not isinstance(reach, (int, float)) or reach <= 0:
+        return None
+    values = [metrics.get(name) for name in ("likes", "comments", "saves", "shares")]
+    available = [value for value in values if isinstance(value, (int, float))]
+    if not available:
+        return None
+    interactions = sum(available)
     return round(interactions / reach * 100, 2)
 
 

@@ -1,10 +1,6 @@
-import re
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import BaseModel
-
-
-HASHTAG_PATTERN = re.compile(r"#\w+")
 
 
 class ParsedUrlAnalysis(BaseModel):
@@ -77,10 +73,7 @@ def parse_content_url(url: str) -> ParsedUrlAnalysis:
     platform = detect_platform(parsed_url)
     content_type = detect_content_type(platform, parsed_url)
     caption_text = extract_caption_text(parsed_url)
-    hashtags = HASHTAG_PATTERN.findall(caption_text)
-
     caption_length = len(caption_text)
-    hashtags_count = len(hashtags)
     posting_hour = approximate_posting_hour(platform)
 
     return ParsedUrlAnalysis(
@@ -90,7 +83,7 @@ def parse_content_url(url: str) -> ParsedUrlAnalysis:
             "platform": platform,
             "contentType": content_type,
             "captionLength": caption_length,
-            "hashtagsCount": hashtags_count,
+            "hashtagsCount": 0,
             "postingHour": posting_hour,
         },
     )

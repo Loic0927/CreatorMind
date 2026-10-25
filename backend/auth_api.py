@@ -6,6 +6,7 @@ from sqlalchemy import delete, select
 
 from backend.auth import AuthenticatedUser, create_login_code, get_account_context, normalize_email, require_user, revoke_session, update_account_context, verify_login_code
 from backend.config import is_production
+from backend.services.account_context import AccountContextFields, context_as_dict, serialize_account_context
 from backend.services.email_login import EmailDeliveryError, send_login_code
 from backend.storage.database import session_factory
 from backend.storage.sql_models import (
@@ -28,7 +29,12 @@ class VerifyCodeRequest(BaseModel):
 
 
 class AccountContextRequest(BaseModel):
-    account_context: str = Field(default="", max_length=4000)
+    account_theme: str = Field(default="", max_length=300)
+    about_this_account: str = Field(default="", max_length=3000)
+    target_audience: str = Field(default="", max_length=2000)
+    brand_voice: str = Field(default="", max_length=1000)
+    analysis_guidance: str = Field(default="", max_length=2500)
+    creation_guidance: str = Field(default="", max_length=2500)
 
 
 @router.post("/request-code")
@@ -59,12 +65,17 @@ def session(user: AuthenticatedUser = Depends(require_user)) -> dict:
 
 @router.get("/account-context")
 def account_context(user: AuthenticatedUser = Depends(require_user)) -> dict:
-    return {"account_context": get_account_context(user.id)}
+    return context_as_dict(get_account_context(user.id))
 
 
 @router.patch("/account-context")
 def save_account_context(payload: AccountContextRequest, user: AuthenticatedUser = Depends(require_user)) -> dict:
-    return {"account_context": update_account_context(user.id, payload.account_context)}
+    try:
+        encoded = serialize_account_context(AccountContextFields(**payload.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    update_account_context(user.id, encoded)
+    return context_as_dict(encoded)
 
 
 @router.post("/logout")

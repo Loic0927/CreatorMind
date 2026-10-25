@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -112,6 +112,9 @@ class TrackedPostRecord(Base):
 
 class InstagramInsightSnapshotRecord(Base):
     __tablename__ = "instagram_insight_snapshots"
+    __table_args__ = (
+        UniqueConstraint("media_id", "target_hour", name="uq_instagram_snapshot_milestone"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -122,8 +125,38 @@ class InstagramInsightSnapshotRecord(Base):
     shares: Mapped[int | None] = mapped_column(Integer)
     reach: Mapped[int | None] = mapped_column(Integer)
     views: Mapped[int | None] = mapped_column(Integer)
-    engagement_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    engagement_rate: Mapped[float | None] = mapped_column(Float)
     raw_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    metric_status: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    collection_type: Mapped[str] = mapped_column(String(32), nullable=False, default="manual_current")
+    target_hour: Mapped[int | None] = mapped_column(Integer)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InstagramInsightCollectionJobRecord(Base):
+    __tablename__ = "instagram_insight_collection_jobs"
+    __table_args__ = (
+        UniqueConstraint("tracked_post_id", "target_hour", name="uq_instagram_insight_job_milestone"),
+        CheckConstraint("target_hour IN (1, 3, 6, 12, 24)", name="ck_instagram_insight_job_target_hour"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_hour: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="SET NULL"), unique=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(128))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class TrackedPostAnalysisRecord(Base):

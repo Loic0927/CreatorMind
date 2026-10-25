@@ -2,7 +2,7 @@
 
 PostBridge is a full-stack creator app with one email-based account shared by the
 responsive Next.js web app and the Expo mobile app. It connects Instagram,
-tracks post insights, generates captions, and preserves the trained social-content
+tracks post insights at durable post-publish milestones, generates captions, and preserves the trained social-content
 prediction model in `backend/models/model.pkl`.
 
 OCI production deployment is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`. Existing local and AWS deployment paths remain unchanged.
@@ -109,7 +109,6 @@ To verify the API in the browser:
   "platform": "TikTok",
   "contentType": "Reel",
   "captionLength": 120,
-  "hashtagsCount": 6,
   "postingHour": 19
 }
 ```
@@ -169,7 +168,7 @@ Currently supported now:
 
 Prepared only, not fully integrated yet:
 
-- Instagram: prepared for official Insights API workflows
+- Instagram: official owned-media Insights with an independent 1/3/6/12/24-hour tracking worker
 - YouTube: prepared for OAuth-backed private Analytics API workflows
 - TikTok: prepared only for official profile and video metadata import workflows
 

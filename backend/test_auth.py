@@ -74,9 +74,15 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
     second = auth.authenticate_token(second_session["access_token"])
 
     saved = save_account_context(AccountContextRequest(
-        account_context="  Practical magic tutorials for beginner creators.  "
+        account_theme="Practical magic tutorials",
+        about_this_account="Beginner-friendly lessons.",
+        target_audience="Beginner creators",
+        brand_voice="Clear and friendly",
+        analysis_guidance="Treat curiosity as context, not causal evidence.",
+        creation_guidance="Use simple language.",
     ), first)
 
-    assert saved["account_context"] == "Practical magic tutorials for beginner creators."
-    assert account_context(first)["account_context"] == saved["account_context"]
-    assert account_context(second)["account_context"] == ""
+    assert saved["account_theme"] == "Practical magic tutorials"
+    assert account_context(first) == saved
+    assert account_context(second)["account_theme"] == ""
+    assert account_context(second)["about_this_account"] == ""

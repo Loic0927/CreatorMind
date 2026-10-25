@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
-  AccountInsights, Connection, PatternInsight, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
+  AccountContext, AccountInsights, Connection, ContentOpportunity, PatternInsight, PostAnalysis, PostDraft, PublicationResult, PublishingCapability, Session, SocialPlatform, TrackedPost, analyzeTrackedPost, caption, connectInstagram,
   createDraft, deleteAccount, getAccountContext, getAccountInsights, getConnection, getDrafts, getInstagramMedia, getPublishingCapabilities, getTrackedPost, getTrackedPosts, logout,
   publishDraft, refreshTrackedPost, requestCode, saveSession, storedSession, trackInstagramPost, updateAccountContext, updateDraft, uploadMediaAsset, verifyCode,
 } from "@/lib/postbridge";
@@ -405,7 +405,7 @@ function Create({ session }: { session: Session }) {
         {result && <Card>
           <h2 className="text-xl font-black">Caption</h2>
           <textarea className="mt-4 min-h-40 w-full rounded-xl bg-[#f7f5ff] p-4" value={result.caption} onChange={(event) => { setResult({ ...result, caption: event.target.value }); setPublishKey(""); }} />
-          <textarea className="mt-3 min-h-20 w-full rounded-xl bg-[#f7f5ff] p-4 text-[#5b21b6]" value={result.hashtags} onChange={(event) => { setResult({ ...result, hashtags: event.target.value }); setPublishKey(""); }} />
+          {result.hashtags ? <label className="mt-3 block text-sm font-bold">Existing draft hashtags (preserved)<textarea className="mt-2 min-h-20 w-full rounded-xl bg-[#f7f5ff] p-4 text-[#5b21b6]" value={result.hashtags} onChange={(event) => { setResult({ ...result, hashtags: event.target.value }); setPublishKey(""); }} /></label> : null}
           <div className="mt-5 grid grid-cols-2 gap-3">
             <button disabled={saving || publishing} onClick={() => void saveOnly()} className="rounded-2xl bg-[#eee8fa] py-4 font-black text-[#5b21b6] disabled:opacity-50">{saving ? "Saving..." : "Save draft"}</button>
             <button disabled={publishing || saving || publishablePlatforms.length === 0 || (!image && !mediaAssetId)} onClick={() => void publish()} className="rounded-2xl bg-[#201633] py-4 font-black text-white disabled:opacity-50">{publishing ? "Publishing..." : `Publish (${publishablePlatforms.length})`}</button>
@@ -501,6 +501,8 @@ function Analyze({ session }: { session: Session }) {
       <ErrorText value={error} />
       {!selected ? <Card>Loading post…</Card> : <div className="space-y-6">
         <Card>
+          <h2 className="text-lg font-black">Latest cumulative Instagram metrics</h2>
+          <p className="mt-1 text-xs leading-5 text-[#746b82]">This is the latest available lifetime total. It is separate from the scheduled first-24-hour milestones below.</p>
           <div>
             {(selected.media.thumbnail_url || selected.media.media_url) && <img alt="Selected Instagram post" src={selected.media.thumbnail_url || selected.media.media_url} className="aspect-video w-full rounded-2xl object-cover" />}
             <p className="mt-4 line-clamp-4 text-sm leading-6">{selected.media.caption || "No caption"}</p>
@@ -514,6 +516,8 @@ function Analyze({ session }: { session: Session }) {
               <Metric label="Shares" value={selected.latest?.shares} />
             </div>
             <p className="mt-4 text-xs text-[#80778b]">{selected.latest ? `Metrics captured ${new Date(selected.latest.captured_at).toLocaleString()}` : "Refresh metrics before analyzing this post."}</p>
+            {selected.latest?.metric_status && Object.values(selected.latest.metric_status).some((value) => value === "permission_required") ? <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs font-bold text-red-800">Some Instagram insight fields require renewed Insights permission. Reconnect the account to grant access.</p> : null}
+            {selected.latest?.metric_status && !Object.values(selected.latest.metric_status).includes("permission_required") && Object.values(selected.latest.metric_status).some((value) => value === "unavailable") ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-xs font-bold text-amber-900">This media type returned only partial metrics; unavailable values are not shown as zero.</p> : null}
             <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-xl bg-[#f7f5ff] px-4 py-3 text-sm font-bold"><input type="checkbox" checked={useAccountContext} onChange={(event) => setUseAccountContext(event.target.checked)} className="h-4 w-4 accent-violet-600" />Use account context</label>
             <div className="mt-5 grid grid-cols-2 gap-3">
               <button disabled={working !== null} onClick={() => void refresh()} className="rounded-xl bg-[#eee8fa] px-3 py-3 text-sm font-bold text-[#5b21b6] disabled:opacity-50">{working === "refresh" ? "Refreshing…" : "Refresh metrics"}</button>
@@ -521,6 +525,7 @@ function Analyze({ session }: { session: Session }) {
             </div>
           </div>
         </Card>
+        <PostPublishTrackingBlock tracking={selected.post_publish_tracking} />
         {displayedAnalysis ? <PostAnalysisCard analysis={displayedAnalysis} /> : <Card><p className="font-bold">No saved analysis for this post yet.</p><p className="mt-2 text-sm leading-6 text-[#746b82]">Refresh the metrics, then analyze this post.</p></Card>}
         {selected.analyses?.length ? <AnalysisTimeline analyses={selected.analyses} selectedId={displayedAnalysis?.id} onSelect={setViewingAnalysisId} /> : null}
       </div>}
@@ -539,46 +544,78 @@ function Insights({ session }: { session: Session }) {
   return <>
     <Title>Insights</Title>
     <ErrorText value={error} />
-    {!insights && !error ? <Card><p className="text-sm text-[#746b82]">Loading insights…</p></Card> : insights && insights.sample_size < insights.required_sample_size ? <Card>
-      <p className="font-black">Analyze more posts to unlock pattern insights.</p>
-      <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        <Progress label="Topics" value={insights.progress.topics} required={insights.required_sample_size} />
-        <Progress label="Hashtags" value={insights.progress.hashtags} required={insights.required_sample_size} />
-        <Progress label="Posting times" value={insights.progress.posting_times} required={insights.required_sample_size} />
-      </div>
-    </Card> : insights ? <div className="grid items-start gap-5 lg:grid-cols-2">
-      <InsightRanking title="Top performing patterns" items={insights.top_patterns} showCategory />
-      <InsightRanking title="Top hashtags" items={insights.top_hashtags} />
-      <InsightRanking title="Best posting times" items={insights.best_posting_times} />
-      {insights.winning_formula && <div className="lg:col-span-2"><Card dark>
-        <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-black text-white">Winning formula</h2><p className="rounded-full bg-white/10 px-4 py-2 text-sm font-black text-violet-100">{insights.winning_formula.confidence}% confidence</p></div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <FormulaValue label="Topic" value={insights.winning_formula.topic} />
-          <FormulaValue label="Caption" value={insights.winning_formula.caption} />
-          <FormulaValue label="CTA" value={insights.winning_formula.cta} />
-          <FormulaValue label="Posting time" value={insights.winning_formula.posting_time} />
+    {!insights && !error ? <Card><p className="text-sm text-[#746b82]">Loading insights…</p></Card> : insights ? <div className="space-y-5">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-black">{insights.heading}</p><p className="mt-1 text-sm text-[#746b82]">{insights.sample_notice}</p></div><p className={`rounded-full px-3 py-1 text-xs font-black ${insights.enough_data ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900"}`}>{insights.enough_data ? "OBSERVATIONAL EVIDENCE" : "LOW CONFIDENCE"}</p></div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Progress label="Analyzed posts" value={insights.progress.patterns} required={insights.required_sample_size} />
+          <Progress label="Complete 24h snapshots" value={insights.progress.posting_times} required={insights.required_sample_size} />
         </div>
-      </Card></div>}
+      </Card>
+      <Card><h2 className="text-lg font-black">Content opportunities</h2><div className="mt-4 grid gap-4 lg:grid-cols-2">{insights.content_opportunities.length ? insights.content_opportunities.map((item) => <Opportunity key={item.title} item={item} />) : <p className="text-sm text-[#746b82]">Analyze more varied posts to generate a testable opportunity.</p>}</div></Card>
+      <InsightRanking title={insights.enough_data ? "Observed content patterns" : "Content patterns to validate"} items={insights.patterns} showCategory />
+      <div className="grid items-start gap-5 lg:grid-cols-2">
+        <InsightRanking title={insights.posting_time_metadata.complete_posts >= insights.required_sample_size ? "Historical 24-hour performance by time" : "Observed posting-time results"} items={insights.posting_time_insights} subtitle={`${insights.posting_time_metadata.timezone} · ${insights.posting_time_metadata.complete_posts} complete posts · ${insights.posting_time_metadata.metric}${insights.posting_time_metadata.period_start && insights.posting_time_metadata.period_end ? ` · ${new Date(insights.posting_time_metadata.period_start).toLocaleDateString()}–${new Date(insights.posting_time_metadata.period_end).toLocaleDateString()}` : ""}`} />
+        <Card><h2 className="text-lg font-black">Untested posting windows</h2><p className="mt-2 text-xs leading-5 text-[#746b82]">{insights.posting_time_metadata.timezone} · These are coverage gaps, not predicted best times.</p><div className="mt-4 flex flex-wrap gap-2">{insights.untested_posting_windows.map((window) => <span key={window} className="rounded-full bg-[#f7f5ff] px-4 py-2 text-sm font-bold">{window}</span>)}</div><div className="mt-5 rounded-2xl bg-amber-50 p-4 text-sm leading-6 text-amber-950"><p className="font-black">24-hour data: {insights.tracking_24h.complete_posts}/{insights.tracking_24h.total_posts} posts</p><p className="mt-1">{insights.tracking_24h.message}</p></div></Card>
+      </div>
+      {insights.tested_combination && <Card dark><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-black text-white">Pattern to validate</h2><p className="rounded-full bg-white/10 px-4 py-2 text-xs font-black text-violet-100">{insights.tested_combination.confidence_label}</p></div><p className="mt-5 text-lg font-black text-white">{insights.tested_combination.label}</p><p className="mt-2 text-sm text-violet-100">Average Post Score {insights.tested_combination.average_score} · {insights.tested_combination.posts} posts · baseline {insights.tested_combination.baseline_score}</p><p className="mt-3 text-xs leading-5 text-violet-300">{insights.tested_combination.caution}</p></Card>}
     </div> : null}
   </>;
 }
 
-function InsightRanking({ title, items, showCategory = false }: { title: string; items: PatternInsight[]; showCategory?: boolean }) {
-  return <Card><h2 className="text-lg font-black">{title}</h2><div className="mt-4 divide-y divide-[#eee8fa]">{items.length ? items.map((item, index) => <div key={`${item.category ?? title}-${item.label}`} className="flex items-center gap-4 py-4 first:pt-0 last:pb-0"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#eee8fa] text-sm font-black text-[#6d28d9]">{index + 1}</span><div className="min-w-0 flex-1">{showCategory && item.category && <p className="text-[10px] font-bold uppercase tracking-wider text-[#80778b]">{item.category}</p>}<p className="truncate font-black">{item.label}</p><p className="mt-1 text-xs text-[#80778b]">{item.posts} posts</p></div><div className="text-right"><p className="text-2xl font-black">{item.average_score}</p><p className={`text-xs font-bold ${item.difference_from_baseline >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.difference_from_baseline >= 0 ? "+" : ""}{item.difference_from_baseline} vs average</p></div></div>) : <p className="py-2 text-sm text-[#746b82]">More varied posts are needed.</p>}</div></Card>;
+function InsightRanking({ title, items, showCategory = false, subtitle }: { title: string; items: PatternInsight[]; showCategory?: boolean; subtitle?: string }) {
+  return <Card><h2 className="text-lg font-black">{title}</h2>{subtitle && <p className="mt-1 text-xs leading-5 text-[#746b82]">{subtitle}</p>}<div className="mt-4 divide-y divide-[#eee8fa]">{items.length ? items.map((item) => <div key={`${item.category ?? title}-${item.label}`} className="py-4 first:pt-0 last:pb-0"><div className="flex items-start justify-between gap-4"><div className="min-w-0">{showCategory && item.category && <p className="text-[10px] font-bold uppercase tracking-wider text-[#80778b]">{item.category}</p>}<p className="font-black">{item.label}</p><p className="mt-1 text-xs text-[#80778b]">{item.evidence}</p></div><div className="shrink-0 text-right"><p className="text-2xl font-black">{item.average_score}{item.metric_label.toLowerCase().includes("engagement") ? "%" : ""}</p><p className="text-[10px] font-bold uppercase text-[#80778b]">Average {item.metric_label}</p></div></div><div className="mt-3 flex flex-wrap items-center gap-2 text-xs"><span className={`rounded-full px-2 py-1 font-black ${item.confidence === "LOW" ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-800"}`}>{item.confidence} CONFIDENCE</span><span className={`font-bold ${item.difference_from_baseline >= 0 ? "text-emerald-700" : "text-red-700"}`}>{item.difference_from_baseline >= 0 ? "+" : ""}{item.difference_from_baseline} vs baseline {item.baseline_score}</span></div><p className="mt-2 text-[11px] text-[#80778b]">Comparison: {item.benchmark}</p></div>) : <p className="py-2 text-sm text-[#746b82]">Not enough repeated examples to compare yet.</p>}</div></Card>;
 }
 
 function Progress({ label, value, required }: { label: string; value: number; required: number }) { return <div className="rounded-2xl bg-[#f7f5ff] p-4"><div className="flex justify-between gap-3"><p className="text-sm font-bold">{label}</p><p className="text-sm font-black">{value}/{required}</p></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8e0f7]"><div className="h-full rounded-full bg-[#7c3aed]" style={{ width: `${Math.min(100, value / required * 100)}%` }} /></div></div>; }
-function FormulaValue({ label, value }: { label: string; value?: string | null }) { return <div><p className="text-[10px] font-bold uppercase tracking-wider text-violet-300">{label}</p><p className="mt-1 font-black text-white">{value || "—"}</p></div>; }
+function Opportunity({ item }: { item: ContentOpportunity }) { return <div className="rounded-2xl border border-[#eee8fa] p-4"><div className="flex items-center justify-between gap-3"><p className="font-black">{item.title}</p><span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black text-amber-900">HYPOTHESIS</span></div><p className="mt-3 text-sm leading-6"><b>Evidence:</b> {item.evidence}</p><p className="mt-2 text-sm leading-6"><b>Test:</b> {item.action}</p><p className="mt-2 text-sm leading-6"><b>Watch:</b> {item.metric_to_watch}</p><p className="mt-2 text-sm leading-6"><b>Decision:</b> {item.success_criteria}</p><p className="mt-3 text-xs font-bold text-[#80778b]">{item.potential_effect_label}</p></div>; }
+
+function PostPublishTrackingBlock({ tracking }: { tracking?: TrackedPost["post_publish_tracking"] }) {
+  if (!tracking?.automatic_collection) return <Card><h2 className="text-lg font-black">Post-publish tracking</h2><p className="mt-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-950">Automatic milestone collection is unavailable in this environment. Manual refreshes remain current cumulative snapshots and are not treated as historical 24-hour results.</p></Card>;
+  const statusMessage = tracking.status === "blocked_reauthorization"
+    ? "Instagram authorization expired. Reconnect the account to resume milestones that are still within their collection window."
+    : tracking.status === "permission_required"
+      ? "Instagram did not grant the insight permission required for automatic collection. Reauthorize the account and grant Insights access."
+      : tracking.status === "complete"
+        ? "The first-24-hour tracking window is complete."
+        : tracking.next_capture_at
+          ? `Tracking is active. Next attempt: ${new Date(tracking.next_capture_at).toLocaleString()}.`
+          : "Tracking is active.";
+  const statusTone = tracking.status === "blocked_reauthorization" || tracking.status === "permission_required" ? "bg-red-50 text-red-800" : tracking.status === "complete" ? "bg-emerald-50 text-emerald-800" : "bg-violet-50 text-violet-900";
+  const label: Record<string, string> = {
+    pending: "Scheduled", running: "Capturing", retry: "Retry scheduled", completed: "Captured",
+    missed: "Missed — no historical data created", cancelled: "Cancelled",
+    blocked_reauthorization: "Reconnect required", permission_required: "Insights permission required",
+    unavailable: "Post unavailable",
+  };
+  return <Card>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-black">Post-publish tracking</h2><p className="mt-1 text-xs text-[#746b82]">Separate cumulative snapshots at 1h, 3h, 6h, 12h and 24h after publishing.</p></div><span className="rounded-full bg-[#eee8fa] px-3 py-1 text-xs font-black text-[#5b21b6]">FIRST 24 HOURS</span></div>
+    <p className={`mt-4 rounded-xl p-3 text-sm ${statusTone}`}>{statusMessage}</p>
+    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{tracking.milestones.map((milestone) => {
+      const snapshot = milestone.snapshot;
+      const partial = snapshot?.metric_status && Object.values(snapshot.metric_status).some((value) => value !== "available");
+      return <div key={milestone.target_hour} className={`rounded-2xl border p-4 ${milestone.target_hour === 24 ? "border-violet-400 bg-violet-50/50" : "border-[#eee8fa]"}`}>
+        <div className="flex items-center justify-between gap-2"><p className="text-xl font-black">{milestone.target_hour}h</p><span className={`rounded-full px-2 py-1 text-[10px] font-black ${milestone.status === "completed" ? "bg-emerald-100 text-emerald-800" : milestone.status === "pending" || milestone.status === "retry" || milestone.status === "running" ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-700"}`}>{label[milestone.status] ?? milestone.status}</span></div>
+        <p className="mt-3 text-[11px] leading-5 text-[#746b82]">Scheduled {new Date(milestone.scheduled_for).toLocaleString()}</p>
+        <p className="text-[11px] leading-5 text-[#746b82]">Actual {milestone.actual_captured_at ? new Date(milestone.actual_captured_at).toLocaleString() : "—"}</p>
+        {snapshot ? <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><Metric label="Reach" value={snapshot.reach} /><Metric label="Views" value={snapshot.views} /><Metric label="Likes" value={snapshot.likes} /><Metric label="Comments" value={snapshot.comments} /><Metric label="Saves" value={snapshot.saves} /><Metric label="Shares" value={snapshot.shares} /><div className="col-span-2"><Metric label="Engagement rate" value={snapshot.engagement_rate == null ? "Unable to calculate" : `${snapshot.engagement_rate}%`} /></div></div> : null}
+        {partial ? <p className="mt-3 text-[11px] font-bold text-amber-800">{Object.values(snapshot?.metric_status ?? {}).includes("permission_required") ? "Partial metrics: reconnect Instagram and grant Insights permission for restricted fields." : "Partial metrics: fields unavailable for this media type remain blank."}</p> : null}
+      </div>;
+    })}</div>
+    <p className="mt-4 text-[11px] leading-5 text-[#746b82]">Engagement rate = the sum of interaction counts actually returned (likes, comments, saves and shares) ÷ reach × 100. Unavailable fields are excluded, never treated as zero. Without positive reach or any returned interaction count, it is shown as unable to calculate.</p>
+  </Card>;
+}
 
 function Settings({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [error, setError] = useState("");
-  const [accountContext, setAccountContext] = useState("");
+  const emptyContext: AccountContext = { account_theme: "", about_this_account: "", target_audience: "", brand_voice: "", analysis_guidance: "", creation_guidance: "" };
+  const [accountContext, setAccountContext] = useState<AccountContext>(emptyContext);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   useEffect(() => {
     getAccountContext(session)
-      .then((result) => setAccountContext(result.account_context))
+      .then(setAccountContext)
       .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load account context."))
       .finally(() => setLoading(false));
   }, [session]);
@@ -586,12 +623,20 @@ function Settings({ session, onLogout }: { session: Session; onLogout: () => voi
     setSaving(true); setSaved(false); setError("");
     try {
       const result = await updateAccountContext(session, accountContext);
-      setAccountContext(result.account_context); setSaved(true);
+      setAccountContext(result); setSaved(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save account context.");
     } finally { setSaving(false); }
   };
-  return <><Title>Settings</Title><ErrorText value={error} /><div className="space-y-5"><Card><h2 className="text-lg font-black">Account context</h2><textarea disabled={loading || saving} maxLength={4000} value={accountContext} onChange={(event) => { setAccountContext(event.target.value); setSaved(false); }} className="mt-4 min-h-44 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400 disabled:opacity-60" placeholder="Describe your account, audience, topics, tone and brand voice" /><div className="mt-3 flex items-center justify-between gap-4"><p className="text-xs text-[#80778b]">{accountContext.length}/4000</p><button disabled={loading || saving} onClick={() => void saveContext()} className="rounded-xl bg-[#7c3aed] px-5 py-3 text-sm font-black text-white disabled:opacity-50">{saving ? "Saving..." : saved ? "Saved" : "Save"}</button></div></Card><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p><div className="mt-6 grid grid-cols-2 gap-3 sm:flex"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-3 py-3 text-sm font-bold sm:px-5 sm:text-base">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700 sm:px-5 sm:text-base">Delete account</button></div></Card></div></>;
+  const fields: Array<{ key: keyof AccountContext; label: string; placeholder: string; maxLength: number }> = [
+    { key: "account_theme", label: "Account Theme", placeholder: "Furry Magic Entertainment", maxLength: 300 },
+    { key: "about_this_account", label: "About This Account", placeholder: "Describe the content, formats and creator identity.", maxLength: 3000 },
+    { key: "target_audience", label: "Target Audience", placeholder: "Who this account is for", maxLength: 2000 },
+    { key: "brand_voice", label: "Brand Voice", placeholder: "Playful, creative, friendly, curious", maxLength: 1000 },
+    { key: "analysis_guidance", label: "Analysis Guidance", placeholder: "What context should help interpret content without replacing metric evidence?", maxLength: 2500 },
+    { key: "creation_guidance", label: "Creation Guidance", placeholder: "What should captions prioritize?", maxLength: 2500 },
+  ];
+  return <><Title>Settings</Title><ErrorText value={error} /><div className="space-y-5"><Card><h2 className="text-lg font-black">Account context</h2><div className="mt-5 grid gap-4 lg:grid-cols-2">{fields.map((field) => <label key={field.key} className={field.key === "account_theme" || field.key === "brand_voice" ? "" : "lg:col-span-2"}><span className="text-sm font-bold">{field.label}</span><textarea disabled={loading || saving} maxLength={field.maxLength} value={accountContext[field.key]} onChange={(event) => { setAccountContext((current) => ({ ...current, [field.key]: event.target.value })); setSaved(false); }} className="mt-2 min-h-28 w-full rounded-2xl border border-[#ddd5e8] p-4 outline-none focus:ring-2 focus:ring-violet-400 disabled:opacity-60" placeholder={field.placeholder} /><span className="mt-1 block text-right text-[11px] text-[#80778b]">{accountContext[field.key].length}/{field.maxLength}</span></label>)}</div><div className="mt-4 flex justify-end"><button disabled={loading || saving} onClick={() => void saveContext()} className="rounded-xl bg-[#7c3aed] px-5 py-3 text-sm font-black text-white disabled:opacity-50">{saving ? "Saving..." : saved ? "Saved" : "Save"}</button></div></Card><Card><p className="text-xs font-bold uppercase tracking-wider text-[#80778b]">Signed in as</p><p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p><div className="mt-6 grid grid-cols-2 gap-3 sm:flex"><button onClick={async () => { try { await logout(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Logout failed."); } }} className="rounded-xl border border-[#ddd5e8] px-3 py-3 text-sm font-bold sm:px-5 sm:text-base">Log out</button><button onClick={async () => { if (!window.confirm("Permanently delete your PostBridge account and all associated data?")) return; try { await deleteAccount(session); onLogout(); } catch (e) { setError(e instanceof Error ? e.message : "Account deletion failed."); } }} className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700 sm:px-5 sm:text-base">Delete account</button></div></Card></div></>;
 }
 
 function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
@@ -624,7 +669,7 @@ function PostAnalysisCard({ analysis }: { analysis: PostAnalysis }) {
     {output.trend && <DashboardSection title="Post metric history"><p className="rounded-xl bg-[#f7f5ff] p-3 text-sm leading-6">{output.trend.summary}</p><p className="mt-2 text-xs text-[#746b82]">{output.trend.observation_count} observations · {output.trend.span_hours} hours · This does not measure account growth.</p></DashboardSection>}
     {output.evidence_quality ? <DashboardSection title="Evidence quality"><div className="flex flex-wrap items-end gap-4"><p className="text-4xl font-black">{output.evidence_quality.score}<span className="text-lg"> / 100</span></p><p className="pb-1 text-lg font-black text-[#6d28d9]">{output.evidence_quality.level}</p></div><p className="mt-2 text-sm leading-6 text-[#746b82]">{output.evidence_quality.meaning}</p><div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{output.evidence_quality.inputs.map((item) => <div key={item.name} className="rounded-xl bg-[#f7f5ff] px-3 py-2 text-sm"><div className="flex justify-between gap-2"><span>{item.available ? "✓" : "—"} {item.name}</span><span className="font-bold text-[#80778b]">{item.earned}/{item.weight}</span></div>{item.detail && <p className="mt-1 text-xs text-[#80778b]">{item.detail}</p>}</div>)}</div></DashboardSection> : output.confidence && <DashboardSection title="Legacy AI confidence"><p className="text-sm text-[#746b82]">This older report used input availability as a confidence score. Run a new analysis for evidence quality.</p></DashboardSection>}
     {output.data_gaps?.length ? <DashboardSection title="Missing evidence"><div className="space-y-2">{output.data_gaps.map((item) => <p key={item} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950">— {item}</p>)}</div></DashboardSection> : null}
-    <p className="text-[11px] text-[#80778b]">Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}</p>
+    <p className="text-[11px] text-[#80778b]">Snapshot {analysis.source_snapshot_id.slice(0, 8)} · {new Date(analysis.created_at).toLocaleString()} · {analysis.model_name}{analysis.content_payload.account_context_relevance ? ` · Account context: ${analysis.content_payload.account_context_relevance}` : ""}</p>
   </div>;
 }
 function DashboardSection({ title, children }: { title: string; children: ReactNode }) { return <Card><h3 className="mb-4 text-lg font-black">{title}</h3><div className="space-y-2">{children}</div></Card>; }

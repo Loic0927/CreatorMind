@@ -54,6 +54,36 @@ services:
       start_period: 30s
     logging: *default-logging
 
+  tracking-worker:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    image: creatormind-api:oci
+    restart: unless-stopped
+    init: true
+    env_file: [.env.oci]
+    environment:
+      POSTBRIDGE_ENV: production
+      POSTBRIDGE_RUN_MIGRATIONS: "false"
+    command: ["python", "-m", "backend.tracking_worker", "run", "--poll-seconds", "${POSTBRIDGE_TRACKING_POLL_SECONDS:-60}"]
+    volumes:
+      - ${OCI_PRIVATE_KEY_HOST_PATH:-./deploy/oci/empty-oci-key}:/run/secrets/oci_api_key.pem:ro
+      - ${OCI_CONFIG_HOST_PATH:-./deploy/oci/empty-oci-config}:/run/secrets/oci_config:ro
+    networks: [proxy, data]
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.tracking_worker", "healthcheck", "--max-age-seconds", "180"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    logging: *default-logging
+
   frontend:
     platform: linux/arm64
     build:

@@ -158,7 +158,14 @@ class ContentRepository:
 
     @staticmethod
     def _snapshot(item: InstagramInsightSnapshotRecord) -> InstagramInsightSnapshot:
-        return InstagramInsightSnapshot(id=item.id, media_id=item.media_id, captured_at=_utc(item.captured_at), likes=item.likes, comments=item.comments, saves=item.saves, shares=item.shares, reach=item.reach, views=item.views, engagement_rate=item.engagement_rate, raw_metrics=item.raw_metrics or {})
+        return InstagramInsightSnapshot(
+            id=item.id, media_id=item.media_id, captured_at=_utc(item.captured_at),
+            likes=item.likes, comments=item.comments, saves=item.saves, shares=item.shares,
+            reach=item.reach, views=item.views, engagement_rate=item.engagement_rate,
+            raw_metrics=item.raw_metrics or {}, metric_status=item.metric_status or {},
+            collection_type=item.collection_type, target_hour=item.target_hour,
+            scheduled_for=_utc(item.scheduled_for) if item.scheduled_for else None,
+        )
 
     @staticmethod
     def _analysis(item: TrackedPostAnalysisRecord) -> TrackedPostAnalysis:

@@ -11,7 +11,6 @@ type AuditFormState = {
   url: string;
   platform: string;
   caption: string;
-  hashtags: string;
   views: string;
   likes: string;
   comments: string;
@@ -25,7 +24,6 @@ const initialForm: AuditFormState = {
   url: "",
   platform: "",
   caption: "",
-  hashtags: "",
   views: "",
   likes: "",
   comments: "",
@@ -34,13 +32,6 @@ const initialForm: AuditFormState = {
   retentionRate: "",
   assetFilename: ""
 };
-
-function splitHashtags(value: string) {
-  return value
-    .split(/[,\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
 
 function toOptionalNumber(value: string) {
   return value.trim() === "" ? undefined : Number(value);
@@ -111,12 +102,11 @@ export default function PredictionForm() {
     setLoading(true);
     setError("");
 
-    const hashtags = splitHashtags(formData.hashtags);
     const payload = {
       url: formData.url,
       platform: formData.platform || undefined,
       caption: formData.caption || undefined,
-      hashtags,
+      hashtags: [],
       views: toOptionalNumber(formData.views),
       likes: toOptionalNumber(formData.likes),
       comments: toOptionalNumber(formData.comments),
@@ -138,7 +128,7 @@ export default function PredictionForm() {
           url: formData.url,
           platform: formData.platform || undefined,
           caption: formData.caption || undefined,
-          hashtags
+          hashtags: []
         },
         result: auditResult,
         createdAt: new Date().toISOString()
@@ -309,18 +299,6 @@ export default function PredictionForm() {
                         onChange={handleChange}
                         rows={5}
                         placeholder="Optional. Add the visible caption text if the URL alone does not expose enough detail."
-                        className="w-full rounded-xl bg-[#f2f3ff] px-5 py-4 text-sm text-[#131b2e]"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-2 block text-xs font-bold uppercase tracking-[0.2em] text-[#464555]">
-                        Hashtags
-                      </label>
-                      <input
-                        name="hashtags"
-                        value={formData.hashtags}
-                        onChange={handleChange}
-                        placeholder="#ai #marketing #shortform"
                         className="w-full rounded-xl bg-[#f2f3ff] px-5 py-4 text-sm text-[#131b2e]"
                       />
                     </div>

@@ -58,7 +58,7 @@ export default function AnalysisResults({
           <div className="grid gap-8 xl:grid-cols-[1.2fr_0.8fr]">
             <div className="space-y-8">
               <div className="rounded-[2rem] bg-white p-8 shadow-sm ring-1 ring-[#e2e7ff] md:p-10">
-                <div className="grid gap-4 md:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2">
                   <MetricCard
                     label="Current Views"
                     value={
@@ -72,11 +72,6 @@ export default function AnalysisResults({
                     label="Caption Length"
                     value={String(auditResult.metrics_summary.caption_length)}
                     tone="secondary"
-                  />
-                  <MetricCard
-                    label="Hashtag Count"
-                    value={String(auditResult.metrics_summary.hashtags.length)}
-                    tone="tertiary"
                   />
                 </div>
 
@@ -96,12 +91,6 @@ export default function AnalysisResults({
                       {auditResult.metrics_summary.missing_metrics.length > 0
                         ? auditResult.metrics_summary.missing_metrics.join(", ")
                         : "None"}
-                    </p>
-                    <p>
-                      <span className="font-bold">Hashtags:</span>{" "}
-                      {auditResult.metrics_summary.hashtags.length > 0
-                        ? auditResult.metrics_summary.hashtags.join(", ")
-                        : "No hashtags provided"}
                     </p>
                   </div>
                 </div>

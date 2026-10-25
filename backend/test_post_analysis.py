@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend.services.account_context import AccountContextFields, serialize_account_context
 from backend.services.post_analysis import PostAnalysisError, analyze_post
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia
 
@@ -80,6 +81,28 @@ def test_analysis_reports_limited_sample_median_basis_and_real_data_range():
     assert "audience retention" in received["prompt"].lower()
     assert "beginner-friendly magic education" in received["prompt"].lower()
     assert result.content_payload["account_context_used"] is True
+    assert result.content_payload["account_context_relevance"] == "related"
+
+
+def test_analysis_ignores_account_context_when_post_is_unrelated():
+    prompts = []
+    context = serialize_account_context(AccountContextFields(
+        account_theme="Landscape photography",
+        about_this_account="Mountain travel photography",
+        analysis_guidance="Focus on camera composition.",
+    ))
+
+    result = analyze_post(
+        _media(), [_snapshot("snapshot-1", 0, 100, 10)],
+        account_context=context,
+        generator=lambda prompt, **kwargs: prompts.append(prompt) or _model_output(),
+        image_loader=lambda url: None,
+        model_name="test-model",
+    )
+
+    assert result.content_payload["account_context_used"] is False
+    assert result.content_payload["account_context_relevance"] == "none"
+    assert "Landscape photography" not in prompts[0]
 
 
 def test_evidence_quality_drops_for_missing_retention_history_and_metrics():

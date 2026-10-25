@@ -1,4 +1,3 @@
-import re
 from typing import Any
 
 
@@ -16,29 +15,11 @@ BENEFIT_KEYWORDS = {
 }
 
 
-def normalize_hashtags(raw_hashtags: list[str] | None) -> list[str]:
-    if not raw_hashtags:
-        return []
-
-    normalized: list[str] = []
-    for tag in raw_hashtags:
-        cleaned = tag.strip()
-        if not cleaned:
-            continue
-        normalized.append(cleaned if cleaned.startswith("#") else f"#{cleaned}")
-    return normalized
-
-
-def token_set(text: str) -> set[str]:
-    return set(re.findall(r"[a-zA-Z]{3,}", text.lower()))
-
-
 def build_content_audit(
     *,
     platform: str,
     content_type: str,
     caption: str,
-    hashtags: list[str],
     metrics: dict[str, Any],
     prediction_signal: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -56,8 +37,6 @@ def build_content_audit(
     average_watch_time = metrics.get("average_watch_time")
 
     caption_length = len(caption.strip())
-    hashtag_count = len(hashtags)
-
     if caption_length == 0:
         underperforming.append("No caption text was provided, so value communication is limited.")
         likely_cause.append("Without caption context, the post may lack a clear benefit statement or framing.")
@@ -68,20 +47,6 @@ def build_content_audit(
         recommended_changes.append("Expand the caption with a direct benefit statement or concrete takeaway.")
     elif 80 <= caption_length <= 180:
         what_is_working.append("Caption length is strong enough to communicate context without feeling overloaded.")
-
-    caption_tokens = token_set(caption)
-    hashtag_tokens = {tag.lower().lstrip("#") for tag in hashtags}
-
-    if hashtag_count == 0:
-        underperforming.append("No hashtags were provided, so discovery support is limited.")
-        likely_cause.append("The post has no additional topical labels to help discovery outside existing audience reach.")
-        recommended_changes.append("Add a small set of relevant topic hashtags tied to the actual content theme.")
-    elif caption_tokens and hashtag_tokens and not any(token in caption_tokens for token in hashtag_tokens):
-        underperforming.append("Hashtags do not appear to align with the visible caption theme.")
-        likely_cause.append("The tag set may be generic or disconnected from the actual subject matter of the post.")
-        recommended_changes.append("Replace broad hashtags with tags that repeat the real topic, audience, or promised outcome.")
-    else:
-        what_is_working.append("Hashtags appear aligned enough to support the post theme.")
 
     if content_type in {"Post", "Story"}:
         underperforming.append("This content type is less discoverable than short-form video on most current platforms.")

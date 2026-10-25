@@ -17,6 +17,7 @@ from backend.services.instagram import (
     engagement_rate,
     exchange_authorization_code,
     exchange_long_lived_token,
+    fetch_instagram_media_insights,
     refresh_long_lived_token,
     safe_raw_metrics,
 )
@@ -232,6 +233,21 @@ def test_callback_profile_failure_redirects_with_safe_code(monkeypatch):
     assert "secret" not in response.headers["location"]
 
 
+def test_callback_requires_professional_account(monkeypatch):
+    state = create_oauth_state("owner@example.test")
+    monkeypatch.setattr(instagram_api, "exchange_authorization_code", lambda code: {"access_token": "short-secret"})
+    monkeypatch.setattr(instagram_api, "exchange_long_lived_token", lambda token: {"access_token": "long-secret"})
+    monkeypatch.setattr(instagram_api, "fetch_instagram_profile", lambda token: {
+        "id": "ig-personal", "username": "personal", "account_type": "PERSONAL", "media_count": 1,
+    })
+
+    response = instagram_api.connect_callback(code="private-code", state=state)
+
+    assert response.headers["location"].endswith(
+        "?status=error&code=instagram_professional_account_required"
+    )
+
+
 def test_invalid_and_replayed_state_redirect_with_safe_code():
     invalid = instagram_api.connect_callback(code="private-code", state="invalid")
     assert invalid.headers["location"].endswith("?status=error&code=invalid_oauth_state")
@@ -351,11 +367,49 @@ def test_media_upstream_success_and_error(monkeypatch, instagram_environment):
 
 
 def test_engagement_rate_handles_zero_reach_and_partial_metrics():
-    assert engagement_rate({"reach": 0, "likes": 4}) == 0
+    assert engagement_rate({"reach": 0, "likes": 4}) is None
+    assert engagement_rate({"reach": 100}) is None
     assert engagement_rate(
         {"reach": 100, "likes": 4, "comments": 1, "saves": None, "shares": 2}
     ) == 7
     assert safe_raw_metrics({"reach": 4, "access_token": "secret"}) == {"reach": 4}
+
+
+def test_media_insights_preserve_partial_metric_availability(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        metric = kwargs.get("query", {}).get("metric")
+        if metric is None:
+            return {"like_count": 4, "comments_count": 1}
+        if metric == "reach":
+            return {"data": [{"total_value": {"value": 100}}]}
+        if metric == "views":
+            return {"data": [{"total_value": {"value": 120}}]}
+        if metric == "shares":
+            raise InstagramServiceError("instagram_permission_required", "safe", 403)
+        raise InstagramServiceError("instagram_request_rejected", "safe", 400)
+
+    monkeypatch.setattr(instagram, "_request_json", fake_request)
+    result = fetch_instagram_media_insights("secret", "media-1", "IMAGE")
+
+    assert result["likes"] == 4
+    assert result["comments"] == 1
+    assert result["reach"] == 100
+    assert result["views"] == 120
+    assert "saves" not in result and "shares" not in result
+    assert result["_metric_status"]["saves"] == "unavailable"
+    assert result["_metric_status"]["shares"] == "permission_required"
+    assert engagement_rate(result) == 5.0
+
+
+def test_media_insights_do_not_swallow_invalid_token(monkeypatch):
+    monkeypatch.setattr(instagram, "_request_json", lambda *args, **kwargs: (_ for _ in ()).throw(
+        InstagramServiceError("instagram_token_invalid", "safe", 401)
+    ))
+
+    with pytest.raises(InstagramServiceError) as failure:
+        fetch_instagram_media_insights("secret", "media-1", "VIDEO")
+
+    assert failure.value.code == "instagram_token_invalid"
 
 
 def test_seven_day_aggregation_uses_latest_snapshot_and_unavailable_metrics():

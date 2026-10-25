@@ -1,6 +1,6 @@
 # OCI production deployment (Sydney)
 
-This runbook deploys the Next.js web app, FastAPI API, PostgreSQL, and Nginx on one Ubuntu Ampere A1 VM with Docker Compose. Nginx serves `postbridge.dev`, redirects `www.postbridge.dev`, and proxies `api.postbridge.dev`; only ports 80 and 443 are public. The Expo app uses the same API through `EXPO_PUBLIC_API_URL`. The existing AWS and local-development paths remain available.
+This runbook deploys the Next.js web app, FastAPI API, independent Instagram tracking worker, PostgreSQL, and Nginx on one Ubuntu Ampere A1 VM with Docker Compose. Nginx serves `postbridge.dev`, redirects `www.postbridge.dev`, and proxies `api.postbridge.dev`; only ports 80 and 443 are public. The Expo app uses the same API through `EXPO_PUBLIC_API_URL`. The existing AWS and local-development paths remain available.
 
 ## 1. OCI account and network
 
@@ -63,7 +63,7 @@ Required production variables:
 - OCI media: `POSTBRIDGE_MEDIA_STORAGE`, `OCI_REGION`, `OCI_NAMESPACE`, `OCI_BUCKET_NAME`, plus either `OCI_CONFIG_FILE`/`OCI_CONFIG_PROFILE` or `OCI_USER_OCID`, `OCI_TENANCY_OCID`, `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY_PATH`; Compose also needs `OCI_PRIVATE_KEY_HOST_PATH`.
 - TLS: `CERTBOT_EMAIL`.
 
-Feature-dependent variables are `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_OAUTH_REDIRECT_URI`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
+Feature-dependent variables are `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_OAUTH_REDIRECT_URI`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `POSTBRIDGE_TRACKING_POLL_SECONDS`, `POSTBRIDGE_TRACKING_BATCH_SIZE`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
 
 ## 6. Build, migrate, and start
 
@@ -74,7 +74,7 @@ docker compose --env-file .env.oci -f docker-compose.oci.yml config --quiet
 sh scripts/oci/deploy.sh
 ```
 
-The API entrypoint also migrates before Gunicorn starts, making normal restarts safe. The Next.js public API URL is embedded during the frontend image build, so changing `POSTBRIDGE_PUBLIC_API_URL` requires rebuilding `frontend`. There is currently no application-admin model or admin command, so no admin user is applicable.
+The API entrypoint migrates before Gunicorn starts. The `tracking-worker` waits for the healthy API, uses the same immutable backend image, does not run migrations itself, and is restarted by Docker independently of Gunicorn. The Next.js public API URL is embedded during the frontend image build, so changing `POSTBRIDGE_PUBLIC_API_URL` requires rebuilding `frontend`. There is currently no application-admin model or admin command, so no admin user is applicable.
 
 ## 7. DNS and HTTPS
 
@@ -116,16 +116,17 @@ curl --fail "https://postbridge.dev/"
 curl --fail "https://api.postbridge.dev/health"
 curl --head "https://www.postbridge.dev/"
 docker compose --env-file .env.oci -f docker-compose.oci.yml ps
-docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=200 frontend app nginx db
+docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=200 frontend app tracking-worker nginx db
+docker compose --env-file .env.oci -f docker-compose.oci.yml exec tracking-worker python -m backend.tracking_worker status
 ```
 
-Restart `db` and verify application data remains to test the named PostgreSQL volume. Upload a permitted screenshot below both configured size limits. For OCI media, run a non-sensitive test upload through the adapter and verify the object in the private bucket; the present application does not persist screenshot uploads, so enabling the adapter does not change that API behavior.
+The worker should be `healthy`; its status command returns safe job counts grouped by state. Follow its logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200 tracking-worker`. Alert on repeated unhealthy restarts, `retry` growth, or persistent `blocked_reauthorization` / `permission_required` counts. No host cron or systemd timer is needed for post tracking; the restart-safe Compose service is the scheduler. Restart `db` and verify application data remains to test the named PostgreSQL volume. Upload a permitted screenshot below both configured size limits. For OCI media, run a non-sensitive test upload through the adapter and verify the object in the private bucket; the present application does not persist screenshot uploads, so enabling the adapter does not change that API behavior.
 
 In Meta and Google consoles, register the exact HTTPS Instagram and YouTube callback URLs. Verify connect, denial, invalid state, reconnect, and mobile deep-link/user experience. Also verify any Instagram/X webhook URL and signing secret actually implemented by the product; this repository currently has Instagram OAuth/API routes but no X integration or inbound webhook route, so those cannot be validated here. Do not assume provider-side configuration from a healthy API.
 
 ## 9. Operations, updates, and rollback
 
-View logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200`. Stop containers while preserving data with `docker compose --env-file .env.oci -f docker-compose.oci.yml stop`. Never use `down -v` unless intentionally deleting data.
+View logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200`. Stop containers while preserving data with `docker compose --env-file .env.oci -f docker-compose.oci.yml stop`. Never use `down -v` unless intentionally deleting data. To process a due batch during diagnosis without starting a second daemon, stop the worker first, then run `docker compose --env-file .env.oci -f docker-compose.oci.yml run --rm tracking-worker python -m backend.tracking_worker once`.
 
 Before update, create and verify a backup, record the current Git commit/image tag, pull the intended revision, build, migrate, and run `scripts/oci/update.sh`. For rollback, restore the previous Git revision/image, review migration downgrade safety, start the prior app, and restore a database dump only when schema/data compatibility requires it. Database restore is destructive and is intentionally confirmation-gated.
 

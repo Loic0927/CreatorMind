@@ -41,6 +41,9 @@ def test_oci_compose_keeps_app_and_database_private():
     assert '"80:80"' in compose
     assert '"443:443"' in compose
     assert "  frontend:" in compose
+    assert "  tracking-worker:" in compose
+    assert 'backend.tracking_worker", "run"' in compose
+    assert 'backend.tracking_worker", "healthcheck"' in compose
     assert "dockerfile: Dockerfile.frontend" in compose
     assert "NEXT_PUBLIC_API_BASE_URL" in compose
     assert "headers={'Host': os.environ['POSTBRIDGE_API_DOMAIN']}" in compose
@@ -65,6 +68,15 @@ def test_oci_production_image_is_non_root_and_has_entrypoint():
     dockerfile = (ROOT / "Dockerfile.production").read_text(encoding="utf-8")
     assert "USER creatormind" in dockerfile
     assert 'ENTRYPOINT ["/app/scripts/oci/entrypoint.sh"]' in dockerfile
+
+
+def test_oci_backup_upload_preserves_private_dump_permissions():
+    script = (ROOT / "scripts" / "oci" / "backup-postgres.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "umask 077" in script
+    assert '--user "$(id -u):$(id -g)"' in script
+    assert "chmod 644" not in script
 
 
 def test_oci_frontend_image_is_standalone_and_non_root():
