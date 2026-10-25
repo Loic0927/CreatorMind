@@ -100,13 +100,19 @@ def process_job(repository: TrackingRepository, job: InstagramInsightCollectionJ
         token = _usable_token(account)
         metrics = fetch_instagram_media_insights(token, media.instagram_media_id, media.media_type)
         captured_at = datetime.now(timezone.utc)
+        metric_status = dict(metrics.get("_metric_status") or {})
+        for name in ("likes", "comments", "saves", "shares", "reach", "views"):
+            metric_status.setdefault(
+                name,
+                "available" if isinstance(metrics.get(name), (int, float)) else "unavailable",
+            )
         snapshot = InstagramInsightSnapshot(
             id=str(uuid4()), media_id=job.media_id, captured_at=captured_at,
             likes=metrics.get("likes"), comments=metrics.get("comments"),
             saves=metrics.get("saves"), shares=metrics.get("shares"),
             reach=metrics.get("reach"), views=metrics.get("views"),
             engagement_rate=engagement_rate(metrics), raw_metrics=safe_raw_metrics(metrics),
-            metric_status=dict(metrics.get("_metric_status") or {}),
+            metric_status=metric_status,
             collection_type="milestone", target_hour=job.target_hour,
             scheduled_for=job.due_at,
         )

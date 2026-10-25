@@ -32,9 +32,6 @@ class AccountContextRequest(BaseModel):
     account_theme: str = Field(default="", max_length=300)
     about_this_account: str = Field(default="", max_length=3000)
     target_audience: str = Field(default="", max_length=2000)
-    brand_voice: str = Field(default="", max_length=1000)
-    analysis_guidance: str = Field(default="", max_length=2500)
-    creation_guidance: str = Field(default="", max_length=2500)
 
 
 @router.post("/request-code")

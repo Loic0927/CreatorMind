@@ -24,9 +24,6 @@ class AccountContextFields:
     account_theme: str = ""
     about_this_account: str = ""
     target_audience: str = ""
-    brand_voice: str = ""
-    analysis_guidance: str = ""
-    creation_guidance: str = ""
 
     def is_empty(self) -> bool:
         return not any(value.strip() for value in asdict(self).values())
@@ -48,9 +45,6 @@ def normalize_context_fields(value: AccountContextFields) -> AccountContextField
         account_theme=_clean(value.account_theme, 300),
         about_this_account=_clean(value.about_this_account, 3000),
         target_audience=_clean(value.target_audience, 2000),
-        brand_voice=_clean(value.brand_voice, 1000),
-        analysis_guidance=_clean(value.analysis_guidance, 2500),
-        creation_guidance=_clean(value.creation_guidance, 2500),
     )
 
 
@@ -79,9 +73,6 @@ def deserialize_account_context(raw: str | None) -> AccountContextFields:
         account_theme=payload.get("account_theme", ""),
         about_this_account=payload.get("about_this_account", payload.get("account_context", "")),
         target_audience=payload.get("target_audience", ""),
-        brand_voice=payload.get("brand_voice", ""),
-        analysis_guidance=payload.get("analysis_guidance", ""),
-        creation_guidance=payload.get("creation_guidance", ""),
     ))
 
 
@@ -97,18 +88,12 @@ def _keywords(value: str) -> set[str]:
     }
 
 
-def _format_sections(fields: AccountContextFields, *, mode: Literal["creation", "analysis"], reduced: bool) -> str:
-    sections: list[tuple[str, str]] = []
-    if not reduced:
-        sections.extend((
-            ("Account Theme", fields.account_theme),
-            ("About This Account", fields.about_this_account),
-            ("Target Audience", fields.target_audience),
-        ))
-    sections.append(("Brand Voice", fields.brand_voice))
-    if not reduced:
-        sections.append(("Creation Guidance" if mode == "creation" else "Analysis Guidance",
-                         fields.creation_guidance if mode == "creation" else fields.analysis_guidance))
+def _format_sections(fields: AccountContextFields) -> str:
+    sections = (
+        ("Account Theme", fields.account_theme),
+        ("About This Account", fields.about_this_account),
+        ("Target Audience", fields.target_audience),
+    )
     return "\n".join(f"{label}: {value}" for label, value in sections if value.strip())
 
 
@@ -128,11 +113,6 @@ def context_reference_for_content(
     content_keywords = _keywords(content)
     related = not theme_keywords or bool(theme_keywords & content_keywords)
     if related:
-        text = _format_sections(fields, mode=mode, reduced=False)
+        text = _format_sections(fields)
         return ContextReference(text=text, relevance="related", used=bool(text))
-
-    if mode == "creation":
-        text = _format_sections(fields, mode=mode, reduced=True)
-        return ContextReference(text=text, relevance="low", used=bool(text))
     return ContextReference(text="", relevance="none", used=False)
-

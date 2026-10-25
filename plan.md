@@ -1,8 +1,15 @@
 # PostBridge product plan
 
-Last updated: 2026-10-22
+Last updated: 2026-10-25
 Owner: PostBridge  
 Purpose: Track the work required to turn the current Instagram MVP into a multi-platform post creation, publishing, and per-post performance analysis product.
+
+## Product audience and design guardrail
+
+- PostBridge is a multi-tenant product for creators across all supported social media platforms. It is not designed around one owner, one account, one niche, or one creator's workflow.
+- User-provided captions, screenshots, account descriptions, topics, and examples are contextual examples only. Agents must not turn them into global defaults, placeholder copy, product assumptions, scoring rules, prompt instructions, or UI structure.
+- Product copy, defaults, workflows, data contracts, analysis, and recommendations must be designed from the perspective of the broad range of social media creators and content categories the app serves.
+- Account Context is the per-user customization boundary. Personal creator details may influence that creator's opted-in generation or analysis, but must never become application-wide behavior or affect other users.
 
 ## Status legend
 
@@ -13,7 +20,7 @@ Purpose: Track the work required to turn the current Instagram MVP into a multi-
 
 ## Product outcome
 
-PostBridge should let one signed-in user:
+PostBridge should let any signed-in creator:
 
 1. Create an editable post from an uploaded/selected media asset, content brief, goal, generated caption, and hashtags.
 2. Save the result as a draft before any external side effect occurs.
@@ -34,6 +41,7 @@ PostBridge should let one signed-in user:
 - Caption generation can target one or more selected platforms and uses both the content brief and an uploaded image. Publication capability is evaluated independently for every selected platform.
 - The first multimodal creation flow supports JPG, PNG, and WebP images up to 5 MB in the web client. Video understanding remains out of scope for this phase.
 - Provider credentials and access tokens remain server-side and encrypted. Client applications never receive permanent provider tokens.
+- Account Context contains only account theme, account description, and target audience. These fields must remain platform-neutral and creator-specific.
 
 ## Current verified baseline
 
@@ -192,3 +200,4 @@ PostBridge should let one signed-in user:
 - 2026-10-24: Removed thumbnail pattern tracking from Insights, including unlock progress, rankings, and the Winning formula, while preserving post thumbnails in tracked-post and Analyze views. Frontend production build and full production-image backend suite (85 passed, 1 skipped) passed.
 - 2026-10-24: Reworked account Insights around evidence-labelled observations, centralized sample/confidence thresholds, testable Content Opportunities, account-history versus context-only hashtag suggestions, and posting-time comparisons that accept only real 23–26 hour snapshots with reach. Replaced the cross-category Winning Formula with an observed combination shown only after repeated co-occurrence. Structured Account Context into theme/about/audience/voice/analysis/creation fields while retaining the existing user-scoped Text storage and legacy-value compatibility; caption generation reduces unrelated context to voice, while post analysis ignores unrelated context and never treats it as metric evidence. Documented current Instagram Login and scheduling boundaries. Full backend suite (90 passed, 1 skipped) and frontend production build passed.
 - 2026-10-24: Removed hashtag rankings, performance interpretation, recommendations, hashtag-based opportunities, prediction weighting, audit diagnosis, and automatic hashtag generation while preserving hashtag text already stored in captions and drafts. Added durable PostgreSQL-backed Instagram post-publish jobs for 1/3/6/12/24 hours, nullable evidence-based engagement rates, actual-versus-scheduled capture metadata, token refresh/reconnect handling, retry/lease/locking semantics, an independent OCI Compose tracking worker, and a responsive tracking timeline. Backend suite (103 passed, 1 skipped), migration round-trip, frontend production build, Alembic head, and Compose template validation passed.
+- 2026-10-25: Established a product-wide guardrail that PostBridge serves creators across social platforms and must not generalize from one user's examples. Reduced Account Context to platform-neutral account theme, account description, and target audience fields; personal examples remain user-scoped context rather than product defaults.

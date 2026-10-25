@@ -1,6 +1,6 @@
 # Instagram data and post-publish tracking
 
-Last reviewed: 2026-10-24
+Last reviewed: 2026-10-25
 
 ## Account type, login, and permissions
 
@@ -29,6 +29,10 @@ Before a tracking request, the worker refreshes a long-lived token when it is wi
 
 For owned media, PostBridge requests `like_count` and `comments_count`, then individually attempts the media insight metrics `reach`, `saved`, `shares`, and `views`. Metric availability varies by media/product type and current Meta API behavior. A snapshot stores only values Meta actually returned, plus a safe per-field state (`available`, `unavailable`, or `permission_required`). It never fills missing fields with zero.
 
+The current integration does not request or persist average watch time, total watch time, retention, or skip rate. Insights therefore labels those fields as not collected instead of showing synthetic values. Adding one of these fields requires confirming that Meta exposes the metric for the connected account and media type, then extending both the API client and snapshot schema.
+
+Each completed 1/3/6/12/24-hour milestone stores its own cumulative `views` value and actual capture time. `views` and `reach` are shown separately: views can include repeat viewing by the same account, while reach represents unique accounts when Meta supplies it. The UI may subtract two adjacent captured cumulative values, but labels that number as an increase between snapshots rather than exact hourly views. If either snapshot lacks `views`, or Meta revises the later cumulative counter below the earlier value, no increase is shown.
+
 The displayed formula is:
 
 ```text
@@ -56,3 +60,9 @@ Transient network/5xx errors retry with exponential backoff and deterministic ji
 ## Old posts and manual refreshes
 
 Existing snapshots are migrated as `manual_current`. A manual refresh continues to create a current cumulative snapshot and is clearly separated from milestone data. PostBridge never reconstructs past 1/3/6/12/24-hour values from a lifetime total. If tracking starts after a target's allowed window, that milestone is `missed` and no snapshot is created. Only a real completed `target_hour=24` milestone can participate in 24-hour account comparisons.
+
+## Insights comparison rules
+
+Content Opportunities separate an observed fact from a data gap and a proposed test. A proposed 24-hour metric is never described as evidence until a real milestone snapshot exists. When tracking is pending, blocked for authorization, unavailable, or missed, the page states that reason and does not substitute a manual or lifetime snapshot.
+
+Post performance ranking is restricted to posts with the same Instagram media type and a real 24-hour milestone. Posts with partial tracking or latest cumulative snapshots remain visible, but are not mixed into that ranking. Pattern confidence labels describe sample-size sufficiency only, not the probability that an observed association is correct. Untested posting windows are coverage gaps, not predicted high-performing times.

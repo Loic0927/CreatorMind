@@ -37,7 +37,14 @@ def tracking_store():
         engine.dispose()
 
 
-def _seed(factory, *, published_at: datetime, started_at: datetime, suffix: str = "1") -> str:
+def _seed(
+    factory,
+    *,
+    published_at: datetime,
+    started_at: datetime,
+    suffix: str = "1",
+    media_type: str = "IMAGE",
+) -> str:
     user_id = f"user-{suffix}"
     account_id = f"account-{suffix}"
     media_id = f"media-{suffix}"
@@ -56,7 +63,7 @@ def _seed(factory, *, published_at: datetime, started_at: datetime, suffix: str 
         ))
         session.add(InstagramMediaRecord(
             id=media_id, account_id=account_id, instagram_media_id=f"provider-{suffix}",
-            media_type="IMAGE", media_url=None, thumbnail_url=None, permalink=None,
+            media_type=media_type, media_url=None, thumbnail_url=None, permalink=None,
             caption=f"Original caption #{suffix}", published_at=published_at,
             last_synced_at=NOW,
         ))
@@ -159,10 +166,72 @@ def test_worker_completes_partial_snapshot_and_keeps_scheduled_and_actual_times(
     with factory() as session:
         snapshot = session.get(InstagramInsightSnapshotRecord, stored.snapshot_id)
         assert snapshot.engagement_rate == 5.0
+        assert snapshot.views is None
+        assert snapshot.metric_status["views"] == "unavailable"
+        assert "views" not in snapshot.raw_metrics
         assert snapshot.saves is None and snapshot.shares is None
         assert snapshot.collection_type == "milestone"
         assert snapshot.target_hour == 1
         assert snapshot.scheduled_for == job.due_at.replace(tzinfo=None)
+        assert snapshot.captured_at >= snapshot.scheduled_for
+
+
+@pytest.mark.parametrize(
+    ("target_hour", "media_type"),
+    [(1, "IMAGE"), (3, "VIDEO"), (6, "CAROUSEL_ALBUM"), (12, "VIDEO"), (24, "IMAGE")],
+)
+def test_worker_fetches_and_persists_views_for_every_milestone(
+    tracking_store, monkeypatch, target_hour, media_type
+):
+    repository, factory = tracking_store
+    current = datetime.now(timezone.utc)
+    tracked_id = _seed(
+        factory,
+        published_at=current - timedelta(hours=target_hour, minutes=5),
+        started_at=current - timedelta(hours=target_hour, minutes=5),
+        suffix=f"{target_hour}-{media_type.lower()}",
+        media_type=media_type,
+    )
+    repository.ensure_jobs_for_tracking(tracked_id, current)
+    jobs = repository.claim_due("worker-a", now=current)
+    job = next(item for item in jobs if item.target_hour == target_hour)
+    calls = []
+
+    monkeypatch.setattr(tracking_worker, "_usable_token", lambda account: "safe-token")
+
+    def fetch(token, provider_media_id, fetched_media_type):
+        calls.append((token, provider_media_id, fetched_media_type))
+        return {
+            "views": 1000 + target_hour,
+            "reach": 800 + target_hour,
+            "likes": 20,
+            "comments": 3,
+            "_metric_status": {
+                "views": "available",
+                "reach": "available",
+                "likes": "available",
+                "comments": "available",
+                "saves": "unavailable",
+                "shares": "unavailable",
+            },
+        }
+
+    monkeypatch.setattr(tracking_worker, "fetch_instagram_media_insights", fetch)
+
+    assert tracking_worker.process_job(repository, job, "worker-a") == "completed"
+    assert calls == [("safe-token", f"provider-{target_hour}-{media_type.lower()}", media_type)]
+
+    stored = next(
+        item for item in repository.jobs_for_tracking(tracked_id)
+        if item.target_hour == target_hour
+    )
+    with factory() as session:
+        snapshot = session.get(InstagramInsightSnapshotRecord, stored.snapshot_id)
+        assert snapshot.collection_type == "milestone"
+        assert snapshot.target_hour == target_hour
+        assert snapshot.views == 1000 + target_hour
+        assert snapshot.raw_metrics["views"] == 1000 + target_hour
+        assert snapshot.metric_status["views"] == "available"
         assert snapshot.captured_at >= snapshot.scheduled_for
 
 

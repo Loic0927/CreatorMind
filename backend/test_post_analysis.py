@@ -89,7 +89,7 @@ def test_analysis_ignores_account_context_when_post_is_unrelated():
     context = serialize_account_context(AccountContextFields(
         account_theme="Landscape photography",
         about_this_account="Mountain travel photography",
-        analysis_guidance="Focus on camera composition.",
+        target_audience="Outdoor photography enthusiasts",
     ))
 
     result = analyze_post(

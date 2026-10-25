@@ -77,12 +77,28 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
         account_theme="Practical magic tutorials",
         about_this_account="Beginner-friendly lessons.",
         target_audience="Beginner creators",
-        brand_voice="Clear and friendly",
-        analysis_guidance="Treat curiosity as context, not causal evidence.",
-        creation_guidance="Use simple language.",
     ), first)
 
+    assert set(saved) == {"account_theme", "about_this_account", "target_audience"}
     assert saved["account_theme"] == "Practical magic tutorials"
     assert account_context(first) == saved
     assert account_context(second)["account_theme"] == ""
     assert account_context(second)["about_this_account"] == ""
+
+
+def test_legacy_account_context_fields_are_ignored(auth_database):
+    code = request_code(EmailRequest(email="legacy@example.test"))["development_code"]
+    verified = verify_code(VerifyCodeRequest(email="legacy@example.test", code=code))
+    user = auth.authenticate_token(verified["access_token"])
+    auth.update_account_context(
+        user.id,
+        '{"version":1,"account_theme":"Travel video","about_this_account":"City guides",'
+        '"target_audience":"Weekend travellers","brand_voice":"Personal legacy value",'
+        '"analysis_guidance":"Legacy analysis value","creation_guidance":"Legacy creation value"}',
+    )
+
+    assert account_context(user) == {
+        "account_theme": "Travel video",
+        "about_this_account": "City guides",
+        "target_audience": "Weekend travellers",
+    }

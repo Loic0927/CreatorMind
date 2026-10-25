@@ -450,11 +450,25 @@ def _tracking_schedule(tracked_id: str, snapshots: list[InstagramInsightSnapshot
             "next_capture_at": None,
             "milestones": [],
         }
-    jobs = get_tracking_repository().jobs_for_tracking(tracked_id)
+    jobs = sorted(
+        get_tracking_repository().jobs_for_tracking(tracked_id),
+        key=lambda item: item.target_hour,
+    )
     by_id = {item.id: item for item in (snapshots or [])}
     milestones = []
+    previous_snapshot = None
     for job in jobs:
         snapshot = by_id.get(job.snapshot_id) if job.snapshot_id else None
+        views_since_previous_snapshot = None
+        if snapshot is not None and previous_snapshot is not None:
+            current_views = snapshot.views
+            previous_views = previous_snapshot.views
+            if (
+                isinstance(current_views, int)
+                and isinstance(previous_views, int)
+                and current_views >= previous_views
+            ):
+                views_since_previous_snapshot = current_views - previous_views
         milestones.append({
             "target_hour": job.target_hour,
             "scheduled_for": job.due_at,
@@ -463,8 +477,11 @@ def _tracking_schedule(tracked_id: str, snapshots: list[InstagramInsightSnapshot
             "attempt_count": job.attempt_count,
             "actual_captured_at": snapshot.captured_at if snapshot else None,
             "snapshot": snapshot,
+            "views_since_previous_snapshot": views_since_previous_snapshot,
             "error_code": job.last_error_code,
         })
+        if snapshot is not None:
+            previous_snapshot = snapshot
     next_jobs = [job for job in jobs if job.status in {"pending", "retry", "running"}]
     blocked = next((job.status for job in jobs if job.status in {"blocked_reauthorization", "permission_required"}), None)
     return {

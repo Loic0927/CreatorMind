@@ -21,8 +21,8 @@ def test_caption_uses_saved_account_context_when_enabled(monkeypatch):
     prompts = []
     stored = serialize_account_context(AccountContextFields(
         account_theme="Rope magic lessons",
-        brand_voice="Friendly and curious",
-        creation_guidance="Build suspense before the reveal.",
+        about_this_account="Short educational demonstrations of practical rope techniques.",
+        target_audience="People learning beginner rope magic",
     ))
     monkeypatch.setattr(main, "get_account_context", lambda user_id: stored)
     monkeypatch.setattr(main, "generate_gemini_content", lambda prompt, **kwargs: prompts.append(prompt) or "CAPTION: Try this trick\nHASHTAGS: #magic")
@@ -33,7 +33,7 @@ def test_caption_uses_saved_account_context_when_enabled(monkeypatch):
     assert result.hashtags == ""
     assert "Do not add or recommend hashtags" in prompts[0]
     assert "Rope magic lessons" in prompts[0]
-    assert "Build suspense before the reveal" in prompts[0]
+    assert "People learning beginner rope magic" in prompts[0]
 
 
 def test_caption_ignores_saved_account_context_when_disabled(monkeypatch):
@@ -46,20 +46,18 @@ def test_caption_ignores_saved_account_context_when_disabled(monkeypatch):
     assert "Must not appear" not in prompts[0]
 
 
-def test_caption_reduces_unrelated_context_to_voice(monkeypatch):
+def test_caption_ignores_unrelated_account_context(monkeypatch):
     prompts = []
     stored = serialize_account_context(AccountContextFields(
         account_theme="Landscape photography",
         about_this_account="Mountain travel photos",
-        brand_voice="Warm and concise",
-        creation_guidance="Mention camera settings",
+        target_audience="Outdoor photography enthusiasts",
     ))
     monkeypatch.setattr(main, "get_account_context", lambda user_id: stored)
     monkeypatch.setattr(main, "generate_gemini_content", lambda prompt, **kwargs: prompts.append(prompt) or "CAPTION: Test\nHASHTAGS: #test")
 
     main.mobile_caption(_request(True), _user())
 
-    assert "Warm and concise" in prompts[0]
     assert "Landscape photography" not in prompts[0]
-    assert "camera settings" not in prompts[0]
-    assert "Relevance: low" in prompts[0]
+    assert "Outdoor photography enthusiasts" not in prompts[0]
+    assert "Account context reference" not in prompts[0]

@@ -372,7 +372,10 @@ def test_engagement_rate_handles_zero_reach_and_partial_metrics():
     assert engagement_rate(
         {"reach": 100, "likes": 4, "comments": 1, "saves": None, "shares": 2}
     ) == 7
-    assert safe_raw_metrics({"reach": 4, "access_token": "secret"}) == {"reach": 4}
+    assert safe_raw_metrics({"reach": 4, "views": 9, "access_token": "secret"}) == {
+        "reach": 4,
+        "views": 9,
+    }
 
 
 def test_media_insights_preserve_partial_metric_availability(monkeypatch):
@@ -410,6 +413,148 @@ def test_media_insights_do_not_swallow_invalid_token(monkeypatch):
         fetch_instagram_media_insights("secret", "media-1", "VIDEO")
 
     assert failure.value.code == "instagram_token_invalid"
+
+
+@pytest.mark.parametrize(
+    ("media_type", "views_payload", "expected_views"),
+    [
+        ("IMAGE", None, None),
+        ("VIDEO", {"data": [{"total_value": {"value": 321}}]}, 321),
+        ("CAROUSEL_ALBUM", {"data": [{"values": [{"value": 456}]}]}, 456),
+    ],
+)
+def test_media_insights_use_provider_views_support_per_media_type(
+    monkeypatch, media_type, views_payload, expected_views
+):
+    requested_metrics = []
+
+    def fake_request(method, url, **kwargs):
+        metric = kwargs.get("query", {}).get("metric")
+        if metric is None:
+            return {"like_count": 4, "comments_count": 1}
+        requested_metrics.append(metric)
+        if metric == "reach":
+            return {"data": [{"total_value": {"value": 100}}]}
+        if metric == "views" and views_payload is not None:
+            return views_payload
+        raise InstagramServiceError("instagram_request_rejected", "safe", 400)
+
+    monkeypatch.setattr(instagram, "_request_json", fake_request)
+    result = fetch_instagram_media_insights("secret", "media-1", media_type)
+
+    assert "views" in requested_metrics
+    assert result.get("views") == expected_views
+    assert result["_metric_status"]["views"] == (
+        "available" if expected_views is not None else "unavailable"
+    )
+    assert result["_media_type"] == media_type
+
+
+def test_media_insights_transient_views_error_retries_whole_capture(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        metric = kwargs.get("query", {}).get("metric")
+        if metric is None:
+            return {"like_count": 4, "comments_count": 1}
+        if metric == "views":
+            raise InstagramServiceError("instagram_upstream_error", "safe", 502)
+        return {"data": [{"total_value": {"value": 100}}]}
+
+    monkeypatch.setattr(instagram, "_request_json", fake_request)
+
+    with pytest.raises(InstagramServiceError) as failure:
+        fetch_instagram_media_insights("secret", "media-1", "VIDEO")
+
+    assert failure.value.code == "instagram_upstream_error"
+
+
+def test_tracking_schedule_calculates_only_adjacent_snapshot_view_increases(monkeypatch):
+    captured = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    snapshots = [
+        InstagramInsightSnapshot(
+            id="snapshot-1", media_id="media-1", captured_at=captured,
+            views=100, raw_metrics={"views": 100}, collection_type="milestone",
+            target_hour=1, scheduled_for=captured,
+        ),
+        InstagramInsightSnapshot(
+            id="snapshot-3", media_id="media-1", captured_at=captured + timedelta(hours=2),
+            views=160, raw_metrics={"views": 160}, collection_type="milestone",
+            target_hour=3, scheduled_for=captured + timedelta(hours=2),
+        ),
+        InstagramInsightSnapshot(
+            id="snapshot-6", media_id="media-1", captured_at=captured + timedelta(hours=5),
+            views=None, raw_metrics={}, metric_status={"views": "unavailable"},
+            collection_type="milestone", target_hour=6,
+            scheduled_for=captured + timedelta(hours=5),
+        ),
+    ]
+    jobs = [
+        SimpleNamespace(
+            target_hour=target_hour,
+            due_at=captured + timedelta(hours=target_hour - 1),
+            deadline_at=captured + timedelta(hours=target_hour),
+            next_attempt_at=captured,
+            status="completed",
+            attempt_count=1,
+            snapshot_id=snapshot_id,
+            last_error_code=None,
+        )
+        for target_hour, snapshot_id in ((1, "snapshot-1"), (3, "snapshot-3"), (6, "snapshot-6"))
+    ]
+    monkeypatch.setattr(instagram_api, "_automatic_tracking_available", lambda: True)
+    monkeypatch.setattr(
+        instagram_api,
+        "get_tracking_repository",
+        lambda: SimpleNamespace(jobs_for_tracking=lambda tracked_id: list(reversed(jobs))),
+    )
+
+    schedule = instagram_api._tracking_schedule("tracked-1", list(reversed(snapshots)))
+
+    assert [item["target_hour"] for item in schedule["milestones"]] == [1, 3, 6]
+    assert [item["views_since_previous_snapshot"] for item in schedule["milestones"]] == [
+        None,
+        60,
+        None,
+    ]
+    assert schedule["milestones"][1]["actual_captured_at"] == snapshots[1].captured_at
+
+
+def test_tracking_schedule_never_substitutes_latest_manual_views_for_a_milestone(monkeypatch):
+    captured = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    manual_snapshot = InstagramInsightSnapshot(
+        id="manual-current",
+        media_id="media-1",
+        captured_at=captured,
+        views=9999,
+        raw_metrics={"views": 9999},
+        metric_status={"views": "available"},
+        collection_type="manual_current",
+        target_hour=None,
+        scheduled_for=None,
+    )
+    job = SimpleNamespace(
+        target_hour=1,
+        due_at=captured - timedelta(hours=2),
+        deadline_at=captured - timedelta(hours=1, minutes=30),
+        next_attempt_at=captured - timedelta(hours=2),
+        status="missed",
+        attempt_count=0,
+        snapshot_id=None,
+        last_error_code="collection_window_missed",
+    )
+    monkeypatch.setattr(instagram_api, "_automatic_tracking_available", lambda: True)
+    monkeypatch.setattr(
+        instagram_api,
+        "get_tracking_repository",
+        lambda: SimpleNamespace(jobs_for_tracking=lambda tracked_id: [job]),
+    )
+
+    schedule = instagram_api._tracking_schedule("tracked-1", [manual_snapshot])
+
+    milestone = schedule["milestones"][0]
+    assert milestone["status"] == "missed"
+    assert milestone["snapshot"] is None
+    assert milestone["actual_captured_at"] is None
+    assert milestone["views_since_previous_snapshot"] is None
 
 
 def test_seven_day_aggregation_uses_latest_snapshot_and_unavailable_metrics():

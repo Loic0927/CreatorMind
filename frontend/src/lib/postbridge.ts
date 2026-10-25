@@ -27,6 +27,7 @@ export type TrackingMilestone = {
   attempt_count: number;
   actual_captured_at?: string | null;
   snapshot?: InsightSnapshot | null;
+  views_since_previous_snapshot?: number | null;
   error_code?: string | null;
 };
 export type PostPublishTracking = {
@@ -67,7 +68,7 @@ export type PostAnalysis = {
 };
 export type TrackedPost = {
   tracking: { id: string };
-  media: { id: string; media_type?: string; caption: string; media_url?: string; thumbnail_url?: string; published_at: string };
+  media: { id: string; media_type?: string; caption: string; media_url?: string; thumbnail_url?: string; permalink?: string | null; published_at: string };
   latest?: InsightSnapshot;
   snapshots?: InsightSnapshot[];
   analyses?: PostAnalysis[];
@@ -98,28 +99,63 @@ export type PatternInsight = {
   benchmark: string;
   confidence: "LOW" | "MEDIUM" | "HIGH";
   confidence_label: string;
+  confidence_meaning: string;
   evidence: string;
   metric_label: string;
+  distribution: { minimum: number; median: number; maximum: number };
+  difference_interpretation: string;
   category?: string | null;
 };
 export type AccountContext = {
   account_theme: string;
   about_this_account: string;
   target_audience: string;
-  brand_voice: string;
-  analysis_guidance: string;
-  creation_guidance: string;
 };
 export type ContentOpportunity = {
   title: string;
-  status: "HYPOTHESIS";
-  evidence: string;
+  priority: number;
+  status: "DATA_GAP" | "HYPOTHESIS";
+  current_observation: string;
   sample_size: number;
-  action: string;
-  metric_to_watch: string;
-  success_criteria: string;
-  potential_effect: number | null;
-  potential_effect_label: string;
+  observation_period: { start?: string | null; end?: string | null };
+  data_gap: string;
+  suggested_test: string;
+  primary_variable: string;
+  tracking_metric: string;
+  capture_timing: string;
+  decision_method: string;
+  repetitions_required: number;
+  effect_estimate: number | null;
+  effect_estimate_label: string;
+};
+export type PerformanceMetrics = { views: number | null; reach: number | null; likes: number | null; comments: number | null; saves: number | null; shares: number | null; engagement_rate: number | null };
+export type PerformanceMilestone = {
+  target_hour: 1 | 3 | 6 | 12 | 24;
+  status: string;
+  scheduled_for?: string | null;
+  captured_at?: string | null;
+  tracking_period_hours?: number | null;
+  metrics?: PerformanceMetrics | null;
+  metric_status: Record<string, "available" | "unavailable" | "permission_required">;
+  views_since_previous_snapshot?: number | null;
+};
+export type PerformancePost = {
+  tracked_post_id?: string | null;
+  instagram_media_id: string;
+  permalink?: string | null;
+  media_type: string;
+  media_type_label: string;
+  topic: string;
+  published_at: string;
+  posting_window: string;
+  caption_excerpt: string;
+  observation_kind: "24-hour milestone" | "Latest cumulative snapshot" | "No snapshot";
+  snapshot_captured_at?: string | null;
+  tracking_period_hours?: number | null;
+  metrics?: PerformanceMetrics | null;
+  metric_status: Record<string, "available" | "unavailable" | "permission_required">;
+  milestones: PerformanceMilestone[];
+  comparison?: { rank: number; group_size: number; metric: "views" | "reach"; group: string } | null;
 };
 export type AccountInsights = {
   sample_size: number;
@@ -127,13 +163,22 @@ export type AccountInsights = {
   enough_data: boolean;
   heading: string;
   sample_notice: string;
+  confidence_explanation: string;
   observation_period: { start?: string | null; end?: string | null; timezone: string };
   progress: { patterns: number; posting_times: number };
   patterns: PatternInsight[];
   posting_time_insights: PatternInsight[];
   untested_posting_windows: string[];
   posting_time_metadata: { timezone: string; period_start?: string | null; period_end?: string | null; metric: string; complete_posts: number; incomplete_posts: number };
-  tracking_24h: { available: boolean; complete_posts: number; total_posts: number; target_hours: number[]; automatic_collection: boolean; status: "LIMITED" | "AVAILABLE"; message: string };
+  tracking_24h: { available: boolean; complete_posts: number; total_posts: number; target_hours: number[]; automatic_collection: boolean; pending_posts: number; blocked_posts: number; unavailable_posts: number; status: "LIMITED" | "AVAILABLE"; message: string; reason: string };
+  metric_capabilities: {
+    account_requirement: string;
+    required_scope: string;
+    definitions: { views: string; reach: string };
+    currently_collected: string[];
+    advanced_metrics: Array<{ key: string; status: "not_collected"; reason: string }>;
+  };
+  performance_posts: PerformancePost[];
   content_opportunities: ContentOpportunity[];
   tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
 };
