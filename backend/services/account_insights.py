@@ -35,35 +35,42 @@ def _analysis(item: dict[str, Any]) -> Any | None:
 
 
 def _tokens(caption: str) -> list[str]:
-    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]{2,}", caption) if token.lower() not in _STOPWORDS]
+    cleaned = re.sub(r"(?<!\w)[#@][\w'-]+", " ", caption)
+    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]{2,}", cleaned) if token.lower() not in _STOPWORDS]
 
 
 def generate_account_themes(items: list[dict[str, Any]]) -> list[str]:
-    """Derive 3-8 reusable labels from this account's analyzed caption corpus."""
+    """Derive 3-5 disjoint labels, each grounded in at least two account posts."""
     captions = [item["media"].caption or "" for item in items if item.get("media") and _analysis(item)]
-    token_docs: Counter[str] = Counter()
-    phrase_docs: Counter[str] = Counter()
-    for caption in captions:
+    candidate_docs: dict[str, set[int]] = defaultdict(set)
+    for index, caption in enumerate(captions):
         words = _tokens(caption)
-        token_docs.update(set(words))
-        phrase_docs.update(set(" ".join(pair) for pair in zip(words, words[1:])))
-    candidates: list[tuple[int, int, str]] = []
-    for phrase, count in phrase_docs.items():
-        candidates.append((count, 2, phrase))
-    for token, count in token_docs.items():
-        candidates.append((count, 1, token))
-    candidates.sort(key=lambda value: (-value[0], -value[1], value[2]))
+        for token in set(words):
+            candidate_docs[token].add(index)
+        for phrase in set(" ".join(pair) for pair in zip(words, words[1:])):
+            candidate_docs[phrase].add(index)
+    candidates = sorted(
+        ((len(documents), len(candidate.split()), candidate, documents) for candidate, documents in candidate_docs.items() if len(documents) >= 2),
+        key=lambda value: (-value[0], -value[1], value[2]),
+    )
     selected: list[str] = []
-    used_tokens: set[str] = set()
-    for _, _, candidate in candidates:
-        candidate_tokens = set(candidate.split())
-        if len(selected) >= 3 and candidate_tokens and candidate_tokens <= used_tokens:
+    unassigned = set(range(len(captions)))
+    for _, _, candidate, documents in candidates:
+        if len(documents & unassigned) < 2:
             continue
         selected.append(candidate.title())
-        used_tokens.update(candidate_tokens)
-        if len(selected) == 8:
+        unassigned -= documents
+        if len(selected) == 5:
             break
-    return selected[:8] if len(selected) >= 3 else []
+    return selected if len(selected) >= 3 else []
+
+
+def account_themes_meet_constraints(items: list[dict[str, Any]], themes: list[str]) -> bool:
+    if not 3 <= len(themes) <= 5 or len(set(themes)) != len(themes):
+        return False
+    captions = [item["media"].caption or "" for item in items if item.get("media") and _analysis(item)]
+    counts = Counter(assign_account_theme(caption, themes) for caption in captions)
+    return all(counts[theme] >= 2 for theme in themes)
 
 
 def assign_account_theme(caption: str, themes: list[str]) -> str:
@@ -216,7 +223,7 @@ def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int
     for (media_type, _), candidates in groups.items():
         metric = "views" if sum(post["metrics"].get("views") is not None for post in candidates) >= 2 else "reach"
         comparable = [post for post in candidates if post["metrics"].get(metric) is not None]
-        if len(comparable) < 2:
+        if len(comparable) < 6:
             continue
         for rank, post in enumerate(sorted(comparable, key=lambda value: value["metrics"][metric], reverse=True), start=1):
             post["comparison"] = {"rank": rank, "group_size": len(comparable), "metric": metric,
@@ -228,29 +235,59 @@ def _pattern_rows(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     eligible = [post for post in posts if post["mature"] and post["metrics"] and post["metrics"].get("engagement_rate") is not None]
     if not eligible:
         return []
-    baseline = mean(post["metrics"]["engagement_rate"] for post in eligible)
     dimensions = {"Theme": "theme", "Caption style": "caption_style", "CTA": "cta_style", "Format": "media_type_label"}
     rows = []
     for dimension, field in dimensions.items():
         groups: dict[str, list[float]] = defaultdict(list)
         for post in eligible:
-            groups[post[field]].append(post["metrics"]["engagement_rate"])
+            label = "Has CTA" if dimension == "CTA" and post[field] != "None" else "No CTA" if dimension == "CTA" else post[field]
+            groups[label].append(post["metrics"]["engagement_rate"])
         if len(groups) < 2:
             continue
+        dimension_rows = []
         for label, values in groups.items():
-            if len(values) < MIN_PATTERN_POSTS:
+            other_values = [value for other_label, group in groups.items() if other_label != label for value in group]
+            if len(values) < MIN_PATTERN_POSTS or len(other_values) < MIN_PATTERN_POSTS:
                 continue
             average = mean(values)
-            absolute = average - baseline
-            relative = absolute / baseline * 100 if baseline else None
+            other_average = mean(other_values)
+            absolute = average - other_average
+            relative = absolute / other_average * 100 if other_average else None
             if relative is None or (abs(relative) < PATTERN_RELATIVE_THRESHOLD and abs(absolute) < PATTERN_RATE_THRESHOLD):
                 continue
-            rows.append({"label": label, "category": dimension, "value": round(average, 1), "posts": len(values),
-                         "baseline": round(baseline, 1), "difference": round(absolute, 1),
-                         "metric_label": "mature lifetime engagement rate", "basis": f"{len(eligible)} mature same-account posts",
-                         "sample_note": f"Only {len(values)} posts, treat as a hint" if len(values) < 5 else f"Based on {len(values)} posts",
-                         "distribution": {"minimum": round(min(values), 1), "median": round(median(values), 1), "maximum": round(max(values), 1)}})
+            dimension_rows.append({"label": label, "category": dimension, "value": round(average, 1), "posts": len(values),
+                                   "baseline": round(other_average, 1), "comparison_posts": len(other_values), "difference": round(absolute, 1),
+                                   "metric_label": "mature lifetime engagement rate", "basis": f"{len(values)} vs {len(other_values)} mature posts",
+                                   "sample_note": f"Compared with {len(other_values)} posts in the other groups",
+                                   "distribution": {"minimum": round(min(values), 1), "median": round(median(values), 1), "maximum": round(max(values), 1)}})
+        if dimension_rows:
+            rows.append(max(dimension_rows, key=lambda row: abs(row["difference"])))
     return sorted(rows, key=lambda row: abs(row["difference"]), reverse=True)
+
+
+def _performance_summary(posts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for post in posts:
+        if post["mature"] and post.get("metrics"):
+            groups[post["media_type"]].append(post)
+    candidates = [(media_type, group) for media_type, group in groups.items() if len(group) >= MIN_PATTERN_POSTS]
+    if not candidates:
+        return None
+    media_type, group = max(candidates, key=lambda pair: len(pair[1]))
+    metric = "views" if sum(post["metrics"].get("views") is not None for post in group) >= MIN_PATTERN_POSTS else "reach"
+    comparable = [post for post in group if post["metrics"].get(metric) is not None]
+    if len(comparable) < MIN_PATTERN_POSTS:
+        return None
+    typical = median(post["metrics"][metric] for post in comparable)
+    best = max(comparable, key=lambda post: post["metrics"][metric])
+    weakest = min(comparable, key=lambda post: post["metrics"][metric])
+    label = "Reel / video" if media_type in {"VIDEO", "REELS"} else "Carousel" if media_type == "CAROUSEL_ALBUM" else "Image"
+    def item(kind: str, post: dict[str, Any]) -> dict[str, Any]:
+        value = post["metrics"][metric]
+        return {"kind": kind, "title": post["caption_excerpt"] or f"{label} post", "value": int(round(value)), "difference": int(round(value - typical))}
+    return {"media_type": media_type, "media_type_label": label, "metric": metric, "sample_size": len(comparable), "median": int(round(typical)),
+            "typical": {"kind": "typical", "title": f"Typical mature {label.lower()}", "value": int(round(typical)), "difference": 0},
+            "best": item("best", best), "weakest": item("weakest", weakest)}
 
 
 def _posting_time_rows(items: list[dict[str, Any]], timezone_offset_minutes: int) -> list[dict[str, Any]]:
@@ -297,14 +334,19 @@ def _tracking_state(items: list[dict[str, Any]], complete: int) -> dict[str, Any
 def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes: int = 0, account_context: str = "", themes: list[str] | None = None) -> dict[str, Any]:
     del account_context
     analyzed = [item for item in items if item.get("media") and _analysis(item)]
-    theme_list = list(themes or generate_account_themes(analyzed))
+    supplied_themes = list(themes or [])
+    theme_list = supplied_themes if account_themes_meet_constraints(analyzed, supplied_themes) else generate_account_themes(analyzed)
     posts = _performance_posts(items, timezone_offset_minutes, theme_list)
     patterns = _pattern_rows(posts)
+    performance_summary = _performance_summary(posts)
     posting_times = _posting_time_rows(analyzed, timezone_offset_minutes)
     complete_24h = sum(_snapshot_engagement_rate(_snapshot_at_24h(item)) is not None for item in analyzed)
     dates = sorted(_aware(item["media"].published_at) for item in analyzed)
     period = {"start": dates[0].isoformat() if dates else None, "end": dates[-1].isoformat() if dates else None}
     mature_count = sum(post["mature"] for post in posts)
+    posts_with_metrics = [post for post in posts if post.get("metrics")]
+    watch_time_count = sum(post["metrics"].get("average_watch_time_ms") is not None for post in posts_with_metrics)
+    show_average_watch_time = bool(posts_with_metrics) and watch_time_count > len(posts_with_metrics) / 2
     opportunities = []
     if mature_count < MIN_PATTERN_POSTS:
         opportunities.append({"title": "Build a mature same-format baseline", "priority": 1, "status": "DATA_GAP",
@@ -320,7 +362,7 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
         "heading": "Account insights", "sample_notice": f"{len(analyzed)} analyzed posts total; {mature_count} currently qualify for mature lifetime comparison.",
         "observation_period": {**period, "timezone": _timezone_label(timezone_offset_minutes)},
         "progress": {"patterns": len(analyzed), "posting_times": complete_24h, "mature_posts": mature_count},
-        "themes": theme_list, "theme_method": "Derived from captions across this account's analyzed posts; each post is assigned to exactly one persisted theme.",
+        "themes": theme_list, "theme_method": "Derived from repeated subjects or formats in this account; every theme has at least 2 posts and each post has one theme.",
         "patterns": patterns, "posting_time_insights": posting_times, "untested_posting_windows": [],
         "posting_time_metadata": {"timezone": _timezone_label(timezone_offset_minutes), "period_start": period["start"], "period_end": period["end"],
                                   "metric": "Optional advanced view: engagement rate from a completed 24-hour milestone", "complete_posts": complete_24h,
@@ -338,7 +380,10 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
                 {"key": "online_followers", "status": "unavailable", "reason": "Not collected yet; availability is account-level and threshold-dependent."},
             ],
         },
-        "performance_posts": posts, "content_opportunities": opportunities, "tested_combination": None,
+        "performance_posts": posts, "performance_summary": performance_summary,
+        "show_average_watch_time": show_average_watch_time,
+        "historical_backfill_note": any(post["historical_backfill_unavailable"] for post in posts),
+        "content_opportunities": opportunities, "tested_combination": None,
         "methodology": {"default_basis": "Lifetime totals after 7 days for images/carousels and 14 days for video/Reels, grouped by media format.",
                         "pattern_rule": "Patterns need at least 3 posts, real variation, and a difference above the noise threshold.",
                         "advanced_basis": "Completed 24-hour milestones are optional and never mixed with lifetime totals."},

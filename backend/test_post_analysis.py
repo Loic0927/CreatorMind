@@ -34,13 +34,16 @@ def _model_output(text: str = "The caption may have helped.") -> str:
 def test_analysis_uses_same_format_and_similar_age_without_a_score():
     result = analyze_post(_media(), [_snapshot()], peer_metrics=[_peer(1), _peer(2, media_type="VIDEO"), _peer(3, age_days=20)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
-    assert result.schema_version == "post-analysis-v4"
+    assert result.schema_version == "post-analysis-v5"
     assert "score" not in result.output_payload
     assert result.output_payload["baseline"]["sample_size"] == 1
     assert result.output_payload["baseline"]["group"] == "same_format_similar_age"
     reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
-    assert reach["rank"] == 1
-    assert reach["group_size"] == 2
+    assert reach["rank"] is None
+    assert reach["percentile"] is None
+    assert result.output_payload["what_worked"] == []
+    assert result.output_payload["what_to_improve"] == []
+    assert result.output_payload["comparison_notice"] == "Only 1 comparable post; no comparison yet."
     assert reach["basis"] == result.output_payload["baseline"]["label"]
 
 
@@ -73,15 +76,16 @@ def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
 
 
 def test_exactly_one_experiment_and_strongest_positive_metric_are_returned_for_real_gap():
-    result = analyze_post(_media(), [_snapshot(reach=160, views=180, shares=10)], peer_metrics=[_peer(index) for index in range(5)],
+    result = analyze_post(_media(), [_snapshot(reach=160, views=180, shares=10, saves=0)], peer_metrics=[_peer(index) for index in range(5)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
     assert len(result.output_payload["experiment"]) == 1
     assert result.output_payload["strongest_metric"]["percent_change"] > 0
     assert result.output_payload["what_worked"]
     experiment = result.output_payload["experiment"][0]
     assert experiment["test_variable"]
-    assert experiment["metric_to_watch"]
-    assert "Keep the change only if" in experiment["decision_rule"]
+    assert experiment["metric_to_watch"] == "saves"
+    assert experiment["metric_to_watch"] != result.output_payload["strongest_metric"]["metric"]
+    assert "Keep the change if" in experiment["decision_rule"]
 
 
 def test_unsupported_retention_explanation_is_removed():
@@ -97,5 +101,24 @@ def test_analysis_rejects_missing_snapshot_and_falls_back_for_invalid_model_outp
         analyze_post(_media(), [])
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
     result = analyze_post(_media(), [_snapshot()], generator=lambda *args, **kwargs: pytest.fail("not called"), image_loader=lambda url: None)
-    assert result.model_name == "deterministic-fallback-v4"
+    assert result.model_name == "deterministic-fallback-v5"
     assert "topic" not in result.output_payload["content_attributes"]
+
+
+def test_young_post_reports_observed_mature_same_format_reference():
+    peers = [_peer(index, age_days=20, reach=value) for index, value in enumerate((80, 100, 120))]
+    result = analyze_post(_media(age_days=2), [_snapshot(reach=127)], peer_metrics=peers, image_loader=lambda url: None)
+    reference = result.output_payload["mature_reference"]
+    assert reference["sample_size"] == 3
+    assert reference["percent_of_median"] == 127
+    assert "still growing" not in reference["text"] or result.output_payload["trend"]["growth_status"] == "still growing"
+    assert "127% of your mature Image median" in result.output_payload["verdict"]
+
+
+def test_wider_reach_dilution_is_not_an_improvement_item_or_experiment():
+    peers = [_peer(index, reach=100, engagement_rate=10.0, saves=3) for index in range(5)]
+    result = analyze_post(_media(), [_snapshot(reach=180, engagement_rate=5.0, saves=3)], peer_metrics=peers, image_loader=lambda url: None)
+    assert result.output_payload["diluted_by_wider_reach"] is True
+    assert "diluted by wider reach" in result.output_payload["verdict"]
+    assert all(item["metric"] != "engagement_rate" for item in result.output_payload["what_to_improve"])
+    assert result.output_payload["experiment"] == []

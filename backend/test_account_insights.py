@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from backend.services.account_insights import RECOMMENDED_SAMPLE_SIZE, assign_account_theme, build_account_insights, generate_account_themes
+from backend.services.account_insights import RECOMMENDED_SAMPLE_SIZE, account_themes_meet_constraints, assign_account_theme, build_account_insights, generate_account_themes
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
 
 NOW = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
@@ -25,27 +25,31 @@ def _item(index: int, *, caption: str, media_type: str = "IMAGE", age_days: int 
 
 
 def test_themes_are_derived_from_account_corpus_and_each_post_gets_one():
-    items = [_item(1, caption="ceramic glazing studio process"), _item(2, caption="ceramic kiln glazing results"), _item(3, caption="studio lighting portrait setup")]
+    items = [
+        _item(1, caption="ceramic glazing process"), _item(2, caption="ceramic glazing results"),
+        _item(3, caption="studio portrait lighting"), _item(4, caption="studio portrait setup"),
+        _item(5, caption="kiln firing process"), _item(6, caption="kiln firing results"),
+    ]
     themes = generate_account_themes(items)
     result = build_account_insights(items, themes=themes)
-    assert 3 <= len(themes) <= 8
+    assert 3 <= len(themes) <= 5
+    assert account_themes_meet_constraints(items, themes)
     assert not {"Tutorials", "Magic", "Comedy", "Product"} & set(themes)
     assert all(post["theme"] in themes for post in result["performance_posts"])
     assert assign_account_theme("ceramic glazing", themes) in themes
 
 
 def test_mature_lifetime_is_default_and_rankings_never_mix_format_or_maturity():
-    mature_a = _item(1, caption="account subject alpha", age_days=10, views=400)
-    mature_b = _item(2, caption="account subject beta", age_days=9, views=300)
-    young = _item(3, caption="account subject gamma", age_days=1, views=9999)
-    video = _item(4, caption="account subject delta", media_type="VIDEO", age_days=20, views=9999)
-    posts = build_account_insights([mature_a, mature_b, young, video])["performance_posts"]
+    mature = [_item(index, caption=f"account subject {index}", age_days=10, views=700 - index * 50) for index in range(1, 7)]
+    young = _item(7, caption="account subject young", age_days=1, views=9999)
+    video = _item(8, caption="account subject video", media_type="VIDEO", age_days=20, views=9999)
+    posts = build_account_insights([*mature, young, video])["performance_posts"]
     by_id = {post["instagram_media_id"]: post for post in posts}
     assert by_id["1"]["observation_kind"] == "Mature lifetime snapshot"
     assert by_id["1"]["comparison"]["rank"] == 1
-    assert by_id["1"]["comparison"]["group_size"] == 2
-    assert by_id["3"]["comparison"] is None
-    assert by_id["4"]["comparison"] is None
+    assert by_id["1"]["comparison"]["group_size"] == 6
+    assert by_id["7"]["comparison"] is None
+    assert by_id["8"]["comparison"] is None
 
 
 def test_patterns_require_three_posts_real_difference_and_dimension_variation():
@@ -55,6 +59,9 @@ def test_patterns_require_three_posts_real_difference_and_dimension_variation():
                            caption_style="Short" if index < 3 else "Long"))
     result = build_account_insights(items, themes=["Clay Glazing", "Studio Portrait", "Kiln Process"])
     assert any(row["category"] == "Caption style" and row["posts"] == 3 for row in result["patterns"])
+    row = next(row for row in result["patterns"] if row["category"] == "Caption style")
+    assert row["comparison_posts"] == 3
+    assert row["baseline"] in {5.0, 12.0}
     assert not any(row["category"] == "Format" for row in result["patterns"])
     small_groups = build_account_insights(items[:2], themes=["Clay", "Studio", "Kiln"])
     assert small_groups["patterns"] == []
@@ -101,3 +108,26 @@ def test_metric_capabilities_match_implemented_watch_time_and_unavailable_accoun
     assert by_key["audience_demographics"]["status"] == "unavailable"
     assert by_key["online_followers"]["status"] == "unavailable"
     assert build_account_insights([])["untested_posting_windows"] == []
+
+
+def test_performance_summary_uses_one_mature_format_and_rank_threshold_is_six():
+    five = [_item(index, caption=f"summary subject {index}", views=100 + index * 10) for index in range(5)]
+    result = build_account_insights(five)
+    assert result["performance_summary"]["sample_size"] == 5
+    assert all(post["comparison"] is None for post in result["performance_posts"])
+    sixth = _item(5, caption="summary subject six", views=200)
+    ranked = build_account_insights([*five, sixth])
+    assert all(post["comparison"]["group_size"] == 6 for post in ranked["performance_posts"])
+
+
+def test_cta_patterns_use_binary_groups_and_compare_against_other_posts():
+    items = [
+        _item(index, caption=f"cta subject {index}", engagement_rate=12, cta="Explicit CTA") for index in range(3)
+    ] + [
+        _item(index + 3, caption=f"plain subject {index}", engagement_rate=5, cta="None") for index in range(3)
+    ]
+    rows = build_account_insights(items)["patterns"]
+    cta = next(row for row in rows if row["category"] == "CTA")
+    assert cta["label"] in {"Has CTA", "No CTA"}
+    assert cta["label"] != "None"
+    assert cta["posts"] == cta["comparison_posts"] == 3

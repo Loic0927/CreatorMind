@@ -52,18 +52,22 @@ export type PostAnalysis = {
     score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
     conclusion?: string;
+    verdict?: string;
+    comparison_notice?: string | null;
+    mature_reference?: { metric: string; current: number; median: number; sample_size: number; percent_of_median: number; text: string } | null;
+    diluted_by_wider_reach?: boolean;
     strongest_metric?: MetricComparison | null;
     what_worked?: AnalysisFinding[];
     what_to_improve?: AnalysisFinding[];
     metric_comparisons?: MetricComparison[];
     experiment?: Array<{ test_variable: string; metric_to_watch: string; action: string; reason: string; comparison: string; decision_rule: string }>;
     methodology?: { noise_rule: string; significant_rule: string; ranking_basis: string };
-    baseline?: { sample_size: number; available_account_posts: number; same_format_posts?: number; metric_coverage: number; group: string; label: string; age_basis?: string; current_post_age_hours?: number | null; statistic: string; secondary_statistic?: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
+    baseline?: { sample_size: number; available_account_posts: number; same_format_posts?: number; mature_sample_size?: number; maturity_threshold_hours?: number; comparison_ready?: boolean; metric_coverage: number; group: string; label: string; age_basis?: string; current_post_age_hours?: number | null; statistic: string; secondary_statistic?: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
     executive_summary?: string[];
     top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
     why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; classification?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
     benchmarks?: MetricComparison[];
-    trend?: { scope: string; status: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; metric_changes?: Record<string, number | null>; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
+    trend?: { scope: string; status: string; growth_status?: string; observation_count: number; metric: string | null; start: string; end: string; span_hours: number; summary: string; metric_changes?: Record<string, number | null>; minimum_requirements: { observations: number; span_hours: number; interval_minutes: number } };
     risks?: string[];
     recommendations: Array<string | { action: string; reason: string; expected_outcome?: string; expected_impact?: string; test_variable?: string; metric_to_watch?: string; comparison?: string }>;
     evidence_quality?: { score?: number; level: "Strong" | "Moderate" | "Limited"; label?: string; meaning?: string; plain_language?: string; sample_size?: number; metric_fields?: number; snapshot_count?: number; visual_available?: boolean; inputs: Array<{ name: string; available: boolean; weight: number; earned: number; detail?: string | null }>; missing_evidence?: string[] };
@@ -105,6 +109,7 @@ export type PatternInsight = {
   label: string;
   value: number;
   posts: number;
+  comparison_posts?: number;
   baseline: number;
   difference: number;
   basis: string;
@@ -203,10 +208,14 @@ export type AccountInsights = {
     advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable"; reason: string }>;
   };
   performance_posts: PerformancePost[];
+  performance_summary?: { media_type: string; media_type_label: string; metric: "views" | "reach"; sample_size: number; median: number; typical: PerformanceSummaryItem; best: PerformanceSummaryItem; weakest: PerformanceSummaryItem } | null;
+  show_average_watch_time: boolean;
+  historical_backfill_note: boolean;
   content_opportunities: ContentOpportunity[];
   tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
   methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
 };
+export type PerformanceSummaryItem = { kind: "typical" | "best" | "weakest"; title: string; value: number; difference: number };
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));

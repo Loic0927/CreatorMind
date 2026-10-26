@@ -70,7 +70,7 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
           ['Shares', latest?.shares],
           ['Reach', latest?.reach],
           ['Views', latest?.views],
-          ['Engagement rate', latest?.engagement_rate == null ? null : `${latest.engagement_rate}%`],
+          ['Engagement rate', latest?.engagement_rate == null ? null : `${latest.engagement_rate.toFixed(1)}%`],
         ].map(([label, value]) => (
           <View key={String(label)} style={styles.metric}>
             <Text style={styles.value}>{value ?? '—'}</Text>
@@ -92,10 +92,10 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
         </View>
       )}
 
-      <Pressable onPress={() => setShowHistory((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showHistory ? 'Hide' : 'Show'} analysis history</Text></Pressable>
-      {showHistory && (post.analyses?.length ? post.analyses.map((analysis) => (
+      {post.analyses?.some((analysis) => Object.values(analysis.metric_deltas).some((value) => value != null && value !== 0)) ? <Pressable onPress={() => setShowHistory((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showHistory ? 'Hide' : 'Show'} analysis history</Text></Pressable> : null}
+      {showHistory && (post.analyses?.length ? post.analyses.filter((analysis) => Object.values(analysis.metric_deltas).some((value) => value != null && value !== 0)).map((analysis) => (
         <Pressable key={analysis.id} onPress={() => setViewingAnalysisId(analysis.id)} style={[styles.history, displayedAnalysis?.id === analysis.id && styles.historySelected]}>
-          <Text style={styles.historySummary}>{Object.entries(analysis.metric_deltas).filter(([, value]) => value != null).slice(0, 3).map(([metric, value]) => `${metric.replaceAll('_', ' ')} ${Number(value) >= 0 ? '+' : ''}${value}`).join(' · ') || 'First analyzed snapshot'}</Text>
+          <Text style={styles.historySummary}>{Object.entries(analysis.metric_deltas).filter(([, value]) => value != null && Number(value) !== 0).slice(0, 3).map(([metric, value]) => `${metric.replaceAll('_', ' ')} ${Number(value) >= 0 ? '+' : ''}${metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString()}`).join(' · ')}</Text>
           <Text style={styles.label}>{new Date(analysis.created_at).toLocaleString()}</Text>
           <Text style={styles.label}>Changes since the prior source snapshot</Text>
         </Pressable>
@@ -105,7 +105,7 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
       {showSnapshots && (post.snapshots?.length ? post.snapshots.map((snapshot) => (
         <View key={snapshot.id} style={styles.snapshot}>
           <Text>{new Date(snapshot.captured_at).toLocaleString()}</Text>
-          <Text style={styles.label}>Reach {snapshot.reach ?? '—'} · Engagement {snapshot.engagement_rate == null ? '—' : `${snapshot.engagement_rate}%`}</Text>
+          <Text style={styles.label}>Reach {snapshot.reach ?? '—'} · Engagement {snapshot.engagement_rate == null ? '—' : `${snapshot.engagement_rate.toFixed(1)}%`}</Text>
         </View>
       )) : <Text style={styles.label}>No snapshot history yet.</Text>)}
 
@@ -117,16 +117,24 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
 
 function AnalysisPanel({ analysis }: { analysis: PostAnalysis }) {
   const [showLegacy, setShowLegacy] = useState(false);
+  const [showMethod, setShowMethod] = useState(false);
   const output = analysis.output_payload;
   if (!output.conclusion) return <View style={styles.emptyAnalysis}><Pressable onPress={() => setShowLegacy((value) => !value)}><Text style={styles.emptyTitle}>{showLegacy ? 'Hide' : 'Show'} legacy report</Text></Pressable><Text style={styles.label}>Run a new analysis for same-format, similar-age metric ranks.</Text>{showLegacy ? <LegacyAnalysisPanel analysis={analysis} /> : null}</View>;
   const comparisons = output.metric_comparisons ?? [];
-  const experiment = output.experiment?.[0];
+  const peerCount = output.baseline?.sample_size ?? 0;
+  const comparisonReady = peerCount >= 3;
+  const rows = comparisonReady ? comparisons.filter((item) => item.current != null && item.median != null && item.sample_size >= 3 && item.percent_change != null) : [];
+  const experiment = comparisonReady ? output.experiment?.[0] : undefined;
+  const format = (metric: string, value: number | null | undefined) => value == null ? '—' : metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString();
   return <View style={styles.dashboard}>
-    <View style={styles.comparisonCard}><Text style={styles.eyebrow}>COMPARED WITH YOUR POSTS</Text><Text style={styles.analysisSummary}>{output.conclusion}</Text><Text style={styles.analysisMuted}>{output.methodology?.ranking_basis} · n={comparisons[0]?.sample_size ?? 0}</Text><View style={styles.analysisMetrics}>{comparisons.map((item) => <View key={item.metric} style={styles.analysisMetric}><Text style={styles.analysisLabel}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.analysisValue}>{item.current ?? '—'}</Text><Text style={styles.delta}>{item.rank ? `#${item.rank}/${item.group_size} · ${item.percentile_label}` : 'Not ranked'} · n={item.sample_size}</Text></View>)}</View></View>
-    <Panel title="What worked">{output.what_worked?.length ? output.what_worked.slice(0, 2).map((item) => <View key={item.metric} style={styles.subcard}><Text style={styles.subcardTitle}>{item.title}</Text><Text style={styles.label}>{item.evidence}</Text>{item.interpretation ? <Text style={styles.impact}>Possible explanation: {item.interpretation}</Text> : null}<Text style={styles.label}>{item.basis} · n={item.sample_size}</Text></View>) : <Text style={styles.label}>No comparable positive result yet.</Text>}</Panel>
-    <Panel title="What to improve">{output.what_to_improve?.length ? output.what_to_improve.slice(0, 2).map((item) => <View key={item.metric} style={styles.subcard}><Text style={styles.subcardTitle}>{item.title}</Text><Text style={styles.label}>{item.evidence}</Text><Text style={styles.label}>{item.basis} · n={item.sample_size}</Text></View>) : <Text style={styles.label}>No clear gap above the noise threshold.</Text>}</Panel>
-    <Panel title="One experiment">{experiment ? <View style={styles.subcard}><Text style={styles.hypothesis}>CHANGE ONLY: {experiment.test_variable}</Text><Text style={styles.subcardTitle}>{experiment.action}</Text><Text style={styles.label}>Metric: {experiment.metric_to_watch}</Text><Text style={styles.impact}>Decision: {experiment.decision_rule}</Text></View> : <Text style={styles.label}>No experiment recommended because no real gap exists.</Text>}</Panel>
-    <Panel title="Methodology"><Text style={styles.label}>{output.evidence_quality?.plain_language}</Text><Text style={styles.label}>{output.methodology?.noise_rule}</Text><Text style={styles.label}>{output.methodology?.significant_rule}</Text></Panel>
+    <View style={styles.comparisonCard}><Text style={styles.eyebrow}>VERDICT</Text><Text style={styles.analysisSummary}>{output.verdict ?? output.conclusion}</Text>{!comparisonReady ? <Text style={styles.analysisMuted}>Only {peerCount} comparable post{peerCount === 1 ? '' : 's'}; no comparison yet.</Text> : null}</View>
+    {rows.length ? <Panel title="Comparison">{rows.map((item) => <View key={item.metric} style={styles.comparisonRow}><Text style={styles.subcardTitle}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.label}>{format(item.metric, item.current)} vs {format(item.metric, item.median)} typical · {item.percent_change! > 0 ? '+' : ''}{item.percent_change?.toFixed(1)}% · n={item.sample_size}</Text></View>)}</Panel> : null}
+    {comparisonReady && output.what_worked?.length ? <Panel title="What worked">{output.what_worked.slice(0, 2).map((item) => <Text key={item.metric} style={styles.panelText}><Text style={styles.subcardTitle}>{item.title}: </Text>{item.evidence} (n={item.sample_size})</Text>)}</Panel> : null}
+    {comparisonReady && output.what_to_improve?.length ? <Panel title="What to improve">{output.what_to_improve.slice(0, 2).map((item) => <Text key={item.metric} style={styles.panelText}><Text style={styles.subcardTitle}>{item.title}: </Text>{item.evidence} (n={item.sample_size})</Text>)}</Panel> : null}
+    {experiment ? <Panel title="One experiment"><Text style={styles.panelText}>{experiment.action}</Text><Text style={styles.impact}>Watch {experiment.metric_to_watch}. {experiment.decision_rule}</Text></Panel> : null}
+    {output.trend ? <View style={styles.history}><Text style={styles.historySummary}>{output.trend.summary}</Text></View> : null}
+    <Pressable onPress={() => setShowMethod((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>ⓘ Methodology</Text></Pressable>
+    {showMethod ? <View style={styles.history}><Text style={styles.label}>{output.methodology?.noise_rule}</Text>{comparisonReady ? <Text style={styles.label}>{output.methodology?.significant_rule}</Text> : null}<Text style={styles.label}>{output.methodology?.ranking_basis}{comparisonReady ? `; n=${peerCount}.` : '.'}</Text></View> : null}
   </View>;
 }
 
@@ -204,6 +212,7 @@ const styles = StyleSheet.create({
   panel: { padding: 16, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e7e0f0' },
   panelTitle: { fontSize: 18, color: '#201633', fontWeight: '900', marginBottom: 12 },
   panelBody: { gap: 9 },
+  comparisonRow: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee8fa' },
   panelText: { color: '#342846', lineHeight: 20 },
   subcard: { padding: 12, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
   subcardTitle: { color: '#201633', fontWeight: '800' },

@@ -34,7 +34,7 @@ from backend.services.publishing import (
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
-from backend.services.account_insights import build_account_insights, generate_account_themes
+from backend.services.account_insights import account_themes_meet_constraints, build_account_insights, generate_account_themes
 from backend.auth import AuthenticatedUser, get_account_context, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
@@ -583,10 +583,9 @@ def account_pattern_insights(
             "post_publish_tracking": _tracking_schedule(item["tracking"].id, snapshots),
         })
     themes = list(account.insight_themes) if account else []
-    if account and not themes:
+    if account and not account_themes_meet_constraints(items, themes):
         themes = generate_account_themes(items)
-        if themes:
-            get_instagram_repository().set_insight_themes(user_id, themes)
+        get_instagram_repository().set_insight_themes(user_id, themes)
     return build_account_insights(
         items,
         timezone_offset_minutes,
