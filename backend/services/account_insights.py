@@ -16,9 +16,6 @@ COMPLETE_24H_MIN_HOURS = 23
 COMPLETE_24H_MAX_HOURS = 26
 PATTERN_RELATIVE_THRESHOLD = 10.0
 PATTERN_RATE_THRESHOLD = 0.5
-_STOPWORDS = {
-    "about", "after", "again", "also", "and", "are", "been", "before", "but", "can", "could", "for", "from", "get", "have", "here", "how", "into", "its", "just", "more", "new", "not", "now", "one", "our", "out", "post", "reel", "that", "the", "their", "them", "then", "there", "these", "they", "this", "today", "use", "video", "was", "what", "when", "where", "which", "who", "why", "will", "with", "you", "your",
-}
 
 
 def _aware(value: datetime) -> datetime:
@@ -34,51 +31,53 @@ def _analysis(item: dict[str, Any]) -> Any | None:
     return analyses[0] if analyses else None
 
 
-def _tokens(caption: str) -> list[str]:
-    cleaned = re.sub(r"(?<!\w)[#@][\w'-]+", " ", caption)
-    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9'-]{2,}", cleaned) if token.lower() not in _STOPWORDS]
+def _format_label(media_type: str) -> str:
+    value = str(media_type or "UNKNOWN").upper()
+    return "Reel / video" if value in {"VIDEO", "REELS"} else "Carousel" if value == "CAROUSEL_ALBUM" else "Image"
+
+
+def _structural_attributes(item: dict[str, Any]) -> dict[str, str]:
+    media = item["media"]
+    caption = media.caption or ""
+    words = len(re.findall(r"\b\w+\b", re.sub(r"(?<!\w)[#@][\w'-]+", " ", caption)))
+    length = "Short caption" if words <= 20 else "Long caption" if words > 60 else "Medium caption"
+    has_cta = bool(re.search(r"\b(comment|share|save|follow|click|tap|try|tell me|let me know|send|visit)\b", caption.lower()))
+    return {"format": _format_label(media.media_type), "length": length, "cta": "CTA" if has_cta else "No CTA"}
+
+
+def _theme_labels_for_item(item: dict[str, Any]) -> tuple[str, str, str]:
+    attrs = _structural_attributes(item)
+    return (
+        f"{attrs['format']} · {attrs['length']}",
+        f"{attrs['format']} · {attrs['cta']}",
+        f"{attrs['length']} · {attrs['cta']}",
+    )
 
 
 def generate_account_themes(items: list[dict[str, Any]]) -> list[str]:
-    """Derive 3-5 disjoint labels, each grounded in at least two account posts."""
-    captions = [item["media"].caption or "" for item in items if item.get("media") and _analysis(item)]
-    candidate_docs: dict[str, set[int]] = defaultdict(set)
-    for index, caption in enumerate(captions):
-        words = _tokens(caption)
-        for token in set(words):
-            candidate_docs[token].add(index)
-        for phrase in set(" ".join(pair) for pair in zip(words, words[1:])):
-            candidate_docs[phrase].add(index)
-    candidates = sorted(
-        ((len(documents), len(candidate.split()), candidate, documents) for candidate, documents in candidate_docs.items() if len(documents) >= 2),
-        key=lambda value: (-value[0], -value[1], value[2]),
-    )
-    selected: list[str] = []
-    unassigned = set(range(len(captions)))
-    for _, _, candidate, documents in candidates:
-        if len(documents & unassigned) < 2:
-            continue
-        selected.append(candidate.title())
-        unassigned -= documents
-        if len(selected) == 5:
-            break
-    return selected if len(selected) >= 3 else []
+    """Choose one structural 3-5 group partition; never name themes from caption subjects."""
+    eligible = [item for item in items if item.get("media") and _analysis(item)]
+    for scheme_index in range(3):
+        labels = [_theme_labels_for_item(item)[scheme_index] for item in eligible]
+        counts = Counter(labels)
+        if 3 <= len(counts) <= 5 and all(count >= 2 for count in counts.values()):
+            return sorted(counts, key=lambda label: (-counts[label], label))
+    return []
 
 
 def account_themes_meet_constraints(items: list[dict[str, Any]], themes: list[str]) -> bool:
     if not 3 <= len(themes) <= 5 or len(set(themes)) != len(themes):
         return False
-    captions = [item["media"].caption or "" for item in items if item.get("media") and _analysis(item)]
-    counts = Counter(assign_account_theme(caption, themes) for caption in captions)
-    return all(counts[theme] >= 2 for theme in themes)
+    eligible = [item for item in items if item.get("media") and _analysis(item)]
+    assigned = [assign_account_theme(item, themes) for item in eligible]
+    counts = Counter(assigned)
+    return bool(eligible) and "Theme unavailable" not in counts and all(counts[theme] >= 2 for theme in themes)
 
 
-def assign_account_theme(caption: str, themes: list[str]) -> str:
-    if not themes:
+def assign_account_theme(item: dict[str, Any], themes: list[str]) -> str:
+    if not themes or not item.get("media"):
         return "Theme unavailable"
-    words = set(_tokens(caption))
-    scored = [(len(words & set(_tokens(theme))), -index, theme) for index, theme in enumerate(themes)]
-    return max(scored)[2]
+    return next((label for label in _theme_labels_for_item(item) if label in themes), "Theme unavailable")
 
 
 def _caption_attributes(item: dict[str, Any]) -> dict[str, str]:
@@ -207,9 +206,10 @@ def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int
             "tracked_post_id": getattr(item.get("tracking"), "id", None), "instagram_media_id": media.instagram_media_id,
             "permalink": media.permalink, "thumbnail_url": media.thumbnail_url or media.media_url,
             "media_type": str(media.media_type or "UNKNOWN").upper(),
-            "media_type_label": "Reel / video" if str(media.media_type).upper() in {"VIDEO", "REELS"} else "Carousel" if str(media.media_type).upper() == "CAROUSEL_ALBUM" else "Image",
-            "theme": assign_account_theme(media.caption or "", themes), "published_at": _iso(media.published_at),
+            "media_type_label": _format_label(media.media_type),
+            "theme": assign_account_theme(item, themes), "published_at": _iso(media.published_at),
             "posting_window": _posting_window(media.published_at, timezone_offset_minutes), "caption_excerpt": (media.caption or "")[:180],
+            "display_title": re.sub(r"\s+", " ", re.sub(r"(?<!\w)#[\w'-]+", " ", media.caption or "")).strip()[:120] or "Instagram post",
             "observation_kind": "Mature lifetime snapshot" if mature else "Latest cumulative snapshot" if latest else "No snapshot",
             "comparison_basis": basis, "maturity_key": key, "mature": mature, "age_days": round(age_days, 1) if age_days is not None else None,
             "snapshot_captured_at": _iso(latest.captured_at) if latest else None, **payload,
@@ -274,20 +274,44 @@ def _performance_summary(posts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not candidates:
         return None
     media_type, group = max(candidates, key=lambda pair: len(pair[1]))
-    metric = "views" if sum(post["metrics"].get("views") is not None for post in group) >= MIN_PATTERN_POSTS else "reach"
-    comparable = [post for post in group if post["metrics"].get(metric) is not None]
-    if len(comparable) < MIN_PATTERN_POSTS:
+    reach_posts = [post for post in group if post["metrics"].get("reach") is not None]
+    rate_posts = [post for post in group if post["metrics"].get("engagement_rate") is not None]
+    if len(reach_posts) < MIN_PATTERN_POSTS or len(rate_posts) < MIN_PATTERN_POSTS:
         return None
-    typical = median(post["metrics"][metric] for post in comparable)
-    best = max(comparable, key=lambda post: post["metrics"][metric])
-    weakest = min(comparable, key=lambda post: post["metrics"][metric])
-    label = "Reel / video" if media_type in {"VIDEO", "REELS"} else "Carousel" if media_type == "CAROUSEL_ALBUM" else "Image"
-    def item(kind: str, post: dict[str, Any]) -> dict[str, Any]:
-        value = post["metrics"][metric]
-        return {"kind": kind, "title": post["caption_excerpt"] or f"{label} post", "value": int(round(value)), "difference": int(round(value - typical))}
-    return {"media_type": media_type, "media_type_label": label, "metric": metric, "sample_size": len(comparable), "median": int(round(typical)),
-            "typical": {"kind": "typical", "title": f"Typical mature {label.lower()}", "value": int(round(typical)), "difference": 0},
-            "best": item("best", best), "weakest": item("weakest", weakest)}
+    reach_median = median(post["metrics"]["reach"] for post in reach_posts)
+    rate_median = median(post["metrics"]["engagement_rate"] for post in rate_posts)
+    label = _format_label(media_type)
+
+    def item(kind: str, post: dict[str, Any], metric: str, typical: float) -> dict[str, Any]:
+        value = float(post["metrics"][metric])
+        note = None
+        if kind == "lowest_reach" and post["metrics"].get("engagement_rate") is not None and post["metrics"]["engagement_rate"] > rate_median:
+            note = f"Engagement rate is above the {rate_median:.1f}% group median."
+        return {"kind": kind, "title": post["display_title"], "value": round(value, 1) if metric == "engagement_rate" else int(round(value)),
+                "difference": round(value - typical, 1) if metric == "engagement_rate" else int(round(value - typical)), "metric": metric, "note": note}
+
+    return {
+        "media_type": media_type, "media_type_label": label, "sample_size": len(group),
+        "reach_sample_size": len(reach_posts), "engagement_rate_sample_size": len(rate_posts),
+        "reach_median": int(round(reach_median)), "engagement_rate_median": round(rate_median, 1),
+        "highest_reach": item("highest_reach", max(reach_posts, key=lambda post: post["metrics"]["reach"]), "reach", reach_median),
+        "lowest_reach": item("lowest_reach", min(reach_posts, key=lambda post: post["metrics"]["reach"]), "reach", reach_median),
+        "highest_engagement_rate": item("highest_engagement_rate", max(rate_posts, key=lambda post: post["metrics"]["engagement_rate"]), "engagement_rate", rate_median),
+        "lowest_engagement_rate": item("lowest_engagement_rate", min(rate_posts, key=lambda post: post["metrics"]["engagement_rate"]), "engagement_rate", rate_median),
+    }
+
+
+def _theme_stats(posts: list[dict[str, Any]], themes: list[str]) -> list[dict[str, Any]]:
+    if not themes:
+        return []
+    result = []
+    for theme in themes:
+        members = [post for post in posts if post["theme"] == theme]
+        views = [post["metrics"]["views"] for post in members if post.get("metrics") and post["metrics"].get("views") is not None]
+        if len(members) < 2:
+            return []
+        result.append({"name": theme, "post_count": len(members), "median_views": int(round(median(views))) if views else None})
+    return result
 
 
 def _posting_time_rows(items: list[dict[str, Any]], timezone_offset_minutes: int) -> list[dict[str, Any]]:
@@ -337,6 +361,11 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
     supplied_themes = list(themes or [])
     theme_list = supplied_themes if account_themes_meet_constraints(analyzed, supplied_themes) else generate_account_themes(analyzed)
     posts = _performance_posts(items, timezone_offset_minutes, theme_list)
+    theme_stats = _theme_stats(posts, theme_list)
+    if not theme_stats:
+        theme_list = []
+        for post in posts:
+            post["theme"] = "Theme unavailable"
     patterns = _pattern_rows(posts)
     performance_summary = _performance_summary(posts)
     posting_times = _posting_time_rows(analyzed, timezone_offset_minutes)
@@ -362,7 +391,8 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
         "heading": "Account insights", "sample_notice": f"{len(analyzed)} analyzed posts total; {mature_count} currently qualify for mature lifetime comparison.",
         "observation_period": {**period, "timezone": _timezone_label(timezone_offset_minutes)},
         "progress": {"patterns": len(analyzed), "posting_times": complete_24h, "mature_posts": mature_count},
-        "themes": theme_list, "theme_method": "Derived from repeated subjects or formats in this account; every theme has at least 2 posts and each post has one theme.",
+        "themes": theme_list, "theme_stats": theme_stats,
+        "theme_method": "Derived from repeated content formats and purposes in this account; each visible theme has at least 2 posts.",
         "patterns": patterns, "posting_time_insights": posting_times, "untested_posting_windows": [],
         "posting_time_metadata": {"timezone": _timezone_label(timezone_offset_minutes), "period_start": period["start"], "period_end": period["end"],
                                   "metric": "Optional advanced view: engagement rate from a completed 24-hour milestone", "complete_posts": complete_24h,

@@ -20,7 +20,7 @@ from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamErro
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia
 
 
-ANALYSIS_SCHEMA_VERSION = "post-analysis-v5"
+ANALYSIS_SCHEMA_VERSION = "post-analysis-v6"
 OBSERVED_METRICS = ("likes", "comments", "saves", "shares", "reach", "views", "engagement_rate")
 COMPARISON_METRICS = ("reach", "views", "engagement_rate", "shares", "saves", "comments")
 RATE_METRICS = {"engagement_rate"}
@@ -54,6 +54,7 @@ class ContentAttributes(BaseModel):
     thumbnail_style: str = Field(default="Unavailable", min_length=1, max_length=80)
     caption_style: str = Field(default="Standard", min_length=1, max_length=80)
     cta_usage: str = Field(default="None", min_length=1, max_length=80)
+    on_screen_text_hook: str = Field(default="Unavailable", min_length=1, max_length=120)
 
 
 class PostAnalysisInterpretation(BaseModel):
@@ -174,15 +175,16 @@ def _normalise_peer_sample(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _baseline_for(media: InstagramMedia, latest: InstagramInsightSnapshot, peer_metrics: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+def _baseline_for(media: InstagramMedia, latest: InstagramInsightSnapshot, peer_metrics: list[dict[str, Any]], growth_status: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     media_type = media.media_type.upper()
     all_samples = [_normalise_peer_sample(item) for item in peer_metrics]
     same_format = [item for item in all_samples if item["media_type"] == media_type]
     mature_same_format = [item for item in same_format if item["age_hours"] is not None and item["age_hours"] >= _maturity_hours(media_type)]
     current_age = _age_hours(media.published_at, latest.captured_at)
     maturity = _maturity_hours(media_type)
-    if current_age is not None and current_age >= maturity:
-        selected = [item for item in same_format if item["age_hours"] is not None and item["age_hours"] >= maturity]
+    use_mature_basis = current_age is not None and (current_age >= maturity or growth_status != "still growing")
+    if use_mature_basis:
+        selected = mature_same_format
         age_basis = f"mature lifetime totals ({maturity // 24}+ days old)"
     elif current_age is not None:
         tolerance = max(6.0, current_age * 0.5)
@@ -194,18 +196,21 @@ def _baseline_for(media: InstagramMedia, latest: InstagramInsightSnapshot, peer_
     captured = sorted(str(item["captured_at"]) for item in selected if item.get("captured_at"))
     sample_size = len(selected)
     coverage = sum(value is not None for item in selected for value in item["metrics"].values()) / (sample_size * len(OBSERVED_METRICS)) if sample_size else 0
-    return selected, mature_same_format, {
+    group = "mature_same_format" if use_mature_basis else "same_format_similar_age"
+    comparison_name = "mature same-format" if use_mature_basis else "same-format, similar-age"
+    return selected, {
         "sample_size": sample_size, "available_account_posts": len(all_samples), "same_format_posts": len(same_format),
-        "metric_coverage": round(coverage, 3), "group": "same_format_similar_age",
+        "metric_coverage": round(coverage, 3), "group": group,
         "label": f"{media_type.replace('_', ' ').title()} posts, {age_basis}", "age_basis": age_basis,
         "current_post_age_hours": round(current_age, 1) if current_age is not None else None, "statistic": "median",
         "published_range": {"start": published[0] if published else None, "end": published[-1] if published else None},
         "snapshot_range": {"start": captured[0] if captured else None, "end": captured[-1] if captured else None},
         "limited_sample": sample_size < MIN_COMPARABLE_PEERS,
         "comparison_ready": sample_size >= MIN_COMPARABLE_PEERS,
-        "sample_notice": f"Only {sample_size} comparable post{'s' if sample_size != 1 else ''}; no comparison yet." if sample_size < MIN_COMPARABLE_PEERS else f"Compared with {sample_size} same-format posts on a comparable age basis.",
+        "sample_notice": f"Only {sample_size} {comparison_name} post{'s' if sample_size != 1 else ''}; no comparison yet." if sample_size < MIN_COMPARABLE_PEERS else f"Compared with {sample_size} {comparison_name} posts.",
         "mature_sample_size": len(mature_same_format),
         "maturity_threshold_hours": maturity,
+        "is_mature_basis": use_mature_basis,
         "limitations": [] if sample_size else ["No same-format post with a comparable maturity was available."],
     }
 
@@ -240,6 +245,7 @@ def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[
         absolute = float(current) - median_value if current is not None and median_value is not None else None
         comparison_ready = sample_size >= MIN_COMPARABLE_PEERS
         change = absolute / median_value * 100 if comparison_ready and absolute is not None and median_value not in (None, 0) else None
+        percent_of_median = float(current) / median_value * 100 if comparison_ready and current is not None and median_value not in (None, 0) else None
         noise = change is not None and absolute is not None and abs(change) < NOISE_RELATIVE_PERCENT and abs(absolute) < _absolute_threshold(name)
         real_gap = change is not None and not noise
         significant = bool(real_gap and abs(change) >= SIGNIFICANT_RELATIVE_PERCENT and abs(absolute or 0) >= _significant_absolute_threshold(name))
@@ -259,6 +265,7 @@ def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[
             "metric": name, "current": _round_metric(name, current), "average": _round_metric(name, average),
             "median": _round_metric(name, median_value), "sample_size": sample_size,
             "percent_change": round(change, 1) if change is not None else None,
+            "percent_of_median": round(percent_of_median, 1) if percent_of_median is not None else None,
             "absolute_difference": _round_metric(name, absolute),
             "direction": "above" if change is not None and change > 0 else "below" if change is not None and change < 0 else "same" if change == 0 else "unavailable",
             "is_noise": noise, "real_gap": real_gap, "significant": significant, "comparison_text": comparison_text,
@@ -286,8 +293,8 @@ def _trend_assessment(snapshots: list[InstagramInsightSnapshot]) -> dict[str, An
         total_change = last_value - first_value
         recent_change = getattr(ordered[-1], metric) - getattr(ordered[-2], metric)
         stopped_threshold = max(5, round(last_value * 0.01))
-        growth_status = "growth has mostly stopped" if recent_change <= stopped_threshold else "still growing"
-        summary = f"{metric.replace('_', ' ').title()} {total_change:+g} in the last {span_hours:g}h: {growth_status}."
+        growth_status = "growth has plateaued" if recent_change <= stopped_threshold else "still growing"
+        summary = f"{metric.replace('_', ' ').title()} {total_change:+g} across {span_hours / 24:.1f} days: {growth_status}."
         status = "comparable_post_history" if comparable else "observed_change"
     else:
         summary, status = "Metric history is not long enough to establish growth.", "insufficient_history"
@@ -371,21 +378,68 @@ def _mature_reference(media: InstagramMedia, metrics: dict[str, Any], samples: l
     return None
 
 
-def _verdict(media: InstagramMedia, baseline: dict[str, Any], benchmarks: list[dict[str, Any]], mature_reference: dict[str, Any] | None, trend: dict[str, Any]) -> str:
+def _metric_list(items: list[str]) -> str:
+    labels = [item.replace("_", " ") for item in items]
+    return labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def _verdict(media: InstagramMedia, baseline: dict[str, Any], benchmarks: list[dict[str, Any]], trend: dict[str, Any]) -> str:
     age_hours = baseline.get("current_post_age_hours")
-    age = "unknown age" if age_hours is None else f"{age_hours / 24:.1f} days old" if age_hours >= 24 else f"{age_hours:.1f} hours old"
+    age = "unknown age" if age_hours is None else f"{age_hours / 24:.1f} days old"
     growth = trend["growth_status"]
-    reach = next((item for item in benchmarks if item["metric"] == "reach"), None)
-    rate = next((item for item in benchmarks if item["metric"] == "engagement_rate"), None)
-    if reach and rate and reach["significant"] and (reach["percent_change"] or 0) > 0 and rate["real_gap"] and (rate["percent_change"] or 0) < 0:
-        return f"At {age}, reach is above your account typical and engagement is diluted by wider reach; {growth}."
-    if mature_reference:
-        return f"At {age}, {mature_reference['text'][0].lower() + mature_reference['text'][1:]}"
-    if baseline["sample_size"] >= MIN_COMPARABLE_PEERS:
-        primary = next((item for item in benchmarks if item["metric"] == "reach" and item["percent_change"] is not None), None) or next((item for item in benchmarks if item["percent_change"] is not None), None)
-        standing = "in line with your account typical" if primary and primary["is_noise"] else f"{primary['metric'].replace('_', ' ')} is {primary['direction']} your account typical" if primary else "account standing is unavailable"
-        return f"At {age}, {standing}; {growth}."
-    return f"At {age}, account standing is not established; {growth}."
+    sample_size = baseline["sample_size"]
+    basis = f"mature {media.media_type.replace('_', ' ').title()} median" if baseline.get("is_mature_basis") else "same-format, similar-age median"
+    if sample_size < MIN_COMPARABLE_PEERS:
+        return f"At {age}, only {sample_size} post{'s are' if sample_size != 1 else ' is'} available for the {basis}, so no standing is shown; {growth}."
+    comparable = [item for item in benchmarks if item["percent_change"] is not None]
+    primary = next((item for item in comparable if item["metric"] == "reach"), None) or (comparable[0] if comparable else None)
+    standing = "in line with" if primary and primary["is_noise"] else "above" if primary and primary["percent_change"] > 0 else "below" if primary else "not available against"
+    groups = {
+        "higher": [item["metric"] for item in comparable if not item["is_noise"] and item["percent_change"] > 0],
+        "in line": [item["metric"] for item in comparable if item["is_noise"]],
+        "lower": [item["metric"] for item in comparable if not item["is_noise"] and item["percent_change"] < 0],
+    }
+    reach = next((item for item in comparable if item["metric"] == "reach"), None)
+    rate = next((item for item in comparable if item["metric"] == "engagement_rate"), None)
+    diluted = bool(reach and rate and reach["significant"] and reach["percent_change"] > 0 and rate["real_gap"] and rate["percent_change"] < 0)
+    if diluted:
+        groups["lower"] = [metric for metric in groups["lower"] if metric != "engagement_rate"]
+    fragments = [f"{_metric_list(metrics).capitalize()} {'are' if len(metrics) != 1 else 'is'} {label}" for label, metrics in groups.items() if metrics]
+    if diluted:
+        fragments.append("Engagement rate is lower, labelled diluted by wider reach")
+    summary = "; ".join(fragments)
+    return f"At {age}, this post is {standing} the {basis} (n={sample_size}). {summary}; {growth}."
+
+
+def _content_snapshot(media: InstagramMedia, interpretation: PostAnalysisInterpretation, theme: str) -> dict[str, Any]:
+    caption = media.caption or ""
+    words = len(re.findall(r"\b\w+\b", re.sub(r"(?<!\w)[#@][\w'-]+", " ", caption)))
+    has_cta = bool(re.search(r"\b(comment|share|save|follow|click|tap|try|tell me|let me know|send|visit)\b", caption.lower()))
+    return {
+        "on_screen_text_hook": interpretation.content_attributes.on_screen_text_hook,
+        "caption_length": f"{words} words",
+        "cta": "Present" if has_cta else "Not present",
+        "format": media.media_type.replace("_", " ").title(),
+        "theme": theme or "Theme unavailable",
+    }
+
+
+def _similar_posts(media: InstagramMedia, historical_posts: list[dict[str, Any]], theme: str) -> list[dict[str, Any]]:
+    if not theme or theme == "Theme unavailable":
+        return []
+    candidates = [item for item in historical_posts if not item.get("is_current") and item.get("theme") == theme]
+    candidates.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+    candidates.sort(key=lambda item: str(item.get("media_type", "")).upper() != media.media_type.upper())
+    result = []
+    for item in candidates[:2]:
+        caption = re.sub(r"\s+", " ", re.sub(r"(?<!\w)#[\w'-]+", " ", item.get("caption") or "")).strip()
+        result.append({
+            "tracked_post_id": item.get("tracked_post_id"), "thumbnail_url": item.get("thumbnail_url"),
+            "title": caption[:100] or "Instagram post", "theme": theme,
+            "views": _round_metric("views", (item.get("metrics") or {}).get("views")),
+            "engagement_rate": _round_metric("engagement_rate", (item.get("metrics") or {}).get("engagement_rate")),
+        })
+    return result
 
 
 def _evidence_quality(metrics: dict[str, Any], image_available: bool, baseline: dict[str, Any], trend: dict[str, Any]) -> dict[str, Any]:
@@ -400,7 +454,6 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
                  generator: Callable[..., str] = generate_gemini_content,
                  image_loader: Callable[[str], tuple[bytes, str] | None] = fetch_remote_image,
                  model_name: str | None = None) -> PostAnalysisComputation:
-    del historical_posts
     if not snapshots:
         raise PostAnalysisError("At least one metric snapshot is required.")
     ordered = sorted(snapshots, key=lambda item: item.captured_at)
@@ -412,18 +465,18 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
     visual_source = media.thumbnail_url or media.media_url
     loaded = image_loader(visual_source) if visual_source else None
     image_bytes, image_mime_type = loaded if loaded else (None, None)
-    baseline_samples, mature_samples, baseline = _baseline_for(media, latest, peer_metrics or [])
-    benchmarks = _benchmarks(metrics, baseline_samples, baseline["label"])
     trend = _trend_assessment(source_snapshots)
+    baseline_samples, baseline = _baseline_for(media, latest, peer_metrics or [], trend["growth_status"])
+    benchmarks = _benchmarks(metrics, baseline_samples, baseline["label"])
     summary, strongest, worked, improve = _summary(benchmarks, baseline)
-    mature_reference = _mature_reference(media, metrics, mature_samples, baseline.get("current_post_age_hours"), trend["growth_status"])
-    verdict = _verdict(media, baseline, benchmarks, mature_reference, trend)
+    verdict = _verdict(media, baseline, benchmarks, trend)
     context_reference = context_reference_for_content(account_context, media.caption, mode="analysis")
     evidence = {"benchmarks": benchmarks, "caption": media.caption, "media_type": media.media_type}
     account_reference = f"\nACCOUNT CONTEXT (content reference only, never performance evidence):\n{context_reference.text}" if context_reference.used else ""
     prompt = (
         "Use only the supplied evidence and return JSON with an empty why_it_worked list and content_attributes "
-        "(thumbnail_style, caption_style, cta_usage). Do not create a topic label; account themes are generated separately from the full account corpus. "
+        "(thumbnail_style, caption_style, cta_usage, on_screen_text_hook). For on_screen_text_hook, copy only concise text visibly present in the image; use 'Unavailable' when it cannot be read. "
+        "Do not create a topic label; account themes are generated separately from the full account corpus. "
         f"Treat a difference as noise when it is under {NOISE_RELATIVE_PERCENT:.0f}% relative AND under {NOISE_COUNT_UNITS:.0f} count units (or {NOISE_RATE_POINTS:.1f} percentage points for rates). "
         "For noise, say it is in line with typical posts and do not explain it or recommend an experiment. Use 'significantly' only when the deterministic evidence field significant is true. "
         "Do not infer retention, hook quality, pacing, or causation without the matching metric. Never invent metrics or predict views.\n"
@@ -439,7 +492,9 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
             interpretation = None
     if interpretation is None:
         interpretation = _fallback_interpretation(media.caption, benchmarks)
-        used_model = "deterministic-fallback-v5"
+        used_model = "deterministic-fallback-v6"
+    history = historical_posts or []
+    current_theme = next((str(item.get("theme") or "") for item in history if item.get("is_current")), "")
     content_payload = {"platform": "Instagram", "media_type": media.media_type, "caption": media.caption,
                        "published_at": media.published_at.isoformat(), "visual_context_used": image_bytes is not None,
                        "visual_context_kind": "thumbnail" if media.media_type.upper() in {"VIDEO", "REELS"} else "image",
@@ -449,14 +504,16 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
         data_gaps.append("Average watch time is unavailable for this Reel/video snapshot.")
     diluted = summary.endswith("diluted by wider reach.")
     output = {"verdict": verdict, "conclusion": summary, "comparison_notice": baseline["sample_notice"] if baseline["sample_size"] < MIN_COMPARABLE_PEERS else None,
-              "mature_reference": mature_reference, "diluted_by_wider_reach": diluted,
+              "mature_reference": None, "diluted_by_wider_reach": diluted,
               "strongest_metric": strongest, "what_worked": worked[:2], "what_to_improve": improve[:2],
               "metric_comparisons": benchmarks, "benchmarks": benchmarks, "baseline": baseline,
               "experiment": _experiment(media, benchmarks, baseline), "trend": trend,
+              "similar_posts": _similar_posts(media, history, current_theme),
+              "content_snapshot": _content_snapshot(media, interpretation, current_theme),
               "evidence_quality": _evidence_quality(metrics, image_bytes is not None, baseline, trend),
-              "methodology": {"noise_rule": f"No explanation or experiment when both the relative difference is under {NOISE_RELATIVE_PERCENT:.0f}% and the absolute difference is under {NOISE_COUNT_UNITS:.0f} units ({NOISE_RATE_POINTS:.1f} points for rates).",
-                              "significant_rule": f"'Significantly' requires at least {SIGNIFICANT_RELATIVE_PERCENT:.0f}% relative and {SIGNIFICANT_COUNT_UNITS:.0f} units ({SIGNIFICANT_RATE_POINTS:.1f} point for rates).",
-                              "ranking_basis": baseline["label"]},
+              "methodology": {"noise_rule": "Small changes are treated as normal variation rather than a result to explain.",
+                              "significant_rule": "Only clear gaps are highlighted or used for an experiment.",
+                              "ranking_basis": f"Compared with the account's {baseline['age_basis']}."},
               "data_gaps": data_gaps, "content_attributes": interpretation.content_attributes.model_dump()}
     return PostAnalysisComputation(source_snapshot_ids=[item.id for item in source_snapshots], model_name=used_model,
                                    observed_metrics=metrics, metric_deltas=deltas, content_payload=content_payload, output_payload=output)

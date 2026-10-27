@@ -26,17 +26,26 @@ def _item(index: int, *, caption: str, media_type: str = "IMAGE", age_days: int 
 
 def test_themes_are_derived_from_account_corpus_and_each_post_gets_one():
     items = [
-        _item(1, caption="ceramic glazing process"), _item(2, caption="ceramic glazing results"),
-        _item(3, caption="studio portrait lighting"), _item(4, caption="studio portrait setup"),
-        _item(5, caption="kiln firing process"), _item(6, caption="kiln firing results"),
+        _item(1, caption="short update"), _item(2, caption="another short update"),
+        _item(3, caption="short clip", media_type="VIDEO"), _item(4, caption="another short clip", media_type="VIDEO"),
+        _item(5, caption="short slides", media_type="CAROUSEL_ALBUM"), _item(6, caption="another short set", media_type="CAROUSEL_ALBUM"),
     ]
     themes = generate_account_themes(items)
     result = build_account_insights(items, themes=themes)
     assert 3 <= len(themes) <= 5
     assert account_themes_meet_constraints(items, themes)
-    assert not {"Tutorials", "Magic", "Comedy", "Product"} & set(themes)
+    assert all("#" not in theme and "@" not in theme for theme in themes)
     assert all(post["theme"] in themes for post in result["performance_posts"])
-    assert assign_account_theme("ceramic glazing", themes) in themes
+    assert assign_account_theme(items[0], themes) in themes
+    assert all(item["post_count"] == 2 for item in result["theme_stats"])
+
+
+def test_themes_are_hidden_when_three_groups_of_two_cannot_be_formed():
+    items = [_item(index, caption=f"same form {index}") for index in range(6)]
+    result = build_account_insights(items)
+    assert result["themes"] == []
+    assert result["theme_stats"] == []
+    assert all(post["theme"] == "Theme unavailable" for post in result["performance_posts"])
 
 
 def test_mature_lifetime_is_default_and_rankings_never_mix_format_or_maturity():
@@ -111,9 +120,13 @@ def test_metric_capabilities_match_implemented_watch_time_and_unavailable_accoun
 
 
 def test_performance_summary_uses_one_mature_format_and_rank_threshold_is_six():
-    five = [_item(index, caption=f"summary subject {index}", views=100 + index * 10) for index in range(5)]
+    five = [_item(index, caption=f"summary subject {index}", views=100 + index * 10, reach=100 + index * 10,
+                  engagement_rate=12 if index == 0 else 6 + index) for index in range(5)]
     result = build_account_insights(five)
     assert result["performance_summary"]["sample_size"] == 5
+    assert result["performance_summary"]["highest_reach"]["metric"] == "reach"
+    assert result["performance_summary"]["lowest_engagement_rate"]["metric"] == "engagement_rate"
+    assert result["performance_summary"]["lowest_reach"]["note"]
     assert all(post["comparison"] is None for post in result["performance_posts"])
     sixth = _item(5, caption="summary subject six", views=200)
     ranked = build_account_insights([*five, sixth])

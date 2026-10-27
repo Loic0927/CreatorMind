@@ -62,7 +62,7 @@ export type PostAnalysis = {
     metric_comparisons?: MetricComparison[];
     experiment?: Array<{ test_variable: string; metric_to_watch: string; action: string; reason: string; comparison: string; decision_rule: string }>;
     methodology?: { noise_rule: string; significant_rule: string; ranking_basis: string };
-    baseline?: { sample_size: number; available_account_posts: number; same_format_posts?: number; mature_sample_size?: number; maturity_threshold_hours?: number; comparison_ready?: boolean; metric_coverage: number; group: string; label: string; age_basis?: string; current_post_age_hours?: number | null; statistic: string; secondary_statistic?: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
+    baseline?: { sample_size: number; available_account_posts: number; same_format_posts?: number; mature_sample_size?: number; maturity_threshold_hours?: number; comparison_ready?: boolean; is_mature_basis?: boolean; metric_coverage: number; group: string; label: string; age_basis?: string; current_post_age_hours?: number | null; statistic: string; secondary_statistic?: string; published_range: { start: string | null; end: string | null }; snapshot_range: { start: string | null; end: string | null }; limited_sample: boolean; sample_notice: string; limitations: string[] };
     executive_summary?: string[];
     top_insights?: Array<{ status: "strong" | "attention" | "neutral"; text: string }>;
     why_it_worked?: Array<{ title?: string; evidence?: string; interpretation?: string; why_it_matters?: string; classification?: string; factor?: string; estimated_impact?: string; explanation?: string }>;
@@ -74,12 +74,14 @@ export type PostAnalysis = {
     confidence?: { score: number; level?: "High" | "Medium" | "Low"; inputs: Array<{ name: string; available: boolean; weight?: number; earned?: number; detail?: string | null }> };
     data_gaps?: string[];
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
-    content_attributes?: { thumbnail_style: string; caption_style: string; cta_usage: string };
+    content_attributes?: { thumbnail_style: string; caption_style: string; cta_usage: string; on_screen_text_hook?: string };
+    content_snapshot?: { on_screen_text_hook: string; caption_length: string; cta: string; format: string; theme: string };
+    similar_posts?: Array<{ tracked_post_id?: string | null; thumbnail_url?: string | null; title: string; theme: string; views: number | null; engagement_rate: number | null }>;
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
   };
   created_at: string;
 };
-export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
+export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
 export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: "positive" | "neutral" | "improve" };
 export type TrackedPost = {
   tracking: { id: string };
@@ -172,6 +174,7 @@ export type PerformancePost = {
   published_at: string;
   posting_window: string;
   caption_excerpt: string;
+  display_title?: string;
   observation_kind: "Mature lifetime snapshot" | "Latest cumulative snapshot" | "No snapshot";
   comparison_basis: string;
   mature: boolean;
@@ -194,6 +197,7 @@ export type AccountInsights = {
   observation_period: { start?: string | null; end?: string | null; timezone: string };
   progress: { patterns: number; posting_times: number; mature_posts: number };
   themes: string[];
+  theme_stats: Array<{ name: string; post_count: number; median_views: number | null }>;
   theme_method: string;
   patterns: PatternInsight[];
   posting_time_insights: PatternInsight[];
@@ -208,14 +212,14 @@ export type AccountInsights = {
     advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable"; reason: string }>;
   };
   performance_posts: PerformancePost[];
-  performance_summary?: { media_type: string; media_type_label: string; metric: "views" | "reach"; sample_size: number; median: number; typical: PerformanceSummaryItem; best: PerformanceSummaryItem; weakest: PerformanceSummaryItem } | null;
+  performance_summary?: { media_type: string; media_type_label: string; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
   show_average_watch_time: boolean;
   historical_backfill_note: boolean;
   content_opportunities: ContentOpportunity[];
   tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
   methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
 };
-export type PerformanceSummaryItem = { kind: "typical" | "best" | "weakest"; title: string; value: number; difference: number };
+export type PerformanceSummaryItem = { kind: "highest_reach" | "lowest_reach" | "highest_engagement_rate" | "lowest_engagement_rate"; title: string; value: number; difference: number; metric: "reach" | "engagement_rate"; note?: string | null };
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));

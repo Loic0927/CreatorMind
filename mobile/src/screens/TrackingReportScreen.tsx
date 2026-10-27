@@ -5,6 +5,18 @@ import { Button } from '../components/ui';
 import { analyzeTrackedPost, getTrackedPost, refreshTrackedPost, stopTracking } from '../services/api';
 import { PostAnalysis, TrackedPost } from '../types';
 
+function meaningfulChanges(analysis: PostAnalysis) {
+  return Object.entries(analysis.metric_deltas).filter(([metric, raw]) => {
+    if (raw == null || Number(raw) === 0) return false;
+    const delta = Number(raw);
+    const current = analysis.observed_metrics[metric];
+    const previous = current == null ? null : Number(current) - delta;
+    const relative = previous == null || previous === 0 ? Number.POSITIVE_INFINITY : Math.abs(delta / previous * 100);
+    const absoluteLimit = metric === 'engagement_rate' ? 0.5 : 5;
+    return !(relative < 10 && Math.abs(delta) < absoluteLimit);
+  });
+}
+
 export function TrackingReportScreen({ userId, initial, onBack }: { userId: string; initial: TrackedPost; onBack: () => void }) {
   const [post, setPost] = useState(initial);
   const [working, setWorking] = useState<'refresh' | 'analyze' | null>(null);
@@ -57,9 +69,9 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.title}>Post analysis</Text>
-      {image ? <Image source={{ uri: image }} style={styles.image} /> : <View style={styles.image} />}
+      <View style={styles.hero}>{image ? <Image source={{ uri: image }} style={styles.image} /> : <View style={styles.image} />}<View style={styles.heroText}><Text style={styles.eyebrow}>VERDICT</Text><Text style={styles.heroVerdict}>{displayedAnalysis?.output_payload.verdict ?? 'Run the analysis to compare this post with your account.'}</Text></View></View>
       <Text style={styles.date}>{new Date(post.media.published_at).toLocaleString()}</Text>
-      <Text style={styles.caption}>{post.media.caption || 'No caption'}</Text>
+      <Text style={styles.caption} numberOfLines={2}>{post.media.caption || 'No caption'}</Text>
 
       <Text style={styles.section}>Observed metrics</Text>
       <View style={styles.metrics}>
@@ -92,10 +104,10 @@ export function TrackingReportScreen({ userId, initial, onBack }: { userId: stri
         </View>
       )}
 
-      {post.analyses?.some((analysis) => Object.values(analysis.metric_deltas).some((value) => value != null && value !== 0)) ? <Pressable onPress={() => setShowHistory((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showHistory ? 'Hide' : 'Show'} analysis history</Text></Pressable> : null}
-      {showHistory && (post.analyses?.length ? post.analyses.filter((analysis) => Object.values(analysis.metric_deltas).some((value) => value != null && value !== 0)).map((analysis) => (
+      {post.analyses?.some((analysis) => meaningfulChanges(analysis).length) ? <Pressable onPress={() => setShowHistory((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showHistory ? 'Hide' : 'Show'} analysis history</Text></Pressable> : null}
+      {showHistory && (post.analyses?.length ? post.analyses.filter((analysis) => meaningfulChanges(analysis).length).map((analysis) => (
         <Pressable key={analysis.id} onPress={() => setViewingAnalysisId(analysis.id)} style={[styles.history, displayedAnalysis?.id === analysis.id && styles.historySelected]}>
-          <Text style={styles.historySummary}>{Object.entries(analysis.metric_deltas).filter(([, value]) => value != null && Number(value) !== 0).slice(0, 3).map(([metric, value]) => `${metric.replaceAll('_', ' ')} ${Number(value) >= 0 ? '+' : ''}${metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString()}`).join(' · ')}</Text>
+          <Text style={styles.historySummary}>{meaningfulChanges(analysis).slice(0, 3).map(([metric, value]) => `${metric.replaceAll('_', ' ')} ${Number(value) >= 0 ? '+' : ''}${metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString()}`).join(' · ')}</Text>
           <Text style={styles.label}>{new Date(analysis.created_at).toLocaleString()}</Text>
           <Text style={styles.label}>Changes since the prior source snapshot</Text>
         </Pressable>
@@ -123,18 +135,17 @@ function AnalysisPanel({ analysis }: { analysis: PostAnalysis }) {
   const comparisons = output.metric_comparisons ?? [];
   const peerCount = output.baseline?.sample_size ?? 0;
   const comparisonReady = peerCount >= 3;
-  const rows = comparisonReady ? comparisons.filter((item) => item.current != null && item.median != null && item.sample_size >= 3 && item.percent_change != null) : [];
+  const metricOrder = ['views', 'reach', 'engagement_rate', 'shares', 'saves', 'comments'];
+  const rows = comparisonReady && output.baseline?.is_mature_basis ? comparisons.filter((item) => item.current != null && item.median != null && item.sample_size >= 3 && item.percent_of_median != null).sort((a, b) => metricOrder.indexOf(a.metric) - metricOrder.indexOf(b.metric)) : [];
   const experiment = comparisonReady ? output.experiment?.[0] : undefined;
   const format = (metric: string, value: number | null | undefined) => value == null ? '—' : metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString();
   return <View style={styles.dashboard}>
-    <View style={styles.comparisonCard}><Text style={styles.eyebrow}>VERDICT</Text><Text style={styles.analysisSummary}>{output.verdict ?? output.conclusion}</Text>{!comparisonReady ? <Text style={styles.analysisMuted}>Only {peerCount} comparable post{peerCount === 1 ? '' : 's'}; no comparison yet.</Text> : null}</View>
-    {rows.length ? <Panel title="Comparison">{rows.map((item) => <View key={item.metric} style={styles.comparisonRow}><Text style={styles.subcardTitle}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.label}>{format(item.metric, item.current)} vs {format(item.metric, item.median)} typical · {item.percent_change! > 0 ? '+' : ''}{item.percent_change?.toFixed(1)}% · n={item.sample_size}</Text></View>)}</Panel> : null}
-    {comparisonReady && output.what_worked?.length ? <Panel title="What worked">{output.what_worked.slice(0, 2).map((item) => <Text key={item.metric} style={styles.panelText}><Text style={styles.subcardTitle}>{item.title}: </Text>{item.evidence} (n={item.sample_size})</Text>)}</Panel> : null}
-    {comparisonReady && output.what_to_improve?.length ? <Panel title="What to improve">{output.what_to_improve.slice(0, 2).map((item) => <Text key={item.metric} style={styles.panelText}><Text style={styles.subcardTitle}>{item.title}: </Text>{item.evidence} (n={item.sample_size})</Text>)}</Panel> : null}
+    {rows.length ? <Panel title={`Mature comparison · n=${peerCount}`}>{rows.map((item) => <View key={item.metric} style={styles.comparisonRow}><Text style={styles.subcardTitle}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.label}>{format(item.metric, item.current)} · median {format(item.metric, item.median)} · {item.is_noise ? 'in line with typical' : `${item.percent_of_median?.toFixed(1)}% of median`}</Text></View>)}</Panel> : null}
+    {output.content_snapshot ? <Panel title="Content snapshot">{([['On-screen text hook', output.content_snapshot.on_screen_text_hook], ['Caption length', output.content_snapshot.caption_length], ['CTA', output.content_snapshot.cta], ['Format', output.content_snapshot.format], ['Theme', output.content_snapshot.theme]] as const).map(([label, value]) => <View key={label} style={styles.subcard}><Text style={styles.hypothesis}>{label.toUpperCase()}</Text><Text style={styles.subcardTitle}>{value}</Text></View>)}</Panel> : null}
+    {output.similar_posts?.length ? <Panel title="Similar posts"><View style={styles.similarGrid}>{output.similar_posts.slice(0, 2).map((post) => <View key={post.tracked_post_id ?? post.title} style={styles.similarCard}>{post.thumbnail_url ? <Image source={{ uri: post.thumbnail_url }} style={styles.similarImage} /> : <View style={styles.similarImage} />}<Text style={styles.subcardTitle} numberOfLines={1}>{post.title}</Text><Text style={styles.label}>{post.views?.toLocaleString() ?? '—'} views · {post.engagement_rate == null ? '—' : `${post.engagement_rate.toFixed(1)}%`} engagement</Text></View>)}</View></Panel> : null}
     {experiment ? <Panel title="One experiment"><Text style={styles.panelText}>{experiment.action}</Text><Text style={styles.impact}>Watch {experiment.metric_to_watch}. {experiment.decision_rule}</Text></Panel> : null}
-    {output.trend ? <View style={styles.history}><Text style={styles.historySummary}>{output.trend.summary}</Text></View> : null}
     <Pressable onPress={() => setShowMethod((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>ⓘ Methodology</Text></Pressable>
-    {showMethod ? <View style={styles.history}><Text style={styles.label}>{output.methodology?.noise_rule}</Text>{comparisonReady ? <Text style={styles.label}>{output.methodology?.significant_rule}</Text> : null}<Text style={styles.label}>{output.methodology?.ranking_basis}{comparisonReady ? `; n=${peerCount}.` : '.'}</Text></View> : null}
+    {showMethod ? <View style={styles.history}><Text style={styles.label}>{output.methodology?.ranking_basis}{comparisonReady ? ` Basis: n=${peerCount}.` : ''}</Text><Text style={styles.label}>{output.methodology?.noise_rule}</Text></View> : null}
   </View>;
 }
 
@@ -166,7 +177,10 @@ function Panel({ title, children }: { title: string; children: ReactNode }) { re
 const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 32, gap: 14 },
   title: { fontSize: 30, lineHeight: 36, fontWeight: '800', color: '#201633' },
-  image: { width: '100%', aspectRatio: 1.2, borderRadius: 18, backgroundColor: '#eee8fa' },
+  hero: { flexDirection: 'row', gap: 14, alignItems: 'flex-start', padding: 14, borderRadius: 18, backgroundColor: '#24163b' },
+  heroText: { flex: 1, gap: 7 },
+  heroVerdict: { color: 'white', fontSize: 15, lineHeight: 22, fontWeight: '800' },
+  image: { width: 120, height: 120, borderRadius: 16, backgroundColor: '#eee8fa' },
   date: { color: '#746b82' },
   caption: { color: '#201633', lineHeight: 21 },
   metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
@@ -215,6 +229,9 @@ const styles = StyleSheet.create({
   comparisonRow: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee8fa' },
   panelText: { color: '#342846', lineHeight: 20 },
   subcard: { padding: 12, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
+  similarGrid: { flexDirection: 'row', gap: 8 },
+  similarCard: { flex: 1, minWidth: 0, padding: 10, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
+  similarImage: { width: '100%', aspectRatio: 1.5, borderRadius: 9, backgroundColor: '#eee8fa' },
   subcardTitle: { color: '#201633', fontWeight: '800' },
   hypothesis: { color: '#7c3aed', fontWeight: '800', fontSize: 10, letterSpacing: 0.7 },
   impact: { color: '#6d28d9', fontWeight: '700', fontSize: 12, lineHeight: 18 },

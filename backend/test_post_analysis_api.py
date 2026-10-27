@@ -91,6 +91,7 @@ def test_analyze_tracking_persists_source_snapshot_and_owner(monkeypatch):
     )
     monkeypatch.setattr(instagram_api, "analyze_post", fake_analyze)
     monkeypatch.setattr(instagram_api, "get_account_context", lambda user_id: "Magic education account")
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: None)
 
     result = instagram_api.analyze_tracking("tracked-1", _user("owner"))
 
@@ -114,6 +115,7 @@ def test_analyze_tracking_can_ignore_account_context(monkeypatch):
     monkeypatch.setattr(instagram_api, "get_content_repository", lambda: repository)
     monkeypatch.setattr(instagram_api, "tracked_payload", lambda user_id: [_tracked_item()])
     monkeypatch.setattr(instagram_api, "get_account_context", lambda user_id: "Must not be used")
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: None)
     monkeypatch.setattr(instagram_api, "analyze_post", lambda media, snapshots, **kwargs: captured.update(kwargs) or PostAnalysisComputation(
         source_snapshot_ids=["snapshot-1"], model_name="test", observed_metrics={}, metric_deltas={},
         content_payload={}, output_payload={"recommendations": []},

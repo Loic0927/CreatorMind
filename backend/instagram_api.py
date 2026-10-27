@@ -34,7 +34,7 @@ from backend.services.publishing import (
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.post_analysis import PostAnalysisError, analyze_post
-from backend.services.account_insights import account_themes_meet_constraints, build_account_insights, generate_account_themes
+from backend.services.account_insights import account_themes_meet_constraints, assign_account_theme, build_account_insights, generate_account_themes
 from backend.auth import AuthenticatedUser, get_account_context, require_user
 from backend.storage.content_repository import get_content_repository
 from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
@@ -629,6 +629,8 @@ def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
         )
     peer_metrics = []
     historical_posts = []
+    account = stored_connection(user_id)
+    themes = list(account.insight_themes) if account else []
     for candidate in tracked_payload(user_id):
         candidate_latest = candidate.get("latest")
         candidate_media = candidate.get("media")
@@ -643,9 +645,12 @@ def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
                 "tracked_post_id": candidate["tracking"].id,
                 "caption": candidate_media.caption,
                 "media_type": candidate_media.media_type,
+                "thumbnail_url": candidate_media.thumbnail_url or candidate_media.media_url,
                 "published_at": candidate_media.published_at.isoformat(),
                 "captured_at": candidate_latest.captured_at.isoformat(),
                 "metrics": candidate_metrics,
+                "theme": assign_account_theme({"media": candidate_media}, themes),
+                "is_current": candidate["tracking"].id == tracked_id,
             }
         )
         if candidate["tracking"].id != tracked_id:

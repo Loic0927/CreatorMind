@@ -18,7 +18,8 @@ def _media(identifier: str = "media-1", media_type: str = "IMAGE", age_days: int
 def _snapshot(identifier: str = "snapshot-1", **values) -> InstagramInsightSnapshot:
     defaults = dict(reach=100, views=120, likes=10, comments=4, saves=3, shares=2, engagement_rate=19.0)
     defaults.update(values)
-    return InstagramInsightSnapshot(id=identifier, media_id="instagram:media-1", captured_at=NOW, **defaults)
+    captured_at = defaults.pop("captured_at", NOW)
+    return InstagramInsightSnapshot(id=identifier, media_id="instagram:media-1", captured_at=captured_at, **defaults)
 
 
 def _peer(index: int, *, media_type: str = "IMAGE", age_days: int = 3, **values) -> dict:
@@ -28,13 +29,13 @@ def _peer(index: int, *, media_type: str = "IMAGE", age_days: int = 3, **values)
 
 
 def _model_output(text: str = "The caption may have helped.") -> str:
-    return json.dumps({"why_it_worked": [{"title": "Possible content explanation", "evidence": "Reach is above the median.", "interpretation": text, "why_it_matters": "Repeat a comparable test."}], "content_attributes": {"thumbnail_style": "Unavailable", "caption_style": "Short", "cta_usage": "None"}})
+    return json.dumps({"why_it_worked": [{"title": "Possible content explanation", "evidence": "Reach is above the median.", "interpretation": text, "why_it_matters": "Repeat a comparable test."}], "content_attributes": {"thumbnail_style": "Unavailable", "caption_style": "Short", "cta_usage": "None", "on_screen_text_hook": "Start here"}})
 
 
 def test_analysis_uses_same_format_and_similar_age_without_a_score():
-    result = analyze_post(_media(), [_snapshot()], peer_metrics=[_peer(1), _peer(2, media_type="VIDEO"), _peer(3, age_days=20)],
+    result = analyze_post(_media(), [_snapshot("old", reach=50, captured_at=NOW - timedelta(days=1)), _snapshot("new")], peer_metrics=[_peer(1), _peer(2, media_type="VIDEO"), _peer(3, age_days=20)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
-    assert result.schema_version == "post-analysis-v5"
+    assert result.schema_version == "post-analysis-v6"
     assert "score" not in result.output_payload
     assert result.output_payload["baseline"]["sample_size"] == 1
     assert result.output_payload["baseline"]["group"] == "same_format_similar_age"
@@ -43,7 +44,7 @@ def test_analysis_uses_same_format_and_similar_age_without_a_score():
     assert reach["percentile"] is None
     assert result.output_payload["what_worked"] == []
     assert result.output_payload["what_to_improve"] == []
-    assert result.output_payload["comparison_notice"] == "Only 1 comparable post; no comparison yet."
+    assert result.output_payload["comparison_notice"] == "Only 1 same-format, similar-age post; no comparison yet."
     assert reach["basis"] == result.output_payload["baseline"]["label"]
 
 
@@ -54,7 +55,8 @@ def test_noise_threshold_is_in_prompt_and_deterministically_suppresses_experimen
         return _model_output()
     current = _snapshot(reach=104, views=124, likes=10, comments=4, saves=3, shares=2, engagement_rate=19.4)
     peers = [_peer(index) for index in range(5)]
-    result = analyze_post(_media(), [current], peer_metrics=peers,
+    previous = _snapshot("previous", reach=50, views=60, captured_at=NOW - timedelta(days=1))
+    result = analyze_post(_media(), [previous, current], peer_metrics=peers,
                           generator=generator,
                           image_loader=lambda url: None, model_name="test")
     reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
@@ -66,7 +68,7 @@ def test_noise_threshold_is_in_prompt_and_deterministically_suppresses_experimen
 
 
 def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
-    result = analyze_post(_media(), [_snapshot(reach=12, engagement_rate=3.26)], peer_metrics=[_peer(1, reach=0, engagement_rate=2.24)], image_loader=lambda url: None)
+    result = analyze_post(_media(), [_snapshot(reach=12, engagement_rate=3.26)], peer_metrics=[_peer(1, age_days=20, reach=0, engagement_rate=2.24)], image_loader=lambda url: None)
     reach = next(item for item in result.output_payload["benchmarks"] if item["metric"] == "reach")
     rate = next(item for item in result.output_payload["benchmarks"] if item["metric"] == "engagement_rate")
     assert reach["median"] == 0
@@ -76,7 +78,8 @@ def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
 
 
 def test_exactly_one_experiment_and_strongest_positive_metric_are_returned_for_real_gap():
-    result = analyze_post(_media(), [_snapshot(reach=160, views=180, shares=10, saves=0)], peer_metrics=[_peer(index) for index in range(5)],
+    snapshots = [_snapshot("previous", reach=80, views=90, captured_at=NOW - timedelta(days=1)), _snapshot(reach=160, views=180, shares=10, saves=0)]
+    result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index) for index in range(5)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
     assert len(result.output_payload["experiment"]) == 1
     assert result.output_payload["strongest_metric"]["percent_change"] > 0
@@ -101,24 +104,54 @@ def test_analysis_rejects_missing_snapshot_and_falls_back_for_invalid_model_outp
         analyze_post(_media(), [])
     monkeypatch.delenv("GEMINI_MODEL", raising=False)
     result = analyze_post(_media(), [_snapshot()], generator=lambda *args, **kwargs: pytest.fail("not called"), image_loader=lambda url: None)
-    assert result.model_name == "deterministic-fallback-v5"
+    assert result.model_name == "deterministic-fallback-v6"
     assert "topic" not in result.output_payload["content_attributes"]
 
 
-def test_young_post_reports_observed_mature_same_format_reference():
+def test_plateaued_young_post_uses_only_the_mature_same_format_basis():
     peers = [_peer(index, age_days=20, reach=value) for index, value in enumerate((80, 100, 120))]
-    result = analyze_post(_media(age_days=2), [_snapshot(reach=127)], peer_metrics=peers, image_loader=lambda url: None)
-    reference = result.output_payload["mature_reference"]
-    assert reference["sample_size"] == 3
-    assert reference["percent_of_median"] == 127
-    assert "still growing" not in reference["text"] or result.output_payload["trend"]["growth_status"] == "still growing"
-    assert "127% of your mature Image median" in result.output_payload["verdict"]
+    snapshots = [_snapshot("old", reach=125, captured_at=NOW - timedelta(days=1)), _snapshot("new", reach=127)]
+    result = analyze_post(_media(age_days=2), snapshots, peer_metrics=peers, image_loader=lambda url: None)
+    baseline = result.output_payload["baseline"]
+    assert baseline["group"] == "mature_same_format"
+    assert baseline["sample_size"] == 3
+    assert result.output_payload["comparison_notice"] is None
+    assert "mature Image median (n=3)" in result.output_payload["verdict"]
+    reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
+    assert reach["percent_of_median"] == 127.0
+
+
+def test_same_age_basis_is_not_used_until_growth_is_observed():
+    peers = [_peer(index, age_days=20) for index in range(3)] + [_peer(index + 3, age_days=2) for index in range(3)]
+    result = analyze_post(_media(age_days=2), [_snapshot()], peer_metrics=peers, image_loader=lambda url: None)
+    assert result.output_payload["trend"]["growth_status"] == "growth status not established"
+    assert result.output_payload["baseline"]["group"] == "mature_same_format"
 
 
 def test_wider_reach_dilution_is_not_an_improvement_item_or_experiment():
     peers = [_peer(index, reach=100, engagement_rate=10.0, saves=3) for index in range(5)]
-    result = analyze_post(_media(), [_snapshot(reach=180, engagement_rate=5.0, saves=3)], peer_metrics=peers, image_loader=lambda url: None)
+    snapshots = [_snapshot("previous", reach=80, captured_at=NOW - timedelta(days=1)), _snapshot(reach=180, engagement_rate=5.0, saves=3)]
+    result = analyze_post(_media(), snapshots, peer_metrics=peers, image_loader=lambda url: None)
     assert result.output_payload["diluted_by_wider_reach"] is True
     assert "diluted by wider reach" in result.output_payload["verdict"]
     assert all(item["metric"] != "engagement_rate" for item in result.output_payload["what_to_improve"])
     assert result.output_payload["experiment"] == []
+
+
+def test_content_snapshot_and_similar_posts_are_factual_and_theme_scoped():
+    history = [
+        {"is_current": True, "theme": "Image · Short caption"},
+        {"is_current": False, "theme": "Image · Short caption", "tracked_post_id": "peer-1", "media_type": "IMAGE",
+         "caption": "Peer caption #hidden", "published_at": NOW.isoformat(), "thumbnail_url": "https://cdn.example/peer.jpg",
+         "metrics": {"views": 321, "engagement_rate": 7.25}},
+        {"is_current": False, "theme": "Reel / video · Long caption", "tracked_post_id": "peer-2", "media_type": "VIDEO",
+         "caption": "Other theme", "published_at": NOW.isoformat(), "metrics": {"views": 999, "engagement_rate": 4.0}},
+    ]
+    result = analyze_post(_media(), [_snapshot()], historical_posts=history,
+                          generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
+    snapshot = result.output_payload["content_snapshot"]
+    assert snapshot["on_screen_text_hook"] == "Start here"
+    assert snapshot["cta"] == "Not present"
+    assert snapshot["theme"] == "Image · Short caption"
+    assert result.output_payload["similar_posts"][0]["title"] == "Peer caption"
+    assert result.output_payload["similar_posts"][0]["engagement_rate"] == 7.2
