@@ -74,14 +74,14 @@ def _seed(
     return tracked_id
 
 
-def test_schedule_is_unique_and_has_five_milestones(tracking_store):
+def test_schedule_is_unique_and_has_one_24_hour_capture(tracking_store):
     repository, factory = tracking_store
     tracked_id = _seed(factory, published_at=NOW - timedelta(minutes=10), started_at=NOW)
 
     first = repository.ensure_jobs_for_tracking(tracked_id, NOW)
     second = repository.ensure_jobs_for_tracking(tracked_id, NOW)
 
-    assert [job.target_hour for job in first] == [1, 3, 6, 12, 24]
+    assert [job.target_hour for job in first] == [24]
     assert [job.id for job in second] == [job.id for job in first]
 
 
@@ -89,8 +89,8 @@ def test_two_workers_cannot_claim_the_same_job(tracking_store):
     repository, factory = tracking_store
     tracked_id = _seed(
         factory,
-        published_at=NOW - timedelta(hours=1, minutes=5),
-        started_at=NOW - timedelta(hours=1, minutes=5),
+        published_at=NOW - timedelta(hours=24, minutes=5),
+        started_at=NOW - timedelta(hours=24, minutes=5),
     )
     repository.ensure_jobs_for_tracking(tracked_id, NOW)
 
@@ -98,7 +98,7 @@ def test_two_workers_cannot_claim_the_same_job(tracking_store):
     second = repository.claim_due("worker-b", limit=5, now=NOW)
 
     assert len(first) == 1
-    assert first[0].target_hour == 1
+    assert first[0].target_hour == 24
     assert second == []
 
 
@@ -106,8 +106,8 @@ def test_retry_uses_persisted_attempt_and_next_time(tracking_store):
     repository, factory = tracking_store
     tracked_id = _seed(
         factory,
-        published_at=NOW - timedelta(hours=1, minutes=5),
-        started_at=NOW - timedelta(hours=1, minutes=5),
+        published_at=NOW - timedelta(hours=24, minutes=5),
+        started_at=NOW - timedelta(hours=24, minutes=5),
     )
     repository.ensure_jobs_for_tracking(tracked_id, NOW)
     job = repository.claim_due("worker-a", now=NOW)[0]
@@ -124,7 +124,7 @@ def test_cancelling_tracking_cancels_unfinished_jobs(tracking_store):
     tracked_id = _seed(factory, published_at=NOW, started_at=NOW)
     repository.ensure_jobs_for_tracking(tracked_id, NOW)
 
-    assert repository.cancel_tracking_jobs(tracked_id, NOW) == 5
+    assert repository.cancel_tracking_jobs(tracked_id, NOW) == 1
     assert {job.status for job in repository.jobs_for_tracking(tracked_id)} == {"cancelled"}
 
 
@@ -147,8 +147,8 @@ def test_worker_completes_partial_snapshot_and_keeps_scheduled_and_actual_times(
     repository, factory = tracking_store
     tracked_id = _seed(
         factory,
-        published_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
-        started_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
+        published_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
+        started_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
     )
     repository.ensure_jobs_for_tracking(tracked_id)
     job = repository.claim_due("worker-a")[0]
@@ -171,14 +171,14 @@ def test_worker_completes_partial_snapshot_and_keeps_scheduled_and_actual_times(
         assert "views" not in snapshot.raw_metrics
         assert snapshot.saves is None and snapshot.shares is None
         assert snapshot.collection_type == "milestone"
-        assert snapshot.target_hour == 1
+        assert snapshot.target_hour == 24
         assert snapshot.scheduled_for == job.due_at.replace(tzinfo=None)
         assert snapshot.captured_at >= snapshot.scheduled_for
 
 
 @pytest.mark.parametrize(
     ("target_hour", "media_type"),
-    [(1, "IMAGE"), (3, "VIDEO"), (6, "CAROUSEL_ALBUM"), (12, "VIDEO"), (24, "IMAGE")],
+    [(24, "IMAGE"), (24, "VIDEO"), (24, "CAROUSEL_ALBUM")],
 )
 def test_worker_fetches_and_persists_views_for_every_milestone(
     tracking_store, monkeypatch, target_hour, media_type
@@ -239,8 +239,8 @@ def test_invalid_token_blocks_all_user_jobs(tracking_store, monkeypatch):
     repository, factory = tracking_store
     tracked_id = _seed(
         factory,
-        published_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
-        started_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
+        published_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
+        started_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
     )
     repository.ensure_jobs_for_tracking(tracked_id)
     job = repository.claim_due("worker-a")[0]
@@ -257,8 +257,8 @@ def test_rate_limit_is_retried_without_storing_provider_error(tracking_store, mo
     repository, factory = tracking_store
     tracked_id = _seed(
         factory,
-        published_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
-        started_at=datetime.now(timezone.utc) - timedelta(hours=1, minutes=5),
+        published_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
+        started_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=5),
     )
     repository.ensure_jobs_for_tracking(tracked_id)
     job = repository.claim_due("worker-a")[0]

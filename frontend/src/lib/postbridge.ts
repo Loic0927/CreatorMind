@@ -3,7 +3,7 @@ const STORAGE_KEY = "postbridge.web.session";
 
 export type Session = { accessToken: string; expiresAt: string; user: { id: string; email: string } };
 export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
-export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string };
+export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string; comment_ingestion?: { enabled: boolean; permission_granted: boolean } };
 export type InsightSnapshot = {
   id: string;
   likes?: number | null;
@@ -21,22 +21,21 @@ export type InsightSnapshot = {
   target_hour?: number | null;
   scheduled_for?: string | null;
 };
-export type TrackingMilestone = {
-  target_hour: 1 | 3 | 6 | 12 | 24;
-  scheduled_for: string;
-  deadline_at: string;
-  status: "pending" | "running" | "retry" | "completed" | "missed" | "cancelled" | "blocked_reauthorization" | "permission_required" | "unavailable";
-  attempt_count: number;
-  actual_captured_at?: string | null;
-  snapshot?: InsightSnapshot | null;
-  views_since_previous_snapshot?: number | null;
-  error_code?: string | null;
+export type First24Payload = {
+  views: number | null; accounts_reached: number | null; avg_watch_time_seconds: number | null;
+  skip_rate_pct: number | null; share_rate_pct: number | null; followers_pct: number | null;
+  non_followers_pct: number | null; detected_ui_language: string | null;
+  curve: { estimated_views_at_24h: number | null; share_of_final_by_24h: number | null; vs_account_typical: "above" | "similar" | "below" | "unknown" } | null;
 };
-export type PostPublishTracking = {
-  automatic_collection: boolean;
-  status: "scheduler_unavailable" | "tracking" | "complete" | "blocked_reauthorization" | "permission_required";
-  next_capture_at?: string | null;
-  milestones: TrackingMilestone[];
+export type First24Hours = {
+  state: "not_ready" | "upload_available" | "available"; available_after: string; upload_allowed: boolean;
+  api_capture_status?: string; record?: { source: "instagram_api" | "user_screenshot"; source_label: string; payload: First24Payload; confirmed_at: string } | null;
+};
+export type CommentInsights = {
+  available: boolean; total_comments: number; facts_label: string; interpretation_label: string;
+  comments: Array<{ text: string; like_count: number; timestamp: string }>;
+  category_counts: Record<"question" | "request" | "praise" | "joke_or_emoji_only" | "criticism", number>;
+  sentiment_conclusion: null; sentiment_note?: string | null;
 };
 export type PostAnalysis = {
   id: string;
@@ -75,7 +74,7 @@ export type PostAnalysis = {
     data_gaps?: string[];
     content_patterns?: Array<{ pattern: string; sample_size: number; average_score: number; difference_from_baseline: number }>;
     content_attributes?: { thumbnail_style: string; caption_style: string; cta_usage: string; on_screen_text_hook?: string };
-    content_snapshot?: { on_screen_text_hook: string; caption_length: string; cta: string; format: string; theme: string };
+    /** @deprecated current analyses do not emit this block. */
     similar_posts?: Array<{ tracked_post_id?: string | null; thumbnail_url?: string | null; title: string; theme: string; views: number | null; engagement_rate: number | null }>;
     summary?: string; strengths?: string[]; concerns?: string[]; missing_inputs?: string[];
   };
@@ -84,12 +83,14 @@ export type PostAnalysis = {
 export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
 export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: "positive" | "neutral" | "improve" };
 export type TrackedPost = {
-  tracking: { id: string };
+  tracking: { id: string; exclude_from_comparisons?: boolean };
   media: { id: string; media_type?: string; caption: string; media_url?: string; thumbnail_url?: string; permalink?: string | null; published_at: string };
   latest?: InsightSnapshot;
   snapshots?: InsightSnapshot[];
   analyses?: PostAnalysis[];
-  post_publish_tracking?: PostPublishTracking;
+  first_24_hours?: First24Hours;
+  comment_insights?: CommentInsights;
+  comment_ingestion?: { enabled: boolean; permission_granted: boolean };
 };
 export type TrackingRecord = { id: string };
 export type PublishingCapability = { platform: SocialPlatform; available: boolean; reason?: string | null };
@@ -151,9 +152,9 @@ export type ContentOpportunity = {
   effect_estimate?: number | null;
   effect_estimate_label?: string;
 };
-export type PerformanceMetrics = { views: number | null; reach: number | null; likes: number | null; comments: number | null; saves: number | null; shares: number | null; engagement_rate: number | null; average_watch_time_ms?: number | null; total_watch_time_ms?: number | null };
+export type PerformanceMetrics = { views: number | null; reach: number | null; likes: number | null; comments: number | null; saves: number | null; shares: number | null; engagement_rate: number | null; average_watch_time_ms?: number | null; total_watch_time_ms?: number | null; skip_rate_pct?: number | null };
 export type PerformanceMilestone = {
-  target_hour: 1 | 3 | 6 | 12 | 24;
+  target_hour: 24;
   status: string;
   scheduled_for?: string | null;
   captured_at?: string | null;
@@ -183,8 +184,12 @@ export type PerformancePost = {
   tracking_period_hours?: number | null;
   metrics?: PerformanceMetrics | null;
   metric_status: Record<string, "available" | "unavailable" | "permission_required">;
+  metric_sources: Record<string, "Instagram API" | "From your screenshot">;
+  first_24_hours?: First24Hours | null;
+  exclude_from_comparisons: boolean;
+  maturity_growth_pct?: number | null;
+  /** @deprecated legacy card only; current API no longer emits milestone arrays. */
   milestones: PerformanceMilestone[];
-  historical_backfill_unavailable: boolean;
   comparison?: { rank: number; group_size: number; metric: "views" | "reach"; group: string } | null;
 };
 export type AccountInsights = {
@@ -212,14 +217,18 @@ export type AccountInsights = {
     advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable"; reason: string }>;
   };
   performance_posts: PerformancePost[];
-  performance_summary?: { media_type: string; media_type_label: string; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
+  performance_summary?: { media_type: string; media_type_label: string; source: "Instagram API"; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
   show_average_watch_time: boolean;
-  historical_backfill_note: boolean;
+  show_skip_rate: boolean;
+  how_fast_posts_peak?: { sample_size: number; median_share_of_final_by_24h: number; source: "Estimated from your screenshots" } | null;
+  viewer_requests?: { total_comments: number; question_count: number; request_count: number; examples: Array<{ text: string; like_count: number }>; facts_label: string; interpretation_label: string } | null;
+  /** @deprecated current responses use the upload state on each post. */
+  historical_backfill_note?: boolean;
   content_opportunities: ContentOpportunity[];
   tested_combination?: (PatternInsight & { label_type: string; caution: string }) | null;
   methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
 };
-export type PerformanceSummaryItem = { kind: "highest_reach" | "lowest_reach" | "highest_engagement_rate" | "lowest_engagement_rate"; title: string; value: number; difference: number; metric: "reach" | "engagement_rate"; note?: string | null };
+export type PerformanceSummaryItem = { kind: "highest_reach" | "lowest_reach" | "highest_engagement_rate" | "lowest_engagement_rate"; title: string; thumbnail_url?: string | null; published_at: string; media_type_label: string; value: number; difference: number; metric: "reach" | "engagement_rate"; note?: string | null };
 
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
@@ -272,6 +281,10 @@ export const getTrackedPost = (session: Session, trackedId: string) => authReque
 export const getInstagramMedia = (session: Session) => authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(session, "/api/instagram/media");
 export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
+export const refreshTrackedPostComments = (session: Session, trackedId: string) => authRequest<CommentInsights>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/comments/refresh`, { method: "POST" });
+export const setComparisonExclusion = (session: Session, trackedId: string, excluded: boolean) => authRequest(session, `/tracked-posts/${encodeURIComponent(trackedId)}`, { method: "PATCH", body: JSON.stringify({ exclude_from_comparisons: excluded }) });
+export const extractFirst24Screenshots = (session: Session, trackedId: string, screenshots: Array<{ filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }>) => authRequest<{ candidate: First24Payload; extraction_model: string; extraction_version: string; validation: { mismatch_pct: number | null; possible_wrong_post: boolean; warning?: string | null }; upload_token: string }>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/first-24-hours/extract`, { method: "POST", body: JSON.stringify({ screenshots }) });
+export const confirmFirst24Screenshots = (session: Session, trackedId: string, payload: { upload_token: string; payload: First24Payload; keep_screenshots: boolean }) => authRequest<{ first_24_hours: First24Hours }>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/first-24-hours/confirm`, { method: "POST", body: JSON.stringify(payload) });
 export const analyzeTrackedPost = (session: Session, trackedId: string, useAccountContext = true) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses?use_account_context=${useAccountContext}`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
 export const regenerateInsightThemes = (session: Session) => authRequest<{ themes: string[] }>(session, "/insights/themes/regenerate", { method: "POST" });

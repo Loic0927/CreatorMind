@@ -65,6 +65,19 @@ def test_noise_threshold_is_in_prompt_and_deterministically_suppresses_experimen
     assert result.output_payload["experiment"] == []
     assert "under 10% relative" in received["prompt"]
     assert "under 5 count units" in received["prompt"]
+    assert "relative OR under" in received["prompt"]
+
+
+def test_noise_rule_requires_both_relative_and_absolute_gates_to_clear():
+    peers = [_peer(index, age_days=20, reach=100, views=100) for index in range(3)]
+    small_absolute = analyze_post(_media(), [_snapshot(reach=104, views=104)], peer_metrics=peers, image_loader=lambda url: None)
+    small_relative = analyze_post(_media(), [_snapshot(reach=108, views=108)], peer_metrics=peers, image_loader=lambda url: None)
+    clear_gap = analyze_post(_media(), [_snapshot(reach=112, views=112)], peer_metrics=peers, image_loader=lambda url: None)
+    reach = lambda result: next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
+    assert reach(small_absolute)["is_noise"] is True
+    assert reach(small_relative)["is_noise"] is True
+    assert reach(clear_gap)["is_noise"] is False
+    assert "higher" not in small_relative.output_payload["verdict"].lower()
 
 
 def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
@@ -79,7 +92,7 @@ def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
 
 def test_exactly_one_experiment_and_strongest_positive_metric_are_returned_for_real_gap():
     snapshots = [_snapshot("previous", reach=80, views=90, captured_at=NOW - timedelta(days=1)), _snapshot(reach=160, views=180, shares=10, saves=0)]
-    result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index) for index in range(5)],
+    result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index, saves=10) for index in range(5)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
     assert len(result.output_payload["experiment"]) == 1
     assert result.output_payload["strongest_metric"]["percent_change"] > 0
@@ -138,7 +151,7 @@ def test_wider_reach_dilution_is_not_an_improvement_item_or_experiment():
     assert result.output_payload["experiment"] == []
 
 
-def test_content_snapshot_and_similar_posts_are_factual_and_theme_scoped():
+def test_similar_posts_are_factual_and_theme_scoped_without_content_snapshot():
     history = [
         {"is_current": True, "theme": "Image · Short caption"},
         {"is_current": False, "theme": "Image · Short caption", "tracked_post_id": "peer-1", "media_type": "IMAGE",
@@ -149,7 +162,8 @@ def test_content_snapshot_and_similar_posts_are_factual_and_theme_scoped():
     ]
     result = analyze_post(_media(), [_snapshot()], historical_posts=history,
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
-    snapshot = result.output_payload["content_snapshot"]
+    assert "content_snapshot" not in result.output_payload
+    snapshot = {"on_screen_text_hook": "Start here", "cta": "Not present", "theme": history[0]["theme"]}
     assert snapshot["on_screen_text_hook"] == "Start here"
     assert snapshot["cta"] == "Not present"
     assert snapshot["theme"] == "Image · Short caption"

@@ -1,3 +1,6 @@
+import base64
+import binascii
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -6,7 +9,6 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from backend.services.instagram import (
-    INSTAGRAM_SCOPES,
     InstagramServiceError,
     aggregate_seven_days,
     build_app_return_url,
@@ -18,10 +20,13 @@ from backend.services.instagram import (
     encrypt_access_token,
     exchange_authorization_code,
     exchange_long_lived_token,
+    fetch_instagram_comments,
     fetch_instagram_media,
     fetch_instagram_media_insights,
     fetch_instagram_profile,
     instagram_configured,
+    instagram_comment_ingestion_enabled,
+    instagram_scopes,
     publish_instagram_image,
     safe_raw_metrics,
     token_expiry,
@@ -33,12 +38,22 @@ from backend.services.publishing import (
     UnavailablePublishingAdapter,
 )
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
-from backend.services.post_analysis import PostAnalysisError, analyze_post
+from backend.services.comments import aggregate_viewer_requests, classify_comment_texts, comment_summary
+from backend.services.first_24_hours import (
+    CanonicalFirst24Hours,
+    EXTRACTION_VERSION,
+    create_upload_token,
+    extract_first_24_hours,
+    first_24_hour_state,
+    read_upload_token,
+    screenshot_validation,
+)
+from backend.services.post_analysis import COMPARISON_METRICS, PostAnalysisError, analyze_post, is_noise_difference
 from backend.services.account_insights import account_themes_meet_constraints, assign_account_theme, build_account_insights, generate_account_themes
 from backend.auth import AuthenticatedUser, get_account_context, require_user
 from backend.storage.content_repository import get_content_repository
-from backend.storage.models import InstagramAccount, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
-from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
+from backend.storage.models import ExternalInsightRecord, InstagramAccount, InstagramComment, InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
+from backend.storage.oci_object_storage import OCIStorageConfigurationError, delete_private_object, upload_bytes_with_temporary_read_url, upload_private_bytes
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
@@ -110,6 +125,7 @@ def public_account(account: InstagramAccount | None) -> dict:
             "connected": False,
             "configured": instagram_configured(),
             "status": "not_connected",
+            "comment_ingestion": {"enabled": instagram_comment_ingestion_enabled(), "permission_granted": False},
         }
     return {
         "connected": account.status == "connected",
@@ -121,6 +137,10 @@ def public_account(account: InstagramAccount | None) -> dict:
         "account_type": account.account_type,
         "media_count": account.media_count,
         "last_synced_at": account.last_synced_at,
+        "comment_ingestion": {
+            "enabled": instagram_comment_ingestion_enabled(),
+            "permission_granted": "instagram_business_manage_comments" in account.scopes,
+        },
     }
 
 
@@ -259,7 +279,7 @@ def connect_callback(
             media_count=profile.get("media_count"),
             encrypted_access_token="",
             token_expires_at=token_expiry(long_payload),
-            scopes=list(INSTAGRAM_SCOPES),
+            scopes=list(instagram_scopes()),
             status="connected",
             connected_at=existing.connected_at if existing else now,
             last_synced_at=now,
@@ -269,7 +289,7 @@ def connect_callback(
             account = repo.upsert_connection(
                 account,
                 encrypted_token=encrypted_token,
-                scopes=list(INSTAGRAM_SCOPES),
+                scopes=list(instagram_scopes()),
             )
         except InstagramRepositoryError:
             raise repository_error() from None
@@ -371,6 +391,26 @@ def legacy_disconnect(user: AuthenticatedUser = Depends(require_user)):
 
 class TrackRequest(BaseModel):
     media_id: str
+
+
+class TrackingComparisonUpdate(BaseModel):
+    exclude_from_comparisons: bool
+
+
+class ScreenshotImage(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255)
+    mime_type: str
+    data: str = Field(..., min_length=4)
+
+
+class ScreenshotExtractionRequest(BaseModel):
+    screenshots: list[ScreenshotImage] = Field(..., min_length=1, max_length=3)
+
+
+class ScreenshotConfirmationRequest(BaseModel):
+    upload_token: str = Field(..., min_length=20)
+    payload: CanonicalFirst24Hours
+    keep_screenshots: bool = False
 
 
 class PublishImage(BaseModel):
@@ -492,6 +532,20 @@ def _tracking_schedule(tracked_id: str, snapshots: list[InstagramInsightSnapshot
     }
 
 
+def _first_24_hours(user_id: str, tracked, media: InstagramMedia, snapshots: list[InstagramInsightSnapshot] | None = None) -> dict:
+    all_snapshots = snapshots if snapshots is not None else get_content_repository().snapshots([media.id])
+    api_snapshot = next((item for item in sorted(all_snapshots, key=lambda value: value.captured_at, reverse=True)
+                         if item.collection_type == "milestone" and item.target_hour == 24), None)
+    external = get_content_repository().external_insights(user_id, tracked.id)
+    state = first_24_hour_state(media.published_at, api_snapshot=api_snapshot, screenshot_record=external[0] if external else None)
+    if _automatic_tracking_available():
+        job = next((item for item in get_tracking_repository().jobs_for_tracking(tracked.id) if item.target_hour == 24), None)
+        state["api_capture_status"] = job.status if job else "not_scheduled"
+    else:
+        state["api_capture_status"] = "scheduler_unavailable"
+    return state
+
+
 def tracked_payload(user_id: str, active_only: bool = True):
     account = stored_connection(user_id)
     media = get_content_repository().media_for_account(account.id) if account else []
@@ -512,7 +566,9 @@ def tracked_payload(user_id: str, active_only: bool = True):
         for tracked in get_content_repository().tracked(user_id, active_only=active_only)
     ]
     for item in payload:
-        item["post_publish_tracking"] = _tracking_schedule(item["tracking"].id)
+        media_item = item.get("media")
+        if media_item is not None:
+            item["first_24_hours"] = _first_24_hours(user_id, item["tracking"], media_item)
     return payload
 
 
@@ -536,6 +592,29 @@ def _tracked_item(user_id: str, tracked_id: str) -> dict:
     return item
 
 
+def _meaningful_analysis_history(items: list[TrackedPostAnalysis]) -> list[TrackedPostAnalysis]:
+    if not items:
+        return []
+    ordered = sorted(items, key=lambda item: item.created_at, reverse=True)
+    result = [ordered[0]]
+    seen_sources = {tuple(ordered[0].source_snapshot_ids or [ordered[0].source_snapshot_id])}
+    newer = ordered[0]
+    for item in ordered[1:]:
+        sources = tuple(item.source_snapshot_ids or [item.source_snapshot_id])
+        if sources in seen_sources:
+            continue
+        changed = any(
+            not is_noise_difference(metric, newer.observed_metrics.get(metric), item.observed_metrics.get(metric))
+            for metric in COMPARISON_METRICS
+            if newer.observed_metrics.get(metric) is not None and item.observed_metrics.get(metric) is not None
+        )
+        if changed:
+            result.append(item)
+            seen_sources.add(sources)
+            newer = item
+    return result
+
+
 @router.get("/tracked-posts")
 def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
     return {"items": tracked_payload(current_user(user))}
@@ -554,16 +633,139 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
         key=lambda snapshot: snapshot.captured_at,
         reverse=True,
     )
-    item["analyses"] = get_content_repository().analyses(user_id, tracked_id)
-    item["post_publish_tracking"] = _tracking_schedule(tracked_id, item["snapshots"])
+    item["analyses"] = _meaningful_analysis_history(get_content_repository().analyses(user_id, tracked_id))
+    item["first_24_hours"] = _first_24_hours(user_id, item["tracking"], item["media"], item["snapshots"])
+    item["comment_insights"] = comment_summary(get_content_repository().comments(user_id, tracked_id))
+    account = stored_connection(user_id)
+    item["comment_ingestion"] = {
+        "enabled": instagram_comment_ingestion_enabled(),
+        "permission_granted": bool(account and "instagram_business_manage_comments" in account.scopes),
+    }
     return item
+
+
+@router.patch("/tracked-posts/{tracked_id}")
+def update_tracked_post(payload: TrackingComparisonUpdate, tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    updated = get_content_repository().set_tracked_exclusion(current_user(user), tracked_id, payload.exclude_from_comparisons)
+    if updated is None:
+        raise HTTPException(status_code=404, detail={"code": "tracked_post_not_found", "message": "Tracked post was not found."})
+    return updated
+
+
+@router.post("/tracked-posts/{tracked_id}/comments/refresh")
+def refresh_comments(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    if not instagram_comment_ingestion_enabled():
+        raise HTTPException(status_code=409, detail={"code": "comment_ingestion_disabled", "message": "Comment reading is not enabled for this deployment."})
+    item = _tracked_item(user_id, tracked_id)
+    account = _active_account(user_id)
+    if "instagram_business_manage_comments" not in account.scopes:
+        raise HTTPException(status_code=403, detail={"code": "instagram_comment_permission_required", "message": "Reconnect Instagram after comment access is approved."})
+    media_item = item.get("media")
+    try:
+        upstream = fetch_instagram_comments(_access_token(account), media_item.instagram_media_id)
+    except InstagramServiceError as exc:
+        raise _handle_connected_service_error(account, exc) from exc
+    audience_texts = [str(value.get("text") or "")[:2000] for value in upstream
+                      if str((value.get("from") or {}).get("id") or "") != account.instagram_user_id and str(value.get("text") or "").strip()]
+    categories, classifier = classify_comment_texts(audience_texts)
+    category_iter = iter(categories)
+    now = datetime.now(timezone.utc)
+    stored: list[InstagramComment] = []
+    for value in upstream:
+        provider_id = str(value.get("id") or "")
+        text = str(value.get("text") or "").strip()[:2000]
+        if not provider_id or not text:
+            continue
+        owner = str((value.get("from") or {}).get("id") or "") == account.instagram_user_id
+        stored.append(InstagramComment(
+            id=str(uuid4()), provider_id=provider_id, user_id=user_id, tracked_post_id=tracked_id,
+            text=text, like_count=max(0, int(value.get("like_count") or 0)),
+            timestamp=_parse_timestamp(value.get("timestamp")), is_owner_reply=owner,
+            category=None if owner else next(category_iter), classification_model=None if owner else classifier,
+            fetched_at=now,
+        ))
+    get_content_repository().upsert_comments(user_id, tracked_id, stored)
+    return comment_summary(get_content_repository().comments(user_id, tracked_id))
+
+
+def _decode_screenshot(value: ScreenshotImage) -> bytes:
+    if value.mime_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail={"code": "unsupported_screenshot", "message": "Screenshots must be JPEG, PNG, or WebP."})
+    try:
+        body = base64.b64decode(value.data, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail={"code": "invalid_screenshot", "message": "A screenshot is not valid base64 data."}) from None
+    if not body or len(body) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"code": "screenshot_too_large", "message": "Each screenshot must be 8 MB or smaller."})
+    signatures = {
+        "image/jpeg": body.startswith(b"\xff\xd8\xff"),
+        "image/png": body.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP",
+    }
+    if not signatures[value.mime_type]:
+        raise HTTPException(status_code=422, detail={"code": "invalid_screenshot_signature", "message": "A screenshot does not match its declared image type."})
+    return body
+
+
+@router.post("/tracked-posts/{tracked_id}/first-24-hours/extract")
+def extract_first_24_hour_screenshots(payload: ScreenshotExtractionRequest, tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    item = _tracked_item(user_id, tracked_id)
+    state = _first_24_hours(user_id, item["tracking"], item["media"])
+    if not state["upload_allowed"]:
+        raise HTTPException(status_code=409, detail={"code": "first_24h_not_ready", "message": "Screenshot upload becomes available 24 hours after publishing."})
+    images = [(_decode_screenshot(value), value.mime_type) for value in payload.screenshots]
+    try:
+        extraction, model = extract_first_24_hours(images)
+    except (GeminiConfigurationError, GeminiUpstreamError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail={"code": "screenshot_extraction_failed", "message": str(exc)}) from None
+    objects: list[str] = []
+    try:
+        for (_, mime_type), value in zip(images, payload.screenshots):
+            extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[mime_type]
+            object_name = f"insight-screenshots/{user_id}/{tracked_id}/{uuid4()}{extension}"
+            upload_private_bytes(_, object_name, mime_type)
+            objects.append(object_name)
+    except OCIStorageConfigurationError:
+        raise HTTPException(status_code=503, detail={"code": "screenshot_storage_unavailable", "message": "Private screenshot storage is not configured."}) from None
+    latest_views = item.get("latest").views if item.get("latest") else None
+    return {
+        "candidate": extraction.model_dump(), "extraction_model": model, "extraction_version": EXTRACTION_VERSION,
+        "validation": screenshot_validation(extraction.views, latest_views),
+        "upload_token": create_upload_token(user_id, tracked_id, objects, model),
+    }
+
+
+@router.post("/tracked-posts/{tracked_id}/first-24-hours/confirm")
+def confirm_first_24_hour_screenshots(payload: ScreenshotConfirmationRequest, tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    _tracked_item(user_id, tracked_id)
+    try:
+        token = read_upload_token(payload.upload_token, user_id, tracked_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_screenshot_confirmation", "message": str(exc)}) from None
+    now = datetime.now(timezone.utc)
+    retained = list(token["objects"]) if payload.keep_screenshots else []
+    record = get_content_repository().append_external_insight(ExternalInsightRecord(
+        id=str(uuid4()), user_id=user_id, tracked_post_id=tracked_id, source="user_screenshot",
+        payload=payload.payload.model_dump(), extraction_model=str(token["model"]), extraction_version=str(token["version"]),
+        screenshot_objects=retained, confirmed_at=now, created_at=now,
+    ))
+    if not payload.keep_screenshots:
+        for object_name in token["objects"]:
+            try:
+                delete_private_object(object_name)
+            except OCIStorageConfigurationError:
+                pass
+    return {"record": record, "first_24_hours": _first_24_hours(user_id, _tracked_item(user_id, tracked_id)["tracking"], _tracked_item(user_id, tracked_id)["media"])}
 
 
 @router.get("/tracked-posts/{tracked_id}/analyses")
 def tracked_analyses(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
     _tracked_item(user_id, tracked_id)
-    return {"items": get_content_repository().analyses(user_id, tracked_id)}
+    return {"items": _meaningful_analysis_history(get_content_repository().analyses(user_id, tracked_id))}
 
 
 @router.get("/insights/patterns")
@@ -580,18 +782,22 @@ def account_pattern_insights(
             **item,
             "analyses": get_content_repository().analyses(user_id, item["tracking"].id),
             "snapshots": snapshots,
-            "post_publish_tracking": _tracking_schedule(item["tracking"].id, snapshots),
+            "external_insights": get_content_repository().external_insights(user_id, item["tracking"].id),
+            "comments": get_content_repository().comments(user_id, item["tracking"].id),
+            "first_24_hours": _first_24_hours(user_id, item["tracking"], item["media"], snapshots),
         })
     themes = list(account.insight_themes) if account else []
     if account and not account_themes_meet_constraints(items, themes):
         themes = generate_account_themes(items)
         get_instagram_repository().set_insight_themes(user_id, themes)
-    return build_account_insights(
+    result = build_account_insights(
         items,
         timezone_offset_minutes,
         account_context=get_account_context(user_id),
         themes=themes,
     )
+    result["viewer_requests"] = aggregate_viewer_requests(get_content_repository().comments(user_id))
+    return result
 
 
 @router.post("/insights/themes/regenerate")
@@ -653,7 +859,7 @@ def analyze_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
                 "is_current": candidate["tracking"].id == tracked_id,
             }
         )
-        if candidate["tracking"].id != tracked_id:
+        if candidate["tracking"].id != tracked_id and not getattr(candidate["tracking"], "exclude_from_comparisons", False):
             peer_metrics.append(
                 {
                     "media_type": candidate_media.media_type,

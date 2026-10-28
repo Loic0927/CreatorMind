@@ -11,7 +11,7 @@ from typing import Any
 
 RECOMMENDED_SAMPLE_SIZE = 10
 MIN_PATTERN_POSTS = 3
-TRACKING_TARGET_HOURS = (1, 3, 6, 12, 24)
+TRACKING_TARGET_HOURS = (24,)
 COMPLETE_24H_MIN_HOURS = 23
 COMPLETE_24H_MAX_HOURS = 26
 PATTERN_RELATIVE_THRESHOLD = 10.0
@@ -145,19 +145,40 @@ def _post_age_days(media: Any, snapshot: Any) -> float | None:
     return max(0.0, (_aware(snapshot.captured_at) - _aware(media.published_at)).total_seconds() / 86400)
 
 
-def _maturity_key(media_type: str, age_days: float | None) -> tuple[str, str, bool]:
+def _maturity_key(media_type: str, age_days: float | None, snapshots: list[Any] | None = None,
+                  external_insights: list[Any] | None = None) -> tuple[str, str, bool, float | None]:
+    viewed = sorted(
+        [item for item in (snapshots or []) if isinstance(getattr(item, "views", None), (int, float))],
+        key=lambda item: _aware(item.captured_at),
+    )
+    if len(viewed) >= 2:
+        latest = viewed[-1]
+        recent = [item for item in viewed[:-1] if (_aware(latest.captured_at) - _aware(item.captured_at)).total_seconds() <= 48 * 3600]
+        if recent:
+            earliest = recent[0]
+            start, end = float(earliest.views), float(latest.views)
+            if start > 0 and end >= start:
+                growth = (end - start) / start * 100
+                hours = (_aware(latest.captured_at) - _aware(earliest.captured_at)).total_seconds() / 3600
+                mature = growth < 3
+                return ("mature" if mature else "growing", f"Views grew {growth:.1f}% over {hours:.0f}h", mature, round(growth, 1))
+    for record in external_insights or []:
+        share = ((getattr(record, "payload", {}) or {}).get("curve") or {}).get("share_of_final_by_24h")
+        if isinstance(share, (int, float)):
+            mature = float(share) >= 97
+            return ("mature" if mature else "growing", f"Screenshot curve: about {float(share):.1f}% reached by 24h", mature, None)
     threshold = _maturity_days(media_type)
     if age_days is None:
-        return "unknown", "Age unavailable", False
+        return "unknown", "Age unavailable", False, None
     if age_days >= threshold:
-        return "mature", f"Mature lifetime ({threshold}+ days)", True
+        return "mature", f"Mature by {threshold}-day fallback", True, None
     if age_days < 0.75:
-        return "0-18h", "Early: under 18 hours", False
+        return "0-18h", "Early: under 18 hours", False, None
     if age_days < 1.5:
-        return "18-36h", "Early: 18-36 hours", False
+        return "18-36h", "Early: 18-36 hours", False, None
     if age_days < 2:
-        return "36-48h", "Early: 36-48 hours", False
-    return f"2-{threshold}d", f"Developing: 2-{threshold} days", False
+        return "36-48h", "Early: 36-48 hours", False, None
+    return f"2-{threshold}d", f"Developing: 2-{threshold} days", False, None
 
 
 def _snapshot_metrics(snapshot: Any) -> dict[str, Any]:
@@ -171,11 +192,6 @@ def _snapshot_metrics(snapshot: Any) -> dict[str, Any]:
     return {"metrics": metrics, "metric_status": status}
 
 
-def _historical_backfill_unavailable(item: dict[str, Any]) -> bool:
-    milestones = (item.get("post_publish_tracking") or {}).get("milestones") or []
-    return bool(milestones) and all(value.get("status") == "missed" and value.get("error_code") == "tracking_started_after_milestone" for value in milestones)
-
-
 def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int, themes: list[str]) -> list[dict[str, Any]]:
     posts: list[dict[str, Any]] = []
     for item in items:
@@ -184,24 +200,16 @@ def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int
             continue
         latest = _latest_snapshot(item)
         age_days = _post_age_days(media, latest)
-        key, basis, mature = _maturity_key(str(media.media_type or "UNKNOWN"), age_days)
-        timeline = []
-        schedule = item.get("post_publish_tracking") or {}
-        jobs = {value.get("target_hour"): value for value in schedule.get("milestones") or []}
         snapshots = sorted(item.get("snapshots") or [], key=lambda value: _aware(value.captured_at))
-        milestone_snapshots = {getattr(value, "target_hour", None): value for value in snapshots if getattr(value, "collection_type", "manual_current") == "milestone"}
-        previous = None
-        for hour in TRACKING_TARGET_HOURS:
-            snapshot, job = milestone_snapshots.get(hour), jobs.get(hour) or {}
-            delta = snapshot.views - previous.views if snapshot and previous and snapshot.views is not None and previous.views is not None and snapshot.views >= previous.views else None
-            payload = _snapshot_metrics(snapshot) if snapshot else {"metrics": None, "metric_status": {}}
-            timeline.append({"target_hour": hour, "status": job.get("status") or ("completed" if snapshot else "not_scheduled"),
-                             "scheduled_for": _iso(getattr(snapshot, "scheduled_for", None) or job.get("scheduled_for")),
-                             "captured_at": _iso(snapshot.captured_at) if snapshot else None, **payload, "views_since_previous_snapshot": delta})
-            if snapshot:
-                previous = snapshot
+        external = item.get("external_insights") or []
+        key, basis, mature, growth_pct = _maturity_key(str(media.media_type or "UNKNOWN"), age_days, snapshots, external)
         payload = _snapshot_metrics(latest)
+        screenshot_payload = (external[0].payload if external else {}) or {}
+        payload["metrics"]["skip_rate_pct"] = screenshot_payload.get("skip_rate_pct")
+        payload["metric_status"]["skip_rate_pct"] = "available" if screenshot_payload.get("skip_rate_pct") is not None else "unavailable"
         attrs = _caption_attributes(item)
+        published_label = _aware(media.published_at).strftime("%d %b %Y")
+        format_label = _format_label(media.media_type)
         posts.append({
             "tracked_post_id": getattr(item.get("tracking"), "id", None), "instagram_media_id": media.instagram_media_id,
             "permalink": media.permalink, "thumbnail_url": media.thumbnail_url or media.media_url,
@@ -209,16 +217,19 @@ def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int
             "media_type_label": _format_label(media.media_type),
             "theme": assign_account_theme(item, themes), "published_at": _iso(media.published_at),
             "posting_window": _posting_window(media.published_at, timezone_offset_minutes), "caption_excerpt": (media.caption or "")[:180],
-            "display_title": re.sub(r"\s+", " ", re.sub(r"(?<!\w)#[\w'-]+", " ", media.caption or "")).strip()[:120] or "Instagram post",
+            "display_title": f"{format_label} · {published_label}",
             "observation_kind": "Mature lifetime snapshot" if mature else "Latest cumulative snapshot" if latest else "No snapshot",
             "comparison_basis": basis, "maturity_key": key, "mature": mature, "age_days": round(age_days, 1) if age_days is not None else None,
             "snapshot_captured_at": _iso(latest.captured_at) if latest else None, **payload,
-            "milestones": timeline, "historical_backfill_unavailable": _historical_backfill_unavailable(item),
+            "metric_sources": {name: ("From your screenshot" if name == "skip_rate_pct" else "Instagram API") for name, value in payload["metrics"].items() if value is not None},
+            "first_24_hours": item.get("first_24_hours"),
             "comparison": None, "caption_style": attrs["caption"], "cta_style": attrs["cta"],
+            "exclude_from_comparisons": bool(getattr(item.get("tracking"), "exclude_from_comparisons", False)),
+            "maturity_growth_pct": growth_pct,
         })
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for post in posts:
-        if post["metrics"]:
+        if post["metrics"] and post["mature"] and not post["exclude_from_comparisons"]:
             groups[(post["media_type"], post["maturity_key"])].append(post)
     for (media_type, _), candidates in groups.items():
         metric = "views" if sum(post["metrics"].get("views") is not None for post in candidates) >= 2 else "reach"
@@ -232,7 +243,7 @@ def _performance_posts(items: list[dict[str, Any]], timezone_offset_minutes: int
 
 
 def _pattern_rows(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    eligible = [post for post in posts if post["mature"] and post["metrics"] and post["metrics"].get("engagement_rate") is not None]
+    eligible = [post for post in posts if post["mature"] and not post["exclude_from_comparisons"] and post["metrics"] and post["metrics"].get("engagement_rate") is not None]
     if not eligible:
         return []
     dimensions = {"Theme": "theme", "Caption style": "caption_style", "CTA": "cta_style", "Format": "media_type_label"}
@@ -268,7 +279,7 @@ def _pattern_rows(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _performance_summary(posts: list[dict[str, Any]]) -> dict[str, Any] | None:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for post in posts:
-        if post["mature"] and post.get("metrics"):
+        if post["mature"] and not post["exclude_from_comparisons"] and post.get("metrics"):
             groups[post["media_type"]].append(post)
     candidates = [(media_type, group) for media_type, group in groups.items() if len(group) >= MIN_PATTERN_POSTS]
     if not candidates:
@@ -287,11 +298,14 @@ def _performance_summary(posts: list[dict[str, Any]]) -> dict[str, Any] | None:
         note = None
         if kind == "lowest_reach" and post["metrics"].get("engagement_rate") is not None and post["metrics"]["engagement_rate"] > rate_median:
             note = f"Engagement rate is above the {rate_median:.1f}% group median."
-        return {"kind": kind, "title": post["display_title"], "value": round(value, 1) if metric == "engagement_rate" else int(round(value)),
+        return {"kind": kind, "title": post["display_title"], "thumbnail_url": post["thumbnail_url"],
+                "published_at": post["published_at"], "media_type_label": post["media_type_label"],
+                "value": round(value, 1) if metric == "engagement_rate" else int(round(value)),
                 "difference": round(value - typical, 1) if metric == "engagement_rate" else int(round(value - typical)), "metric": metric, "note": note}
 
     return {
         "media_type": media_type, "media_type_label": label, "sample_size": len(group),
+        "source": "Instagram API",
         "reach_sample_size": len(reach_posts), "engagement_rate_sample_size": len(rate_posts),
         "reach_median": int(round(reach_median)), "engagement_rate_median": round(rate_median, 1),
         "highest_reach": item("highest_reach", max(reach_posts, key=lambda post: post["metrics"]["reach"]), "reach", reach_median),
@@ -307,7 +321,7 @@ def _theme_stats(posts: list[dict[str, Any]], themes: list[str]) -> list[dict[st
     result = []
     for theme in themes:
         members = [post for post in posts if post["theme"] == theme]
-        views = [post["metrics"]["views"] for post in members if post.get("metrics") and post["metrics"].get("views") is not None]
+        views = [post["metrics"]["views"] for post in members if not post["exclude_from_comparisons"] and post.get("metrics") and post["metrics"].get("views") is not None]
         if len(members) < 2:
             return []
         result.append({"name": theme, "post_count": len(members), "median_views": int(round(median(views))) if views else None})
@@ -341,17 +355,16 @@ def _posting_time_rows(items: list[dict[str, Any]], timezone_offset_minutes: int
 
 
 def _tracking_state(items: list[dict[str, Any]], complete: int) -> dict[str, Any]:
-    automatic = any((item.get("post_publish_tracking") or {}).get("automatic_collection") for item in items)
+    automatic = any((item.get("first_24_hours") or {}).get("api_capture_status") != "scheduler_unavailable" for item in items)
     pending = blocked = unavailable = 0
     for item in items:
-        target = next((value for value in ((item.get("post_publish_tracking") or {}).get("milestones") or []) if value.get("target_hour") == 24), None)
-        status = target.get("status") if target else None
+        status = (item.get("first_24_hours") or {}).get("api_capture_status")
         pending += status in {"pending", "running", "retry"}
         blocked += status in {"blocked_reauthorization", "permission_required"}
         unavailable += status in {"missed", "cancelled", "unavailable"}
     reason = "24-hour tracking is optional; mature lifetime comparisons are the default."
     return {"automatic_collection": automatic, "pending_posts": pending, "blocked_posts": blocked, "unavailable_posts": unavailable, "reason": reason,
-            "available": complete > 0, "complete_posts": complete, "total_posts": len(items), "target_hours": list(TRACKING_TARGET_HOURS),
+            "available": complete > 0, "complete_posts": complete, "total_posts": len(items), "target_hours": [24],
             "status": "AVAILABLE" if complete >= RECOMMENDED_SAMPLE_SIZE else "LIMITED", "message": reason}
 
 
@@ -376,6 +389,18 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
     posts_with_metrics = [post for post in posts if post.get("metrics")]
     watch_time_count = sum(post["metrics"].get("average_watch_time_ms") is not None for post in posts_with_metrics)
     show_average_watch_time = bool(posts_with_metrics) and watch_time_count > len(posts_with_metrics) / 2
+    skip_rate_count = sum(post["metrics"].get("skip_rate_pct") is not None for post in posts_with_metrics)
+    show_skip_rate = bool(posts_with_metrics) and skip_rate_count > len(posts_with_metrics) / 2
+    peak_shares = []
+    for item in items:
+        records = item.get("external_insights") or []
+        if not records:
+            continue
+        share = ((records[0].payload or {}).get("curve") or {}).get("share_of_final_by_24h")
+        if isinstance(share, (int, float)):
+            peak_shares.append(float(share))
+    peak_summary = ({"sample_size": len(peak_shares), "median_share_of_final_by_24h": round(median(peak_shares), 1),
+                     "source": "Estimated from your screenshots"} if len(peak_shares) >= 3 else None)
     opportunities = []
     if mature_count < MIN_PATTERN_POSTS:
         opportunities.append({"title": "Build a mature same-format baseline", "priority": 1, "status": "DATA_GAP",
@@ -412,9 +437,9 @@ def build_account_insights(items: list[dict[str, Any]], timezone_offset_minutes:
         },
         "performance_posts": posts, "performance_summary": performance_summary,
         "show_average_watch_time": show_average_watch_time,
-        "historical_backfill_note": any(post["historical_backfill_unavailable"] for post in posts),
+        "show_skip_rate": show_skip_rate, "how_fast_posts_peak": peak_summary,
         "content_opportunities": opportunities, "tested_combination": None,
-        "methodology": {"default_basis": "Lifetime totals after 7 days for images/carousels and 14 days for video/Reels, grouped by media format.",
+        "methodology": {"default_basis": "Posts are mature when views grow less than 3% across recent snapshots; age is used only when that history is unavailable.",
                         "pattern_rule": "Patterns need at least 3 posts, real variation, and a difference above the noise threshold.",
-                        "advanced_basis": "Completed 24-hour milestones are optional and never mixed with lifetime totals."},
+                        "advanced_basis": "The single 24-hour API capture and confirmed screenshots keep visible source labels and are never mixed silently."},
     }

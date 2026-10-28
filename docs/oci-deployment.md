@@ -1,6 +1,6 @@
 # OCI production deployment (Sydney)
 
-This runbook deploys the Next.js web app, FastAPI API, independent Instagram tracking worker, PostgreSQL, and Nginx on one Ubuntu Ampere A1 VM with Docker Compose. Nginx serves `postbridge.dev`, redirects `www.postbridge.dev`, and proxies `api.postbridge.dev`; only ports 80 and 443 are public. The Expo app uses the same API through `EXPO_PUBLIC_API_URL`. The existing AWS and local-development paths remain available.
+This runbook deploys the Next.js web app, FastAPI API, independent Instagram tracking worker, PostgreSQL, and Nginx on one Ubuntu Ampere A1 VM with Docker Compose. Nginx serves `postbridge.dev`, redirects `www.postbridge.dev`, and proxies `api.postbridge.dev`; only ports 80 and 443 are public. The Expo app uses the same API through `EXPO_PUBLIC_API_URL`. Local development remains available through the environment templates documented in the project README.
 
 ## 1. OCI account and network
 
@@ -56,14 +56,14 @@ Fill `.env.oci` without committing it. URL-encode special characters in the pass
 Required production variables:
 
 - Domains/runtime: `POSTBRIDGE_WEB_DOMAIN`, `POSTBRIDGE_WWW_DOMAIN`, `POSTBRIDGE_API_DOMAIN`, `POSTBRIDGE_PUBLIC_API_URL`, `POSTBRIDGE_ENV`, `FRONTEND_BASE_URL`.
-- API security: `POSTBRIDGE_ALLOWED_HOSTS`, `POSTBRIDGE_CORS_ALLOWED_ORIGINS`, `POSTBRIDGE_DATABASE_URL`, `POSTBRIDGE_MAX_UPLOAD_BYTES`, `POSTBRIDGE_AUTH_SECRET`.
+- API security: `POSTBRIDGE_ALLOWED_HOSTS`, `POSTBRIDGE_CORS_ALLOWED_ORIGINS`, `POSTBRIDGE_DATABASE_URL`, `POSTBRIDGE_MAX_UPLOAD_BYTES`, `POSTBRIDGE_AUTH_SECRET`, `POSTBRIDGE_SCREENSHOT_TOKEN_SECRET`.
 - Email login: `POSTBRIDGE_SMTP_HOST`, `POSTBRIDGE_SMTP_PORT`, `POSTBRIDGE_SMTP_USERNAME`, `POSTBRIDGE_SMTP_PASSWORD`, `POSTBRIDGE_SMTP_SSL`, `POSTBRIDGE_EMAIL_FROM`. `POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS` defaults to 60.
 - PostgreSQL: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
-- Instagram: `POSTBRIDGE_INSTAGRAM_CLIENT_ID`, `POSTBRIDGE_INSTAGRAM_CLIENT_SECRET`, `POSTBRIDGE_INSTAGRAM_REDIRECT_URI`, `POSTBRIDGE_INSTAGRAM_APP_RETURN_URI`, `POSTBRIDGE_TOKEN_ENCRYPTION_KEY`, `POSTBRIDGE_OAUTH_STATE_SECRET`.
+- Instagram: `POSTBRIDGE_INSTAGRAM_CLIENT_ID`, `POSTBRIDGE_INSTAGRAM_CLIENT_SECRET`, `POSTBRIDGE_INSTAGRAM_REDIRECT_URI`, `POSTBRIDGE_INSTAGRAM_APP_RETURN_URI`, `POSTBRIDGE_TOKEN_ENCRYPTION_KEY`, `POSTBRIDGE_OAUTH_STATE_SECRET`. Keep `POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED=false` until Meta grants the required comment access, then enable it and have connected accounts authorize again.
 - OCI media: `POSTBRIDGE_MEDIA_STORAGE`, `OCI_REGION`, `OCI_NAMESPACE`, `OCI_BUCKET_NAME`, plus either `OCI_CONFIG_FILE`/`OCI_CONFIG_PROFILE` or `OCI_USER_OCID`, `OCI_TENANCY_OCID`, `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY_PATH`; Compose also needs `OCI_PRIVATE_KEY_HOST_PATH`.
 - TLS: `CERTBOT_EMAIL`.
 
-Feature-dependent variables are `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_OAUTH_REDIRECT_URI`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `POSTBRIDGE_TRACKING_POLL_SECONDS`, `POSTBRIDGE_TRACKING_BATCH_SIZE`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
+Feature-dependent variables are `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_OAUTH_REDIRECT_URI`, `GEMINI_API_KEY`, `GEMINI_MODEL`, and `GEMINI_VISION_MODEL`. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `POSTBRIDGE_TRACKING_POLL_SECONDS`, `POSTBRIDGE_TRACKING_BATCH_SIZE`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
 
 ## 6. Build, migrate, and start
 
@@ -120,7 +120,7 @@ docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=200 fro
 docker compose --env-file .env.oci -f docker-compose.oci.yml exec tracking-worker python -m backend.tracking_worker status
 ```
 
-The worker should be `healthy`; its status command returns safe job counts grouped by state. Follow its logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200 tracking-worker`. Alert on repeated unhealthy restarts, `retry` growth, or persistent `blocked_reauthorization` / `permission_required` counts. No host cron or systemd timer is needed for post tracking; the restart-safe Compose service is the scheduler. Restart `db` and verify application data remains to test the named PostgreSQL volume. Upload a permitted screenshot below both configured size limits. For OCI media, run a non-sensitive test upload through the adapter and verify the object in the private bucket; the present application does not persist screenshot uploads, so enabling the adapter does not change that API behavior.
+The worker should be `healthy`; its status command returns safe job counts grouped by state. Follow its logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200 tracking-worker`. Alert on repeated unhealthy restarts, `retry` growth, or persistent `blocked_reauthorization` / `permission_required` counts. No host cron or systemd timer is needed for post tracking; the restart-safe Compose service is the scheduler. Restart `db` and verify application data remains to test the named PostgreSQL volume. Upload one to three permitted Instagram Insights screenshots below the configured size limits, confirm the extracted values, and verify the private objects are deleted by default. When the explicit keep option is selected, verify the retained objects remain private. For OCI media, run a non-sensitive test upload through the adapter and verify the object in the private bucket.
 
 In Meta and Google consoles, register the exact HTTPS Instagram and YouTube callback URLs. Verify connect, denial, invalid state, reconnect, and mobile deep-link/user experience. Also verify any Instagram/X webhook URL and signing secret actually implemented by the product; this repository currently has Instagram OAuth/API routes but no X integration or inbound webhook route, so those cannot be validated here. Do not assume provider-side configuration from a healthy API.
 

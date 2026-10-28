@@ -90,13 +90,29 @@ def test_analyzed_progress_total_can_exceed_cap_but_required_cap_is_stable():
     assert result["required_sample_size"] == 10
 
 
-def test_historical_tracking_is_collapsed_to_backfill_flag():
+def test_historical_post_offers_screenshot_upload_instead_of_backfill_warning():
     item = _item(1, caption="specific historical post")
-    item["post_publish_tracking"] = {"automatic_collection": True, "milestones": [
-        {"target_hour": hour, "status": "missed", "error_code": "tracking_started_after_milestone"} for hour in (1, 3, 6, 12, 24)
-    ]}
+    item["first_24_hours"] = {"state": "upload_available", "upload_allowed": True, "record": None}
     post = build_account_insights([item])["performance_posts"][0]
-    assert post["historical_backfill_unavailable"] is True
+    assert post["first_24_hours"]["state"] == "upload_available"
+    assert "historical_backfill_unavailable" not in post
+
+
+def test_maturity_uses_less_than_three_percent_view_growth_before_age_fallback():
+    stable = _item(1, caption="stable post", age_days=2, views=102)
+    stable["snapshots"].insert(0, InstagramInsightSnapshot(
+        id="stable-old", media_id=stable["media"].id, captured_at=NOW - timedelta(hours=24),
+        views=100, reach=90,
+    ))
+    growing = _item(2, caption="growing post", age_days=2, views=106)
+    growing["snapshots"].insert(0, InstagramInsightSnapshot(
+        id="growing-old", media_id=growing["media"].id, captured_at=NOW - timedelta(hours=24),
+        views=100, reach=90,
+    ))
+    posts = {post["instagram_media_id"]: post for post in build_account_insights([stable, growing])["performance_posts"]}
+    assert posts["1"]["mature"] is True
+    assert posts["1"]["maturity_growth_pct"] == 2.0
+    assert posts["2"]["mature"] is False
 
 
 def test_optional_24h_view_never_substitutes_manual_lifetime_snapshot():

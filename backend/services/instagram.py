@@ -30,6 +30,14 @@ INSTAGRAM_SCOPES = (
 )
 
 
+def instagram_comment_ingestion_enabled() -> bool:
+    return os.getenv("POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def instagram_scopes() -> tuple[str, ...]:
+    return INSTAGRAM_SCOPES + (("instagram_business_manage_comments",) if instagram_comment_ingestion_enabled() else ())
+
+
 class InstagramServiceError(Exception):
     def __init__(self, code: str, message: str, status_code: int = 502, retry_after_seconds: int | None = None):
         super().__init__(message)
@@ -186,7 +194,7 @@ def build_authorization_url(state: str) -> str:
             "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
             "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
             "response_type": "code",
-            "scope": ",".join(INSTAGRAM_SCOPES),
+            "scope": ",".join(instagram_scopes()),
             "state": state,
         }
     )
@@ -368,6 +376,43 @@ def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
             502,
         )
     return [item for item in items if isinstance(item, dict)]
+
+
+def fetch_instagram_comments(access_token: str, instagram_media_id: str) -> list[dict[str, Any]]:
+    """Fetch comment text and counts without requesting or returning usernames."""
+    payload = _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/comments",
+        query={
+            "fields": "id,text,like_count,timestamp,from,replies{id,text,like_count,timestamp,from}",
+            "limit": "100",
+            "access_token": access_token,
+        },
+    )
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise InstagramServiceError("instagram_comments_failed", "Instagram comments could not be loaded.", 502)
+
+    def privacy_safe_comment(value: dict[str, Any]) -> dict[str, Any]:
+        author = value.get("from") if isinstance(value.get("from"), dict) else {}
+        return {
+            "id": value.get("id"),
+            "text": value.get("text"),
+            "like_count": value.get("like_count"),
+            "timestamp": value.get("timestamp"),
+            # The provider ID is used in memory only to identify the creator's replies.
+            "from": {"id": author.get("id")},
+        }
+
+    result: list[dict[str, Any]] = []
+    for value in data:
+        if not isinstance(value, dict):
+            continue
+        result.append(privacy_safe_comment(value))
+        replies = value.get("replies")
+        if isinstance(replies, dict) and isinstance(replies.get("data"), list):
+            result.extend(privacy_safe_comment(item) for item in replies["data"] if isinstance(item, dict))
+    return result
 
 
 def publish_instagram_image(

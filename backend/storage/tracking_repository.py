@@ -23,7 +23,7 @@ from backend.storage.sql_models import (
 )
 
 
-TRACKING_TARGET_HOURS = (1, 3, 6, 12, 24)
+TRACKING_TARGET_HOURS = (24,)
 FINAL_STATUSES = {"completed", "missed", "cancelled", "permission_required", "unavailable"}
 CLAIMABLE_STATUSES = {"pending", "retry"}
 LEASE_MINUTES = 10
@@ -36,9 +36,8 @@ def _utc(value: datetime | None) -> datetime | None:
 
 
 def _deadline(due_at: datetime, target_hour: int) -> datetime:
-    # The worker polls every minute. Early milestones allow 30 minutes of delay;
-    # the comparable 24-hour milestone allows two hours for transient recovery.
-    return due_at + timedelta(minutes=120 if target_hour == 24 else 30)
+    # The single API capture allows two hours for transient provider recovery.
+    return due_at + timedelta(minutes=120)
 
 
 class TrackingRepository:

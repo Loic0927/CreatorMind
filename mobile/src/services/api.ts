@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { API_BASE_URL } from '../config/environment';
-import { AccountInsightsData, ImageMimeType, InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, SocialPlatform, TrackedPost } from '../types';
+import { AccountInsightsData, CommentInsights, First24Hours, First24Payload, ImageMimeType, InsightsData, InstagramConnection, InstagramMedia, PostAnalysis, SocialPlatform, TrackedPost } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -21,6 +21,10 @@ export const getInstagramMedia = (userId: string) => request<{ status: string; i
 export const trackPost = (userId: string, mediaId: string) => request('/tracked-posts', userId, { method: 'POST', body: JSON.stringify({ media_id: mediaId }) });
 export const stopTracking = (userId: string, id: string) => request(`/tracked-posts/${id}`, userId, { method: 'DELETE' });
 export const refreshTrackedPost = (userId: string, id: string) => request(`/tracked-posts/${id}/refresh`, userId, { method: 'POST' });
+export const refreshTrackedPostComments = (userId: string, id: string) => request<CommentInsights>(`/tracked-posts/${id}/comments/refresh`, userId, { method: 'POST' });
+export const setComparisonExclusion = (userId: string, id: string, excluded: boolean) => request(`/tracked-posts/${id}`, userId, { method: 'PATCH', body: JSON.stringify({ exclude_from_comparisons: excluded }) });
+export const extractFirst24Screenshots = (userId: string, id: string, screenshots: { filename: string; mime_type: ImageMimeType; data: string }[]) => request<{ candidate: First24Payload; validation: { mismatch_pct: number | null; possible_wrong_post: boolean; warning?: string | null }; upload_token: string }>(`/tracked-posts/${id}/first-24-hours/extract`, userId, { method: 'POST', body: JSON.stringify({ screenshots }) });
+export const confirmFirst24Screenshots = (userId: string, id: string, payload: { upload_token: string; payload: First24Payload; keep_screenshots: boolean }) => request<{ first_24_hours: First24Hours }>(`/tracked-posts/${id}/first-24-hours/confirm`, userId, { method: 'POST', body: JSON.stringify(payload) });
 export const analyzeTrackedPost = (userId: string, id: string) => request<PostAnalysis>(`/tracked-posts/${id}/analyses`, userId, { method: 'POST' });
 export type PublicationResult = { platform: SocialPlatform; status: 'published' | 'failed' | 'unavailable'; message: string; code?: string; permalink?: string; tracked_post_id?: string };
 export const publishPost = (userId: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: ImageMimeType; data: string } }) => request<{ results: PublicationResult[] }>('/publications', userId, { method: 'POST', body: JSON.stringify(payload) });

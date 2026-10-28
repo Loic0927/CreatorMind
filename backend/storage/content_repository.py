@@ -7,8 +7,9 @@ from sqlalchemy import select
 
 from backend.storage import json_store
 from backend.storage.database import session_factory
-from backend.storage.models import InstagramInsightSnapshot, InstagramMedia, PredictionHistory, TrackedPost, TrackedPostAnalysis
-from backend.storage.sql_models import InstagramInsightSnapshotRecord, InstagramMediaRecord, PredictionHistoryRecord, TrackedPostAnalysisRecord, TrackedPostRecord
+from backend.storage.models import ExternalInsightRecord, InstagramComment, InstagramInsightSnapshot, InstagramMedia, PredictionHistory, TrackedPost, TrackedPostAnalysis
+from backend.storage.sql_models import ExternalInsightRecord as ExternalInsightSqlRecord
+from backend.storage.sql_models import InstagramCommentRecord, InstagramInsightSnapshotRecord, InstagramMediaRecord, PredictionHistoryRecord, TrackedPostAnalysisRecord, TrackedPostRecord
 
 
 def _utc(value: datetime) -> datetime:
@@ -94,6 +95,18 @@ class ContentRepository:
             record.stopped_at = datetime.now(timezone.utc)
             return True
 
+    def set_tracked_exclusion(self, user_id: str, tracked_id: str, excluded: bool) -> TrackedPost | None:
+        if not self.persistent:
+            return json_store.set_tracked_post_exclusion(user_id, tracked_id, excluded)
+        factory = session_factory()
+        with factory.begin() as session:
+            record = session.scalar(select(TrackedPostRecord).where(TrackedPostRecord.id == tracked_id, TrackedPostRecord.user_id == user_id))
+            if record is None:
+                return None
+            record.exclude_from_comparisons = excluded
+            session.flush()
+            return self._tracked(record)
+
     def stop_all_tracked(self, user_id: str) -> None:
         for item in self.tracked(user_id):
             self.stop_tracked(user_id, item.id)
@@ -148,13 +161,64 @@ class ContentRepository:
             records = session.scalars(statement).all()
         return [self._analysis(item) for item in records]
 
+    def upsert_comments(self, user_id: str, tracked_post_id: str, items: list[InstagramComment]) -> list[InstagramComment]:
+        if not self.persistent:
+            return json_store.upsert_instagram_comments(user_id, tracked_post_id, items)
+        factory = session_factory()
+        with factory.begin() as session:
+            for item in items:
+                record = session.scalar(select(InstagramCommentRecord).where(
+                    InstagramCommentRecord.user_id == user_id,
+                    InstagramCommentRecord.provider_id == item.provider_id,
+                ))
+                values = item.model_dump()
+                if record is None:
+                    session.add(InstagramCommentRecord(**values))
+                else:
+                    for key, value in values.items():
+                        if key != "id":
+                            setattr(record, key, value)
+        return items
+
+    def comments(self, user_id: str, tracked_post_id: str | None = None) -> list[InstagramComment]:
+        if not self.persistent:
+            return json_store.get_instagram_comments(user_id, tracked_post_id)
+        statement = select(InstagramCommentRecord).where(InstagramCommentRecord.user_id == user_id)
+        if tracked_post_id is not None:
+            statement = statement.where(InstagramCommentRecord.tracked_post_id == tracked_post_id)
+        statement = statement.order_by(InstagramCommentRecord.like_count.desc(), InstagramCommentRecord.timestamp.desc())
+        factory = session_factory()
+        with factory() as session:
+            records = session.scalars(statement).all()
+        return [self._comment(item) for item in records]
+
+    def append_external_insight(self, item: ExternalInsightRecord) -> ExternalInsightRecord:
+        if not self.persistent:
+            return json_store.append_external_insight(item)
+        factory = session_factory()
+        with factory.begin() as session:
+            session.add(ExternalInsightSqlRecord(**item.model_dump()))
+        return item
+
+    def external_insights(self, user_id: str, tracked_post_id: str | None = None) -> list[ExternalInsightRecord]:
+        if not self.persistent:
+            return json_store.get_external_insights(user_id, tracked_post_id)
+        statement = select(ExternalInsightSqlRecord).where(ExternalInsightSqlRecord.user_id == user_id)
+        if tracked_post_id is not None:
+            statement = statement.where(ExternalInsightSqlRecord.tracked_post_id == tracked_post_id)
+        statement = statement.order_by(ExternalInsightSqlRecord.created_at.desc())
+        factory = session_factory()
+        with factory() as session:
+            records = session.scalars(statement).all()
+        return [self._external_insight(item) for item in records]
+
     @staticmethod
     def _media(item: InstagramMediaRecord) -> InstagramMedia:
         return InstagramMedia(id=item.id, account_id=item.account_id, instagram_media_id=item.instagram_media_id, media_type=item.media_type, media_url=item.media_url, thumbnail_url=item.thumbnail_url, permalink=item.permalink, caption=item.caption, published_at=_utc(item.published_at), last_synced_at=_utc(item.last_synced_at))
 
     @staticmethod
     def _tracked(item: TrackedPostRecord) -> TrackedPost:
-        return TrackedPost(id=item.id, user_id=item.user_id, media_id=item.media_id, is_active=item.is_active, started_at=_utc(item.started_at), stopped_at=_utc(item.stopped_at) if item.stopped_at else None)
+        return TrackedPost(id=item.id, user_id=item.user_id, media_id=item.media_id, is_active=item.is_active, exclude_from_comparisons=bool(item.exclude_from_comparisons), started_at=_utc(item.started_at), stopped_at=_utc(item.stopped_at) if item.stopped_at else None)
 
     @staticmethod
     def _snapshot(item: InstagramInsightSnapshotRecord) -> InstagramInsightSnapshot:
@@ -184,6 +248,27 @@ class ContentRepository:
             content_payload=item.content_payload or {},
             output_payload=item.output_payload or {},
             created_at=_utc(item.created_at),
+        )
+
+    @staticmethod
+    def _comment(item: InstagramCommentRecord) -> InstagramComment:
+        return InstagramComment(
+            id=item.id, provider_id=item.provider_id, user_id=item.user_id,
+            tracked_post_id=item.tracked_post_id, text=item.text,
+            like_count=item.like_count, timestamp=_utc(item.timestamp),
+            is_owner_reply=item.is_owner_reply, category=item.category,
+            classification_model=item.classification_model,
+            fetched_at=_utc(item.fetched_at),
+        )
+
+    @staticmethod
+    def _external_insight(item: ExternalInsightSqlRecord) -> ExternalInsightRecord:
+        return ExternalInsightRecord(
+            id=item.id, user_id=item.user_id, tracked_post_id=item.tracked_post_id,
+            source=item.source, payload=item.payload or {}, extraction_model=item.extraction_model,
+            extraction_version=item.extraction_version,
+            screenshot_objects=item.screenshot_objects or [],
+            confirmed_at=_utc(item.confirmed_at), created_at=_utc(item.created_at),
         )
 
 

@@ -118,6 +118,8 @@ class StoreData(BaseModel):
     tracked_posts: list["TrackedPost"] = Field(default_factory=list)
     instagram_insight_snapshots: list["InstagramInsightSnapshot"] = Field(default_factory=list)
     tracked_post_analyses: list[TrackedPostAnalysis] = Field(default_factory=list)
+    instagram_comments: list["InstagramComment"] = Field(default_factory=list)
+    external_insight_records: list["ExternalInsightRecord"] = Field(default_factory=list)
 
 
 class InstagramAccount(BaseModel):
@@ -159,6 +161,7 @@ class TrackedPost(BaseModel):
     user_id: str
     media_id: str
     is_active: bool = True
+    exclude_from_comparisons: bool = False
     started_at: datetime
     stopped_at: Optional[datetime] = None
 
@@ -204,3 +207,30 @@ class InstagramInsightCollectionJob(BaseModel):
     completed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+class InstagramComment(BaseModel):
+    id: str
+    provider_id: str
+    user_id: str
+    tracked_post_id: str
+    text: str
+    like_count: int = 0
+    timestamp: datetime
+    is_owner_reply: bool = False
+    category: Literal["question", "request", "praise", "joke_or_emoji_only", "criticism"] | None = None
+    classification_model: str | None = None
+    fetched_at: datetime
+
+
+class ExternalInsightRecord(BaseModel):
+    id: str
+    user_id: str
+    tracked_post_id: str
+    source: Literal["user_screenshot"] = "user_screenshot"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    extraction_model: str
+    extraction_version: str
+    screenshot_objects: list[str] = Field(default_factory=list)
+    confirmed_at: datetime
+    created_at: datetime

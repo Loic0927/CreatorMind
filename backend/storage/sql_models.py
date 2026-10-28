@@ -108,6 +108,7 @@ class TrackedPostRecord(Base):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    exclude_from_comparisons: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -141,7 +142,7 @@ class InstagramInsightCollectionJobRecord(Base):
     __tablename__ = "instagram_insight_collection_jobs"
     __table_args__ = (
         UniqueConstraint("tracked_post_id", "target_hour", name="uq_instagram_insight_job_milestone"),
-        CheckConstraint("target_hour IN (1, 3, 6, 12, 24)", name="ck_instagram_insight_job_target_hour"),
+        CheckConstraint("target_hour = 24", name="ck_instagram_insight_job_target_hour"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -161,6 +162,40 @@ class InstagramInsightCollectionJobRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstagramCommentRecord(Base):
+    __tablename__ = "instagram_comments"
+    __table_args__ = (
+        UniqueConstraint("user_id", "provider_id", name="uq_instagram_comments_user_provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_owner_reply: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    category: Mapped[str | None] = mapped_column(String(32))
+    classification_model: Mapped[str | None] = mapped_column(String(128))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExternalInsightRecord(Base):
+    __tablename__ = "external_insight_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    extraction_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    extraction_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    screenshot_objects: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class TrackedPostAnalysisRecord(Base):

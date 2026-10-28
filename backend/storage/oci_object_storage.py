@@ -114,6 +114,19 @@ def download_private_bytes(object_name: str, *, max_bytes: int = 10 * 1024 * 102
     return body
 
 
+def delete_private_object(object_name: str) -> None:
+    """Delete one exact private object after a confirmed screenshot extraction."""
+    namespace = os.getenv("OCI_NAMESPACE")
+    bucket = os.getenv("OCI_BUCKET_NAME")
+    if not namespace or not bucket:
+        raise OCIStorageConfigurationError("OCI_NAMESPACE and OCI_BUCKET_NAME are required.")
+    _client().delete_object(
+        namespace_name=namespace,
+        bucket_name=bucket,
+        object_name=object_name,
+    )
+
+
 def create_temporary_read_url(object_name: str, *, lifetime_minutes: int = 60) -> str:
     """Create a short-lived read URL for one already-private object."""
     namespace = os.getenv("OCI_NAMESPACE")

@@ -25,7 +25,6 @@ export type PostAnalysis = {
     metric_comparisons?: MetricComparison[];
     experiment?: { test_variable: string; metric_to_watch: string; action: string; reason: string; comparison: string; decision_rule: string }[];
     methodology?: { noise_rule: string; significant_rule: string; ranking_basis: string };
-    content_snapshot?: { on_screen_text_hook: string; caption_length: string; cta: string; format: string; theme: string };
     similar_posts?: { tracked_post_id?: string | null; thumbnail_url?: string | null; title: string; theme: string; views: number | null; engagement_rate: number | null }[];
     score?: { overall: number; grade: string; categories: Record<string, number>; weights?: Record<string, number>; comparable?: boolean; method?: string; category_meanings?: Record<string, string> };
     score_context?: { account_average: number | null; points_difference: number | null; rank: number; total: number; percentile_label: string };
@@ -47,20 +46,25 @@ export type PostAnalysis = {
 };
 export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; percent_of_median?: number | null; is_noise?: boolean; direction: string; comparison_text?: string; rank?: number | null; group_size?: number; percentile_label?: string; basis?: string };
 export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: 'positive' | 'neutral' | 'improve' };
-export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[]; analyses?: PostAnalysis[] };
+export type First24Payload = { views: MetricValue; accounts_reached: MetricValue; avg_watch_time_seconds: MetricValue; skip_rate_pct: MetricValue; share_rate_pct: MetricValue; followers_pct: MetricValue; non_followers_pct: MetricValue; detected_ui_language: string | null; curve: { estimated_views_at_24h: MetricValue; share_of_final_by_24h: MetricValue; vs_account_typical: 'above' | 'similar' | 'below' | 'unknown' } | null };
+export type First24Hours = { state: 'not_ready' | 'upload_available' | 'available'; available_after: string; upload_allowed: boolean; api_capture_status?: string; record?: { source: 'instagram_api' | 'user_screenshot'; source_label: string; payload: First24Payload; confirmed_at: string } | null };
+export type CommentInsights = { available: boolean; total_comments: number; facts_label: string; interpretation_label: string; comments: { text: string; like_count: number; timestamp: string }[]; category_counts: Record<'question' | 'request' | 'praise' | 'joke_or_emoji_only' | 'criticism', number>; sentiment_conclusion: null; sentiment_note?: string | null };
+export type TrackedPost = { tracking: { id: string; media_id: string; is_active: boolean; exclude_from_comparisons?: boolean }; media: InstagramMedia; latest?: Snapshot; snapshots?: Snapshot[]; analyses?: PostAnalysis[]; first_24_hours?: First24Hours; comment_insights?: CommentInsights; comment_ingestion?: { enabled: boolean; permission_granted: boolean } };
 export type InsightsData = { status: ConnectionStatus; period: '7d'; start?: string; end?: string; posts?: number; metrics?: Record<string, MetricValue>; trend?: { date: string; value: number }[]; top_posts?: TrackedPost[] };
 export type AccountInsightsData = {
   sample_size: number; required_sample_size: number; sample_notice: string;
   progress: { patterns: number; mature_posts: number; posting_times: number };
   themes: string[]; theme_stats: { name: string; post_count: number; median_views: number | null }[]; theme_method: string;
   patterns: { label: string; category: string; value: number; posts: number; comparison_posts?: number; baseline: number; difference: number; basis: string; sample_note: string }[];
-  performance_posts: { tracked_post_id?: string | null; instagram_media_id: string; permalink?: string | null; thumbnail_url?: string | null; media_type_label: string; theme: string; caption_excerpt: string; display_title?: string; published_at: string; comparison_basis: string; age_days?: number | null; metrics?: { views: MetricValue; reach: MetricValue; engagement_rate: MetricValue; shares: MetricValue; saves: MetricValue; average_watch_time_ms?: MetricValue } | null; comparison?: { rank: number; group_size: number; metric: string; group: string } | null }[];
-  performance_summary?: { media_type: string; media_type_label: string; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
+  performance_posts: { tracked_post_id?: string | null; instagram_media_id: string; permalink?: string | null; thumbnail_url?: string | null; media_type_label: string; theme: string; caption_excerpt: string; display_title?: string; published_at: string; comparison_basis: string; mature: boolean; age_days?: number | null; exclude_from_comparisons: boolean; metrics?: { views: MetricValue; reach: MetricValue; engagement_rate: MetricValue; shares: MetricValue; saves: MetricValue; comments: MetricValue; average_watch_time_ms?: MetricValue; skip_rate_pct?: MetricValue } | null; comparison?: { rank: number; group_size: number; metric: string; group: string } | null }[];
+  performance_summary?: { media_type: string; media_type_label: string; source: string; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
   show_average_watch_time: boolean;
-  historical_backfill_note: boolean;
+  show_skip_rate: boolean;
+  how_fast_posts_peak?: { sample_size: number; median_share_of_final_by_24h: number; source: string } | null;
+  viewer_requests?: { total_comments: number; question_count: number; request_count: number; examples: { text: string; like_count: number }[]; facts_label: string; interpretation_label: string } | null;
   methodology: { default_basis: string; pattern_rule: string; advanced_basis: string };
 };
-export type PerformanceSummaryItem = { kind: 'highest_reach' | 'lowest_reach' | 'highest_engagement_rate' | 'lowest_engagement_rate'; title: string; value: number; difference: number; metric: 'reach' | 'engagement_rate'; note?: string | null };
+export type PerformanceSummaryItem = { kind: 'highest_reach' | 'lowest_reach' | 'highest_engagement_rate' | 'lowest_engagement_rate'; title: string; thumbnail_url?: string | null; published_at: string; media_type_label: string; value: number; difference: number; metric: 'reach' | 'engagement_rate'; note?: string | null };
 export type SocialPlatform = 'Instagram' | 'Twitter' | 'Facebook' | 'Threads' | 'YouTube';
 export type ImageMimeType = 'image/jpeg' | 'image/png' | 'image/webp';
 export type Draft = {

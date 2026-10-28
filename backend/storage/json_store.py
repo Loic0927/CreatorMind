@@ -12,7 +12,9 @@ from uuid import uuid4
 
 from backend.storage.models import (
     AnalyticsSnapshot,
+    ExternalInsightRecord,
     InstagramAccount,
+    InstagramComment,
     InstagramInsightSnapshot,
     InstagramMedia,
     Post,
@@ -110,6 +112,15 @@ def stop_tracked_post(user_id: str, tracked_id: str) -> bool:
     return update_store(mutate)
 
 
+def set_tracked_post_exclusion(user_id: str, tracked_id: str, excluded: bool) -> TrackedPost | None:
+    def mutate(store: StoreData):
+        item = next((item for item in store.tracked_posts if item.id == tracked_id and item.user_id == user_id), None)
+        if item is not None:
+            item.exclude_from_comparisons = excluded
+        return item
+    return update_store(mutate)
+
+
 def append_instagram_snapshot(snapshot: InstagramInsightSnapshot) -> InstagramInsightSnapshot:
     return update_store(lambda store: (store.instagram_insight_snapshots.append(snapshot), snapshot)[1])
 
@@ -124,6 +135,36 @@ def get_tracked_post_analyses(user_id: str, tracked_post_id: str) -> list[Tracke
         for item in load_store().tracked_post_analyses
         if item.user_id == user_id and item.tracked_post_id == tracked_post_id
     ]
+
+
+def upsert_instagram_comments(user_id: str, tracked_post_id: str, items: list[InstagramComment]) -> list[InstagramComment]:
+    def mutate(store: StoreData):
+        by_provider = {(item.user_id, item.provider_id): index for index, item in enumerate(store.instagram_comments)}
+        for item in items:
+            if item.user_id != user_id or item.tracked_post_id != tracked_post_id:
+                continue
+            index = by_provider.get((user_id, item.provider_id))
+            if index is None:
+                by_provider[(user_id, item.provider_id)] = len(store.instagram_comments)
+                store.instagram_comments.append(item)
+            else:
+                store.instagram_comments[index] = item
+        return items
+    return update_store(mutate)
+
+
+def get_instagram_comments(user_id: str, tracked_post_id: str | None = None) -> list[InstagramComment]:
+    items = [item for item in load_store().instagram_comments if item.user_id == user_id and (tracked_post_id is None or item.tracked_post_id == tracked_post_id)]
+    return sorted(items, key=lambda item: (item.like_count, item.timestamp), reverse=True)
+
+
+def append_external_insight(item: ExternalInsightRecord) -> ExternalInsightRecord:
+    return update_store(lambda store: (store.external_insight_records.append(item), item)[1])
+
+
+def get_external_insights(user_id: str, tracked_post_id: str | None = None) -> list[ExternalInsightRecord]:
+    items = [item for item in load_store().external_insight_records if item.user_id == user_id and (tracked_post_id is None or item.tracked_post_id == tracked_post_id)]
+    return sorted(items, key=lambda item: item.created_at, reverse=True)
 
 
 def save_store(store: StoreData) -> None:
