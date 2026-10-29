@@ -1,5 +1,5 @@
 from backend.services.comments import classify_comment_texts, comment_summary
-from backend.services.instagram import fetch_instagram_comments
+from backend.services.instagram import fetch_instagram_comments, instagram_comment_ingestion_enabled, instagram_scopes
 from backend.storage.models import InstagramComment
 from backend.storage.sql_models import InstagramCommentRecord
 from datetime import datetime, timezone
@@ -51,3 +51,20 @@ def test_instagram_comment_fetch_strips_provider_usernames(monkeypatch):
     assert values[0]["from"] == {"id": "viewer-1"}
     assert values[1]["from"] == {"id": "owner-1"}
     assert "username" not in str(values)
+
+
+def test_comment_access_can_be_enabled_for_one_allowlisted_account(monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED", "false")
+    monkeypatch.setenv("POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST", "owner-1,ig-owner")
+    assert instagram_comment_ingestion_enabled("owner-1") is True
+    assert instagram_comment_ingestion_enabled("other") is False
+    assert "instagram_business_manage_comments" in instagram_scopes("owner-1")
+    assert "instagram_business_manage_comments" not in instagram_scopes("other")
+
+
+def test_comment_next_step_states_the_counts_used():
+    comments = [InstagramComment(id=str(index), provider_id=f"p{index}", user_id="u", tracked_post_id="t", text="How?", timestamp=NOW, category="question", fetched_at=NOW) for index in range(3)]
+    summary = comment_summary(comments)
+    assert summary["next_step"] is not None
+    assert "3 questions" in summary["next_step"]
+    assert summary["account_context_used"] is False

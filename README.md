@@ -5,7 +5,7 @@ responsive Next.js web app and the Expo mobile app. It connects Instagram,
 tracks post insights at durable post-publish milestones, generates captions, and preserves the trained social-content
 prediction model in `backend/models/model.pkl`.
 
-OCI production deployment is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`. Existing local and AWS deployment paths remain unchanged.
+OCI production deployment for `postbridge.dev` is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`.
 
 Stack:
 
@@ -20,7 +20,7 @@ Stack:
 ### Environment files
 
 Environment files are intentionally separated because FastAPI, Next.js, Expo, and
-the two deployment targets load different filenames from different directories.
+the OCI production deployment load different filenames from different directories.
 Do not combine secrets into a root client environment file.
 
 | Runtime | Tracked template | Local/runtime file | Loaded by |
@@ -29,7 +29,6 @@ Do not combine secrets into a root client environment file.
 | Next.js frontend | `frontend/.env.local.example` | `frontend/.env.local` | Next.js |
 | Expo mobile | `mobile/.env.example` | `mobile/.env.local` | Expo CLI |
 | OCI production | `.env.oci.example` | `.env.oci` | Docker Compose |
-| AWS Lightsail production | `deploy/aws-lightsail/.env.example` | `deploy/aws-lightsail/.env.production` | Docker Compose |
 
 Only templates belong in Git. The corresponding runtime files contain real values
 and are ignored. Copy only the template for the runtime you are starting, then

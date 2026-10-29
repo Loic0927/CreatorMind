@@ -23,16 +23,6 @@ def test_docker_build_context_excludes_sensitive_and_unneeded_paths():
         assert rule in rules
 
 
-def test_compose_does_not_publish_api_or_database_ports():
-    compose = (ROOT / "deploy" / "aws-lightsail" / "compose.yaml").read_text(
-        encoding="utf-8"
-    )
-    assert '"8000:8000"' not in compose
-    assert '"5432:5432"' not in compose
-    assert "postgres:17-alpine" in compose
-    assert "internal: true" in compose
-
-
 def test_oci_compose_keeps_app_and_database_private():
     compose = (ROOT / "docker-compose.oci.yml").read_text(encoding="utf-8")
     assert '"5432:5432"' not in compose

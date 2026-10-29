@@ -1,7 +1,8 @@
 import base64
 import binascii
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from statistics import median
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,10 +41,13 @@ from backend.services.publishing import (
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError
 from backend.services.comments import aggregate_viewer_requests, classify_comment_texts, comment_summary
 from backend.services.first_24_hours import (
+    CanonicalAudienceActivity,
+    AUDIENCE_ACTIVITY_EXTRACTION_VERSION,
     CanonicalFirst24Hours,
     EXTRACTION_VERSION,
     create_upload_token,
     extract_first_24_hours,
+    extract_audience_activity,
     first_24_hour_state,
     read_upload_token,
     screenshot_validation,
@@ -64,6 +68,11 @@ from backend.storage.tracking_repository import get_tracking_repository
 
 
 router = APIRouter()
+
+
+class InstagramPreferencesUpdate(BaseModel):
+    auto_track_new_posts: bool | None = None
+    timezone_offset_minutes: int | None = Field(default=None, ge=-840, le=840)
 
 
 def _automatic_tracking_available() -> bool:
@@ -125,7 +134,7 @@ def public_account(account: InstagramAccount | None) -> dict:
             "connected": False,
             "configured": instagram_configured(),
             "status": "not_connected",
-            "comment_ingestion": {"enabled": instagram_comment_ingestion_enabled(), "permission_granted": False},
+            "comment_ingestion": {"enabled": False, "permission_granted": False},
         }
     return {
         "connected": account.status == "connected",
@@ -137,8 +146,10 @@ def public_account(account: InstagramAccount | None) -> dict:
         "account_type": account.account_type,
         "media_count": account.media_count,
         "last_synced_at": account.last_synced_at,
+        "auto_track_new_posts": account.auto_track_new_posts,
+        "timezone_offset_minutes": account.timezone_offset_minutes,
         "comment_ingestion": {
-            "enabled": instagram_comment_ingestion_enabled(),
+            "enabled": instagram_comment_ingestion_enabled(account.user_id, account.instagram_user_id),
             "permission_granted": "instagram_business_manage_comments" in account.scopes,
         },
     }
@@ -215,12 +226,28 @@ def connection(user: AuthenticatedUser = Depends(require_user)):
     return public_account(stored_connection(current_user(user)))
 
 
+@router.patch("/api/instagram/preferences")
+def update_instagram_preferences(payload: InstagramPreferencesUpdate, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    account = _active_account(user_id)
+    updates = {}
+    if payload.auto_track_new_posts is not None:
+        updates["auto_track_new_posts"] = payload.auto_track_new_posts
+    if payload.timezone_offset_minutes is not None:
+        updates["timezone_offset_minutes"] = payload.timezone_offset_minutes
+    try:
+        updated = repository().upsert_connection(account.model_copy(update=updates))
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    return public_account(updated)
+
+
 @router.post("/api/instagram/connect/start")
 @router.post("/instagram/connect/start", include_in_schema=False)
 def connect_start(client: str = Query("mobile"), user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
     try:
-        return {"authorization_url": build_authorization_url(create_oauth_state(user_id, client=client))}
+        return {"authorization_url": build_authorization_url(create_oauth_state(user_id, client=client), user_id)}
     except InstagramServiceError as exc:
         raise service_error(exc) from exc
 
@@ -279,7 +306,13 @@ def connect_callback(
             media_count=profile.get("media_count"),
             encrypted_access_token="",
             token_expires_at=token_expiry(long_payload),
-            scopes=list(instagram_scopes()),
+            scopes=list(instagram_scopes(user_id, str(profile["id"]))),
+            insight_themes=list(existing.insight_themes) if existing else [],
+            insight_themes_updated_at=existing.insight_themes_updated_at if existing else None,
+            auto_track_new_posts=existing.auto_track_new_posts if existing else True,
+            timezone_offset_minutes=existing.timezone_offset_minutes if existing else 0,
+            audience_activity_insight=existing.audience_activity_insight if existing else None,
+            audience_activity_updated_at=existing.audience_activity_updated_at if existing else None,
             status="connected",
             connected_at=existing.connected_at if existing else now,
             last_synced_at=now,
@@ -289,7 +322,7 @@ def connect_callback(
             account = repo.upsert_connection(
                 account,
                 encrypted_token=encrypted_token,
-                scopes=list(instagram_scopes()),
+                scopes=list(instagram_scopes(user_id, str(profile["id"]))),
             )
         except InstagramRepositoryError:
             raise repository_error() from None
@@ -411,6 +444,10 @@ class ScreenshotConfirmationRequest(BaseModel):
     upload_token: str = Field(..., min_length=20)
     payload: CanonicalFirst24Hours
     keep_screenshots: bool = False
+
+
+class AudienceActivityConfirmationRequest(BaseModel):
+    payload: CanonicalAudienceActivity
 
 
 class PublishImage(BaseModel):
@@ -537,9 +574,37 @@ def _first_24_hours(user_id: str, tracked, media: InstagramMedia, snapshots: lis
     api_snapshot = next((item for item in sorted(all_snapshots, key=lambda value: value.captured_at, reverse=True)
                          if item.collection_type == "milestone" and item.target_hour == 24), None)
     external = get_content_repository().external_insights(user_id, tracked.id)
-    state = first_24_hour_state(media.published_at, api_snapshot=api_snapshot, screenshot_record=external[0] if external else None)
+    job = next((item for item in get_tracking_repository().jobs_for_tracking(tracked.id) if item.target_hour == 24), None) if _automatic_tracking_available() else None
+    state = first_24_hour_state(
+        media.published_at, api_snapshot=api_snapshot, screenshot_record=external[0] if external else None,
+        permanently_unavailable=bool(job and job.status == "missed" and job.last_error_code in {"tracking_started_after_24h", "tracking_started_after_milestone", "collection_window_missed"}),
+    )
+    if state.get("record"):
+        latest = max(all_snapshots, key=lambda value: value.captured_at, default=None)
+        views_24 = (state["record"].get("payload") or {}).get("views")
+        if latest and latest.views and views_24 is not None:
+            state["percent_of_current_lifetime_views"] = round(float(views_24) / latest.views * 100, 1)
+        peer_payloads = []
+        for peer in get_content_repository().tracked(user_id, active_only=False):
+            if peer.id == tracked.id:
+                continue
+            peer_snapshots = get_content_repository().snapshots([peer.media_id])
+            milestone = next((value for value in sorted(peer_snapshots, key=lambda value: value.captured_at, reverse=True)
+                              if value.collection_type == "milestone" and value.target_hour == 24), None)
+            if milestone:
+                peer_payloads.append({"views": milestone.views, "accounts_reached": milestone.reach, "engagement_rate": milestone.engagement_rate})
+                continue
+            screenshots = get_content_repository().external_insights(user_id, peer.id)
+            if screenshots:
+                peer_payloads.append(screenshots[0].payload or {})
+        if len(peer_payloads) >= 3:
+            typical = {}
+            for key in ("views", "accounts_reached", "engagement_rate"):
+                values = [float(value[key]) for value in peer_payloads if isinstance(value.get(key), (int, float))]
+                if len(values) >= 3:
+                    typical[key] = {"median": round(median(values), 1 if key == "engagement_rate" else 0), "sample_size": len(values)}
+            state["account_typical"] = {"basis": "Account posts with a completed 24-hour capture", "metrics": typical} if typical else None
     if _automatic_tracking_available():
-        job = next((item for item in get_tracking_repository().jobs_for_tracking(tracked.id) if item.target_hour == 24), None)
         state["api_capture_status"] = job.status if job else "not_scheduled"
     else:
         state["api_capture_status"] = "scheduler_unavailable"
@@ -638,7 +703,7 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
     item["comment_insights"] = comment_summary(get_content_repository().comments(user_id, tracked_id))
     account = stored_connection(user_id)
     item["comment_ingestion"] = {
-        "enabled": instagram_comment_ingestion_enabled(),
+        "enabled": instagram_comment_ingestion_enabled(user_id, account.instagram_user_id if account else None),
         "permission_granted": bool(account and "instagram_business_manage_comments" in account.scopes),
     }
     return item
@@ -655,10 +720,10 @@ def update_tracked_post(payload: TrackingComparisonUpdate, tracked_id: str, user
 @router.post("/tracked-posts/{tracked_id}/comments/refresh")
 def refresh_comments(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
-    if not instagram_comment_ingestion_enabled():
+    account = _active_account(user_id)
+    if not instagram_comment_ingestion_enabled(user_id, account.instagram_user_id):
         raise HTTPException(status_code=409, detail={"code": "comment_ingestion_disabled", "message": "Comment reading is not enabled for this deployment."})
     item = _tracked_item(user_id, tracked_id)
-    account = _active_account(user_id)
     if "instagram_business_manage_comments" not in account.scopes:
         raise HTTPException(status_code=403, detail={"code": "instagram_comment_permission_required", "message": "Reconnect Instagram after comment access is approved."})
     media_item = item.get("media")
@@ -706,6 +771,32 @@ def _decode_screenshot(value: ScreenshotImage) -> bytes:
     if not signatures[value.mime_type]:
         raise HTTPException(status_code=422, detail={"code": "invalid_screenshot_signature", "message": "A screenshot does not match its declared image type."})
     return body
+
+
+@router.post("/insights/followers-online/extract")
+def extract_followers_online_screenshot(payload: ScreenshotExtractionRequest, user: AuthenticatedUser = Depends(require_user)):
+    _active_account(current_user(user))
+    images = [(_decode_screenshot(value), value.mime_type) for value in payload.screenshots]
+    try:
+        candidate, model = extract_audience_activity(images)
+    except (ValueError, GeminiConfigurationError, GeminiUpstreamError) as exc:
+        raise HTTPException(status_code=422, detail={"code": "audience_activity_unreadable", "message": str(exc)}) from None
+    return {"candidate": candidate, "extraction_model": model, "extraction_version": AUDIENCE_ACTIVITY_EXTRACTION_VERSION}
+
+
+@router.post("/insights/followers-online/confirm")
+def confirm_followers_online_screenshot(payload: AudienceActivityConfirmationRequest, user: AuthenticatedUser = Depends(require_user)):
+    user_id = current_user(user)
+    account = _active_account(user_id)
+    now = datetime.now(timezone.utc)
+    record = {"source": "instagram_audience_screenshot", "source_label": "Instagram Audience screenshot",
+              "captured_for_account": account.instagram_user_id, "payload": payload.payload.model_dump(),
+              "confirmed_at": now.isoformat()}
+    try:
+        repository().upsert_connection(account.model_copy(update={"audience_activity_insight": record, "audience_activity_updated_at": now}))
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    return record
 
 
 @router.post("/tracked-posts/{tracked_id}/first-24-hours/extract")
@@ -770,11 +861,14 @@ def tracked_analyses(tracked_id: str, user: AuthenticatedUser = Depends(require_
 
 @router.get("/insights/patterns")
 def account_pattern_insights(
-    timezone_offset_minutes: int = Query(0, ge=-840, le=840),
+    timezone_offset_minutes: int | None = Query(None, ge=-840, le=840),
     user: AuthenticatedUser = Depends(require_user),
 ):
     user_id = current_user(user)
     account = stored_connection(user_id)
+    resolved_timezone = timezone_offset_minutes if timezone_offset_minutes is not None else (account.timezone_offset_minutes if account else 0)
+    if account and timezone_offset_minutes is not None and account.timezone_offset_minutes != timezone_offset_minutes:
+        account = repository().upsert_connection(account.model_copy(update={"timezone_offset_minutes": timezone_offset_minutes}))
     items = []
     for item in tracked_payload(user_id, active_only=False):
         snapshots = get_content_repository().snapshots([item["tracking"].media_id])
@@ -792,11 +886,21 @@ def account_pattern_insights(
         get_instagram_repository().set_insight_themes(user_id, themes)
     result = build_account_insights(
         items,
-        timezone_offset_minutes,
+        resolved_timezone,
         account_context=get_account_context(user_id),
         themes=themes,
     )
     result["viewer_requests"] = aggregate_viewer_requests(get_content_repository().comments(user_id))
+    if account and account.audience_activity_insight:
+        record = dict(account.audience_activity_insight)
+        values = ((record.get("payload") or {}).get("hourly_values") or [])
+        top = sorted(((float(value), hour) for hour, value in enumerate(values) if isinstance(value, (int, float))), reverse=True)[:3]
+        record["top_windows"] = [{"hour": hour, "value": value} for value, hour in top]
+        record["refresh_due_at"] = (account.audience_activity_updated_at + timedelta(days=30)).isoformat() if account.audience_activity_updated_at else None
+        result["followers_online"] = record
+    else:
+        result["followers_online"] = {"source": "instagram_api", "status": "unsupported",
+            "reason": "The current Instagram API with Instagram Login does not expose online_followers for this integration."}
     return result
 
 

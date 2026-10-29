@@ -1,6 +1,6 @@
 # Instagram data, comments, and first-24-hour insights
 
-Last reviewed: 2026-10-28
+Last reviewed: 2026-10-29
 
 ## Login and permissions
 
@@ -18,9 +18,27 @@ Advanced Access when the app serves professional accounts the app does not own o
 manage, so general availability requires App Review. Standard Access is limited to
 accounts owned/managed by the app and added in the App Dashboard.
 
+Owner/app-role testing can keep the global flag off and put comma-separated
+PostBridge user IDs or Instagram account IDs in
+`POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST`. Other accounts remain gated; an
+enabled account must reconnect Instagram so its OAuth grant includes
+`instagram_business_manage_comments`.
+
 References: [Instagram API with Instagram Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/),
 [Instagram Insights](https://developers.facebook.com/docs/instagram-platform/insights/), and
 [Instagram comment moderation](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/comment-moderation/).
+
+## Followers online
+
+The current official Instagram API with Instagram Login collection does not document
+an `online_followers` insight. PostBridge therefore reports it as unsupported; no
+follower minimum or API time-zone contract applies to this integration. As a fallback,
+the owner can upload one account-level Instagram Audience “most active times” chart
+in any Instagram UI language. PostBridge stores the source and confirmation date,
+highlights the three observed peak hours, and prompts for a monthly refresh. It is
+labelled as screenshot data, not a prediction or recommendation.
+
+Official collection checked 2026-10-29: [Meta Instagram API collection](https://www.postman.com/meta/instagram/collection/6yqw8pt/instagram-api).
 
 ## Privacy and data sources
 
@@ -40,11 +58,13 @@ from a user-confirmed screenshot instead; they are not inferred from API totals.
 
 ## Durable 24-hour capture
 
-The PostgreSQL-backed worker keeps one `target_hour=24` job per active tracked post
+The PostgreSQL-backed worker periodically lists recent account media, creates tracking
+for each newly discovered post, and keeps one `target_hour=24` job per active tracked post
 and no 1/3/6/12-hour jobs. It allows two hours for transient provider recovery and
 uses locking, leases, retries, and unique constraints to prevent duplicate captures.
 Long-lived Instagram token refresh remains enabled independently.
 
+If tracking starts after the 24-hour mark, that API milestone is permanently unavailable.
 Before a post is 24 hours old, screenshot upload is unavailable. After 24 hours, a
 user can upload one to three private Instagram insights screenshots. A vision model
 extracts nullable candidates, the user edits and confirms them, and only then is an
@@ -56,9 +76,8 @@ presented as historical 24-hour measurements.
 
 ## Comparison rules
 
-Post performance comparisons use mature posts of the same Instagram format. View
-growth below 3% across recent snapshots (or confirmed screenshot curve evidence)
-establishes maturity; 7 days for images and 14 days for video/Reels is the fallback.
+Post performance comparisons use mature posts of the same Instagram format. Maturity
+is 7 days for images/carousels and 14 days for video/Reels.
 An excluded outlier remains visible but is removed from medians, patterns, and ranks.
 
 Engagement rate uses only returned interaction fields:

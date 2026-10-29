@@ -135,6 +135,10 @@ class InstagramAccount(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     insight_themes: list[str] = Field(default_factory=list)
     insight_themes_updated_at: Optional[datetime] = None
+    auto_track_new_posts: bool = True
+    timezone_offset_minutes: int = 0
+    audience_activity_insight: dict[str, Any] | None = None
+    audience_activity_updated_at: Optional[datetime] = None
     status: Literal[
         "connected", "expired", "reconnect_required", "disconnected", "error"
     ] = "connected"

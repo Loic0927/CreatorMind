@@ -131,7 +131,8 @@ def test_metric_capabilities_match_implemented_watch_time_and_unavailable_accoun
     assert by_key["total_watch_time"]["status"] == "collected_when_available"
     assert by_key["follower_non_follower_reach"]["status"] == "unavailable"
     assert by_key["audience_demographics"]["status"] == "unavailable"
-    assert by_key["online_followers"]["status"] == "unavailable"
+    assert by_key["online_followers"]["status"] == "unsupported"
+    assert "does not expose online_followers" in by_key["online_followers"]["reason"]
     assert build_account_insights([])["untested_posting_windows"] == []
 
 

@@ -30,12 +30,15 @@ INSTAGRAM_SCOPES = (
 )
 
 
-def instagram_comment_ingestion_enabled() -> bool:
-    return os.getenv("POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+def instagram_comment_ingestion_enabled(user_id: str | None = None, instagram_user_id: str | None = None) -> bool:
+    if os.getenv("POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    allowed = {value.strip() for value in os.getenv("POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST", "").split(",") if value.strip()}
+    return bool(allowed.intersection({value for value in (user_id, instagram_user_id) if value}))
 
 
-def instagram_scopes() -> tuple[str, ...]:
-    return INSTAGRAM_SCOPES + (("instagram_business_manage_comments",) if instagram_comment_ingestion_enabled() else ())
+def instagram_scopes(user_id: str | None = None, instagram_user_id: str | None = None) -> tuple[str, ...]:
+    return INSTAGRAM_SCOPES + (("instagram_business_manage_comments",) if instagram_comment_ingestion_enabled(user_id, instagram_user_id) else ())
 
 
 class InstagramServiceError(Exception):
@@ -188,13 +191,13 @@ def consume_oauth_state(state: str) -> str:
     return consume_oauth_state_context(state)[0]
 
 
-def build_authorization_url(state: str) -> str:
+def build_authorization_url(state: str, user_id: str | None = None) -> str:
     return INSTAGRAM_AUTH_URL + "?" + urlencode(
         {
             "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
             "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
             "response_type": "code",
-            "scope": ",".join(instagram_scopes()),
+            "scope": ",".join(instagram_scopes(user_id)),
             "state": state,
         }
     )

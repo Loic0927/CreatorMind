@@ -20,18 +20,64 @@ from backend.services.instagram import (
     engagement_rate,
     encrypt_access_token,
     fetch_instagram_media_insights,
+    fetch_instagram_media,
     refresh_long_lived_token,
     safe_raw_metrics,
     token_expiry,
 )
 from backend.storage.instagram_repository import InstagramRepositoryError, get_instagram_repository
-from backend.storage.models import InstagramInsightCollectionJob, InstagramInsightSnapshot
+from backend.storage.models import InstagramInsightCollectionJob, InstagramInsightSnapshot, InstagramMedia
+from backend.storage.content_repository import ContentRepository, get_content_repository
 from backend.storage.tracking_repository import TrackingRepository, get_tracking_repository
 
 
 LOGGER = logging.getLogger("postbridge.tracking_worker")
 STOP_REQUESTED = False
 REFRESH_BEFORE_EXPIRY = timedelta(days=7)
+
+
+def _media_timestamp(value: object, fallback: datetime) -> datetime:
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return fallback
+
+
+def discover_new_posts(*, now: datetime | None = None, instagram_repository=None,
+                       content_repository: ContentRepository | None = None,
+                       tracking_repository: TrackingRepository | None = None) -> int:
+    """Discover account media and create exactly one durable 24-hour job per post."""
+    current = now or datetime.now(timezone.utc)
+    accounts = instagram_repository or get_instagram_repository()
+    content = content_repository or get_content_repository()
+    tracking = tracking_repository or get_tracking_repository()
+    created = 0
+    for account in accounts.list_connections():
+        if account.status != "connected" or not account.auto_track_new_posts:
+            continue
+        try:
+            upstream = fetch_instagram_media(_usable_token(account))
+        except (InstagramServiceError, InstagramRepositoryError):
+            continue
+        items = [InstagramMedia(
+            id=f"instagram:{item['id']}", account_id=account.id,
+            instagram_media_id=str(item["id"]), media_type=str(item.get("media_type", "UNKNOWN")),
+            media_url=item.get("media_url"), thumbnail_url=item.get("thumbnail_url"),
+            permalink=item.get("permalink"), caption=str(item.get("caption", "")),
+            published_at=_media_timestamp(item.get("timestamp"), current), last_synced_at=current,
+        ) for item in upstream if item.get("id")]
+        content.upsert_media(items)
+        known = {item.media_id for item in content.tracked(account.user_id, active_only=False)}
+        for media in items:
+            if media.id in known:
+                continue
+            tracked = content.create_tracked(account.user_id, media.id)
+            tracking.ensure_jobs_for_tracking(tracked.id, current)
+            known.add(media.id)
+            created += 1
+    return created
 
 
 def _request_stop(signum, frame) -> None:  # pragma: no cover - OS integration
@@ -147,6 +193,8 @@ def process_job(repository: TrackingRepository, job: InstagramInsightCollectionJ
 def run_once(repository: TrackingRepository | None = None, worker_id: str | None = None, batch_size: int | None = None) -> int:
     repo = repository or get_tracking_repository()
     identity = worker_id or f"{socket.gethostname()}-{os.getpid()}"
+    if repository is None:
+        discover_new_posts(tracking_repository=repo)
     repo.ensure_all_active_jobs()
     jobs = repo.claim_due(identity, limit=batch_size or int(os.getenv("POSTBRIDGE_TRACKING_BATCH_SIZE", "5")))
     for job in jobs:

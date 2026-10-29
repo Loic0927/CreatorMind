@@ -26,6 +26,13 @@ def test_first_24_hour_state_labels_api_and_screenshot_sources():
     assert screenshot_state["record"]["source_label"] == "From your screenshot"
 
 
+def test_post_first_seen_after_24_hours_is_permanently_unavailable():
+    state = first_24_hour_state(NOW - timedelta(hours=25), now=NOW, permanently_unavailable=True)
+    assert state["state"] == "unavailable"
+    assert "already older than 24 hours" in state["reason"]
+    assert state["upload_allowed"] is True
+
+
 def test_screenshot_validation_warns_only_above_ten_percent_mismatch():
     assert screenshot_validation(109, 100)["possible_wrong_post"] is False
     warning = screenshot_validation(111, 100)

@@ -63,7 +63,7 @@ class TrackingRepository:
             for target_hour in TRACKING_TARGET_HOURS:
                 due_at = published_at + timedelta(hours=target_hour)
                 deadline_at = _deadline(due_at, target_hour)
-                missed = started_at > deadline_at or current > deadline_at
+                missed = started_at > due_at or current > deadline_at
                 values.append({
                     "id": str(uuid4()), "user_id": tracked.user_id,
                     "tracked_post_id": tracked.id, "media_id": tracked.media_id,
@@ -71,7 +71,7 @@ class TrackingRepository:
                     "deadline_at": deadline_at,
                     "next_attempt_at": max(current, due_at), "attempt_count": 0,
                     "status": "missed" if missed else "pending", "snapshot_id": None,
-                    "last_error_code": "tracking_started_after_milestone" if started_at > deadline_at else "collection_window_missed" if missed else None,
+                    "last_error_code": "tracking_started_after_24h" if started_at > due_at else "collection_window_missed" if missed else None,
                     "locked_at": None, "locked_by": None,
                     "completed_at": current if missed else None,
                     "created_at": current, "updated_at": current,

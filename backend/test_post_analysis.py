@@ -32,52 +32,50 @@ def _model_output(text: str = "The caption may have helped.") -> str:
     return json.dumps({"why_it_worked": [{"title": "Possible content explanation", "evidence": "Reach is above the median.", "interpretation": text, "why_it_matters": "Repeat a comparable test."}], "content_attributes": {"thumbnail_style": "Unavailable", "caption_style": "Short", "cta_usage": "None", "on_screen_text_hook": "Start here"}})
 
 
-def test_analysis_uses_same_format_and_similar_age_without_a_score():
+def test_analysis_uses_mature_same_format_range_and_hides_rank_below_six_peers():
     result = analyze_post(_media(), [_snapshot("old", reach=50, captured_at=NOW - timedelta(days=1)), _snapshot("new")], peer_metrics=[_peer(1), _peer(2, media_type="VIDEO"), _peer(3, age_days=20)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
     assert result.schema_version == "post-analysis-v6"
     assert "score" not in result.output_payload
     assert result.output_payload["baseline"]["sample_size"] == 1
-    assert result.output_payload["baseline"]["group"] == "same_format_similar_age"
+    assert result.output_payload["baseline"]["group"] == "mature_same_format"
     reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
     assert reach["rank"] is None
     assert reach["percentile"] is None
     assert result.output_payload["what_worked"] == []
     assert result.output_payload["what_to_improve"] == []
-    assert result.output_payload["comparison_notice"] == "Only 1 same-format, similar-age post; no comparison yet."
+    assert result.output_payload["comparison_notice"] == "Only 1 mature same-format post; no comparison yet."
     assert reach["basis"] == result.output_payload["baseline"]["label"]
 
 
-def test_noise_threshold_is_in_prompt_and_deterministically_suppresses_experiment():
+def test_account_range_is_in_prompt_and_in_range_values_are_not_highlighted():
     received = {}
     def generator(prompt, **kwargs):
         received["prompt"] = prompt
         return _model_output()
     current = _snapshot(reach=104, views=124, likes=10, comments=4, saves=3, shares=2, engagement_rate=19.4)
-    peers = [_peer(index) for index in range(5)]
+    peers = [_peer(index, age_days=20, reach=value) for index, value in enumerate((90, 95, 100, 105, 110, 115))]
     previous = _snapshot("previous", reach=50, views=60, captured_at=NOW - timedelta(days=1))
     result = analyze_post(_media(), [previous, current], peer_metrics=peers,
                           generator=generator,
                           image_loader=lambda url: None, model_name="test")
     reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
-    assert reach["is_noise"] is True
-    assert reach["comparison_text"] == "In line with your typical posts."
+    assert reach["range_status"] == "in_range"
+    assert reach["rank"] is not None
     assert result.output_payload["experiment"] == []
-    assert "under 10% relative" in received["prompt"]
-    assert "under 5 count units" in received["prompt"]
-    assert "relative OR under" in received["prompt"]
+    assert "mature same-format range" in received["prompt"]
+    assert "under 10%" not in received["prompt"]
 
 
-def test_noise_rule_requires_both_relative_and_absolute_gates_to_clear():
-    peers = [_peer(index, age_days=20, reach=100, views=100) for index in range(3)]
-    small_absolute = analyze_post(_media(), [_snapshot(reach=104, views=104)], peer_metrics=peers, image_loader=lambda url: None)
-    small_relative = analyze_post(_media(), [_snapshot(reach=108, views=108)], peer_metrics=peers, image_loader=lambda url: None)
-    clear_gap = analyze_post(_media(), [_snapshot(reach=112, views=112)], peer_metrics=peers, image_loader=lambda url: None)
+def test_range_and_rank_logic_marks_only_values_outside_account_distribution():
+    peers = [_peer(index, age_days=20, reach=value, views=value) for index, value in enumerate((80, 90, 100, 110, 120, 130))]
+    inside = analyze_post(_media(), [_snapshot(reach=105, views=105)], peer_metrics=peers, image_loader=lambda url: None)
+    above = analyze_post(_media(), [_snapshot(reach=140, views=140)], peer_metrics=peers, image_loader=lambda url: None)
     reach = lambda result: next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
-    assert reach(small_absolute)["is_noise"] is True
-    assert reach(small_relative)["is_noise"] is True
-    assert reach(clear_gap)["is_noise"] is False
-    assert "higher" not in small_relative.output_payload["verdict"].lower()
+    assert reach(inside)["range_status"] == "in_range"
+    assert reach(inside)["comparison_text"].startswith("#")
+    assert reach(above)["range_status"] == "above_range"
+    assert reach(above)["comparison_text"] == "Above your usual range."
 
 
 def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
@@ -92,10 +90,10 @@ def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
 
 def test_exactly_one_experiment_and_strongest_positive_metric_are_returned_for_real_gap():
     snapshots = [_snapshot("previous", reach=80, views=90, captured_at=NOW - timedelta(days=1)), _snapshot(reach=160, views=180, shares=10, saves=0)]
-    result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index, saves=10) for index in range(5)],
+    result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index, age_days=20, saves=10) for index in range(6)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
     assert len(result.output_payload["experiment"]) == 1
-    assert result.output_payload["strongest_metric"]["percent_change"] > 0
+    assert result.output_payload["strongest_metric"]["rank"] == 1
     assert result.output_payload["what_worked"]
     experiment = result.output_payload["experiment"][0]
     assert experiment["test_variable"]
@@ -122,16 +120,16 @@ def test_analysis_rejects_missing_snapshot_and_falls_back_for_invalid_model_outp
 
 
 def test_plateaued_young_post_uses_only_the_mature_same_format_basis():
-    peers = [_peer(index, age_days=20, reach=value) for index, value in enumerate((80, 100, 120))]
+    peers = [_peer(index, age_days=20, reach=value) for index, value in enumerate((70, 80, 90, 100, 110, 120))]
     snapshots = [_snapshot("old", reach=125, captured_at=NOW - timedelta(days=1)), _snapshot("new", reach=127)]
     result = analyze_post(_media(age_days=2), snapshots, peer_metrics=peers, image_loader=lambda url: None)
     baseline = result.output_payload["baseline"]
     assert baseline["group"] == "mature_same_format"
-    assert baseline["sample_size"] == 3
+    assert baseline["sample_size"] == 6
     assert result.output_payload["comparison_notice"] is None
-    assert "mature Image median (n=3)" in result.output_payload["verdict"]
+    assert "above your usual range" in result.output_payload["verdict"]
     reach = next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
-    assert reach["percent_of_median"] == 127.0
+    assert reach["range_status"] == "above_range"
 
 
 def test_same_age_basis_is_not_used_until_growth_is_observed():
@@ -141,14 +139,12 @@ def test_same_age_basis_is_not_used_until_growth_is_observed():
     assert result.output_payload["baseline"]["group"] == "mature_same_format"
 
 
-def test_wider_reach_dilution_is_not_an_improvement_item_or_experiment():
-    peers = [_peer(index, reach=100, engagement_rate=10.0, saves=3) for index in range(5)]
+def test_verdict_mentions_only_metrics_outside_the_usual_range():
+    peers = [_peer(index, age_days=20, reach=100 + index, engagement_rate=10.0 + index / 10, saves=3) for index in range(6)]
     snapshots = [_snapshot("previous", reach=80, captured_at=NOW - timedelta(days=1)), _snapshot(reach=180, engagement_rate=5.0, saves=3)]
     result = analyze_post(_media(), snapshots, peer_metrics=peers, image_loader=lambda url: None)
-    assert result.output_payload["diluted_by_wider_reach"] is True
-    assert "diluted by wider reach" in result.output_payload["verdict"]
-    assert all(item["metric"] != "engagement_rate" for item in result.output_payload["what_to_improve"])
-    assert result.output_payload["experiment"] == []
+    assert "reach is above your usual range" in result.output_payload["verdict"]
+    assert "engagement rate is below your usual range" in result.output_payload["verdict"]
 
 
 def test_similar_posts_are_factual_and_theme_scoped_without_content_snapshot():

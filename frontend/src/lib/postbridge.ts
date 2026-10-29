@@ -3,7 +3,7 @@ const STORAGE_KEY = "postbridge.web.session";
 
 export type Session = { accessToken: string; expiresAt: string; user: { id: string; email: string } };
 export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
-export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string; comment_ingestion?: { enabled: boolean; permission_granted: boolean } };
+export type Connection = { connected: boolean; configured: boolean; username?: string; status?: string; auto_track_new_posts?: boolean; timezone_offset_minutes?: number; comment_ingestion?: { enabled: boolean; permission_granted: boolean } };
 export type InsightSnapshot = {
   id: string;
   likes?: number | null;
@@ -25,17 +25,20 @@ export type First24Payload = {
   views: number | null; accounts_reached: number | null; avg_watch_time_seconds: number | null;
   skip_rate_pct: number | null; share_rate_pct: number | null; followers_pct: number | null;
   non_followers_pct: number | null; detected_ui_language: string | null;
+  engagement_rate: number | null;
   curve: { estimated_views_at_24h: number | null; share_of_final_by_24h: number | null; vs_account_typical: "above" | "similar" | "below" | "unknown" } | null;
 };
 export type First24Hours = {
-  state: "not_ready" | "upload_available" | "available"; available_after: string; upload_allowed: boolean;
+  state: "not_ready" | "upload_available" | "unavailable" | "available"; available_after: string; upload_allowed: boolean; reason?: string;
+  percent_of_current_lifetime_views?: number;
+  account_typical?: { basis: string; metrics: Partial<Record<"views" | "accounts_reached" | "engagement_rate", { median: number; sample_size: number }>> } | null;
   api_capture_status?: string; record?: { source: "instagram_api" | "user_screenshot"; source_label: string; payload: First24Payload; confirmed_at: string } | null;
 };
 export type CommentInsights = {
   available: boolean; total_comments: number; facts_label: string; interpretation_label: string;
   comments: Array<{ text: string; like_count: number; timestamp: string }>;
   category_counts: Record<"question" | "request" | "praise" | "joke_or_emoji_only" | "criticism", number>;
-  sentiment_conclusion: null; sentiment_note?: string | null;
+  sentiment_conclusion: null; sentiment_note?: string | null; next_step?: string | null; account_context_used?: boolean;
 };
 export type PostAnalysis = {
   id: string;
@@ -80,7 +83,7 @@ export type PostAnalysis = {
   };
   created_at: string;
 };
-export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
+export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; minimum?: number | null; maximum?: number | null; range_status?: string; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
 export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: "positive" | "neutral" | "improve" };
 export type TrackedPost = {
   tracking: { id: string; exclude_from_comparisons?: boolean };
@@ -214,7 +217,7 @@ export type AccountInsights = {
     required_scope: string;
     definitions: { views: string; reach: string };
     currently_collected: string[];
-    advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable"; reason: string }>;
+    advanced_metrics: Array<{ key: string; status: "collected_when_available" | "unavailable" | "unsupported"; reason: string }>;
   };
   performance_posts: PerformancePost[];
   performance_summary?: { media_type: string; media_type_label: string; source: "Instagram API"; sample_size: number; reach_sample_size: number; engagement_rate_sample_size: number; reach_median: number; engagement_rate_median: number; highest_reach: PerformanceSummaryItem; lowest_reach: PerformanceSummaryItem; highest_engagement_rate: PerformanceSummaryItem; lowest_engagement_rate: PerformanceSummaryItem } | null;
@@ -222,6 +225,7 @@ export type AccountInsights = {
   show_skip_rate: boolean;
   how_fast_posts_peak?: { sample_size: number; median_share_of_final_by_24h: number; source: "Estimated from your screenshots" } | null;
   viewer_requests?: { total_comments: number; question_count: number; request_count: number; examples: Array<{ text: string; like_count: number }>; facts_label: string; interpretation_label: string } | null;
+  followers_online?: { source: string; source_label?: string; status?: "unsupported"; reason?: string; confirmed_at?: string; refresh_due_at?: string | null; payload?: { hourly_values: Array<number | null>; detected_ui_language?: string | null; chart_timezone?: string | null }; top_windows?: Array<{ hour: number; value: number }> };
   /** @deprecated current responses use the upload state on each post. */
   historical_backfill_note?: boolean;
   content_opportunities: ContentOpportunity[];
@@ -276,6 +280,7 @@ export async function authRequest<T>(session: Session, path: string, init?: Requ
 }
 
 export const getConnection = (session: Session) => authRequest<Connection>(session, "/api/instagram/connection");
+export const updateInstagramPreferences = (session: Session, payload: { auto_track_new_posts?: boolean; timezone_offset_minutes?: number }) => authRequest<Connection>(session, "/api/instagram/preferences", { method: "PATCH", body: JSON.stringify(payload) });
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);
 export const getInstagramMedia = (session: Session) => authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(session, "/api/instagram/media");
@@ -285,6 +290,8 @@ export const refreshTrackedPostComments = (session: Session, trackedId: string) 
 export const setComparisonExclusion = (session: Session, trackedId: string, excluded: boolean) => authRequest(session, `/tracked-posts/${encodeURIComponent(trackedId)}`, { method: "PATCH", body: JSON.stringify({ exclude_from_comparisons: excluded }) });
 export const extractFirst24Screenshots = (session: Session, trackedId: string, screenshots: Array<{ filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }>) => authRequest<{ candidate: First24Payload; extraction_model: string; extraction_version: string; validation: { mismatch_pct: number | null; possible_wrong_post: boolean; warning?: string | null }; upload_token: string }>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/first-24-hours/extract`, { method: "POST", body: JSON.stringify({ screenshots }) });
 export const confirmFirst24Screenshots = (session: Session, trackedId: string, payload: { upload_token: string; payload: First24Payload; keep_screenshots: boolean }) => authRequest<{ first_24_hours: First24Hours }>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/first-24-hours/confirm`, { method: "POST", body: JSON.stringify(payload) });
+export const extractFollowersOnlineScreenshot = (session: Session, screenshots: Array<{ filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }>) => authRequest<{ candidate: { hourly_values: Array<number | null>; detected_ui_language?: string | null; chart_timezone?: string | null } }>(session, "/insights/followers-online/extract", { method: "POST", body: JSON.stringify({ screenshots }) });
+export const confirmFollowersOnlineScreenshot = (session: Session, payload: { hourly_values: Array<number | null>; detected_ui_language?: string | null; chart_timezone?: string | null }) => authRequest(session, "/insights/followers-online/confirm", { method: "POST", body: JSON.stringify({ payload }) });
 export const analyzeTrackedPost = (session: Session, trackedId: string, useAccountContext = true) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses?use_account_context=${useAccountContext}`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
 export const regenerateInsightThemes = (session: Session) => authRequest<{ themes: string[] }>(session, "/insights/themes/regenerate", { method: "POST" });

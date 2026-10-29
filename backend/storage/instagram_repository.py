@@ -34,6 +34,8 @@ class InstagramRepository(Protocol):
 
     def get_connection(self, user_id: str) -> InstagramAccount | None: ...
 
+    def list_connections(self) -> list[InstagramAccount]: ...
+
     def upsert_connection(
         self,
         account: InstagramAccount,
@@ -158,6 +160,10 @@ class SQLAlchemyInstagramRepository:
                         scopes=list(scopes or account.scopes),
                         insight_themes=list(account.insight_themes),
                         insight_themes_updated_at=account.insight_themes_updated_at,
+                        auto_track_new_posts=account.auto_track_new_posts,
+                        timezone_offset_minutes=account.timezone_offset_minutes,
+                        audience_activity_insight=account.audience_activity_insight,
+                        audience_activity_updated_at=account.audience_activity_updated_at,
                         status=account.status,
                         created_at=account.connected_at,
                         updated_at=now,
@@ -174,6 +180,10 @@ class SQLAlchemyInstagramRepository:
                     if scopes is not None:
                         record.scopes = list(scopes)
                     record.status = account.status
+                    record.auto_track_new_posts = account.auto_track_new_posts
+                    record.timezone_offset_minutes = account.timezone_offset_minutes
+                    record.audience_activity_insight = account.audience_activity_insight
+                    record.audience_activity_updated_at = account.audience_activity_updated_at
                     record.updated_at = now
                 session.flush()
                 return self._to_account(record)
@@ -195,6 +205,13 @@ class SQLAlchemyInstagramRepository:
                 record.updated_at = datetime.now(timezone.utc)
                 session.flush()
                 return self._to_account(record)
+        except Exception:
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
+
+    def list_connections(self) -> list[InstagramAccount]:
+        try:
+            with self._session_factory() as session:
+                return [self._to_account(item) for item in session.scalars(select(InstagramConnectionRecord)).all()]
         except Exception:
             raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
@@ -240,6 +257,10 @@ class SQLAlchemyInstagramRepository:
             scopes=list(record.scopes or []),
             insight_themes=list(record.insight_themes or []),
             insight_themes_updated_at=_as_utc(record.insight_themes_updated_at),
+            auto_track_new_posts=record.auto_track_new_posts,
+            timezone_offset_minutes=record.timezone_offset_minutes,
+            audience_activity_insight=record.audience_activity_insight,
+            audience_activity_updated_at=_as_utc(record.audience_activity_updated_at),
             status=record.status,
             connected_at=_as_utc(record.created_at),
             last_synced_at=_as_utc(record.updated_at),
@@ -273,6 +294,9 @@ class LocalDevelopmentInstagramRepository:
 
     def get_connection(self, user_id: str) -> InstagramAccount | None:
         return json_store.get_instagram_account(user_id)
+
+    def list_connections(self) -> list[InstagramAccount]:
+        return list(json_store.load_store().instagram_accounts)
 
     def upsert_connection(
         self,

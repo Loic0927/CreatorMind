@@ -77,6 +77,14 @@ def comment_summary(comments: list[InstagramComment]) -> dict[str, Any]:
     audience = [item for item in comments if not item.is_owner_reply]
     counts = Counter(item.category for item in audience if item.category in CATEGORIES)
     facts = sorted(audience, key=lambda item: (item.like_count, item.timestamp), reverse=True)[:5]
+    question_count, request_count = counts.get("question", 0), counts.get("request", 0)
+    next_step = None
+    if question_count >= 3:
+        next_step = f"Next step: answer the repeated questions in a follow-up; this is based on {question_count} questions."
+    elif request_count >= 3:
+        next_step = f"Next step: consider a follow-up on the requested topic; this is based on {request_count} requests."
+    elif question_count + request_count >= 3:
+        next_step = f"Next step: consider a follow-up that answers audience needs; this is based on {question_count} questions and {request_count} requests."
     return {
         "available": bool(audience),
         "total_comments": len(audience),
@@ -86,6 +94,8 @@ def comment_summary(comments: list[InstagramComment]) -> dict[str, Any]:
         "category_counts": {name: counts.get(name, 0) for name in CATEGORIES},
         "sentiment_conclusion": None,
         "sentiment_note": "Fewer than 10 comments, so no sentiment conclusion is shown." if len(audience) < MIN_COMMENTS_FOR_CONCLUSIONS else None,
+        "next_step": next_step,
+        "account_context_used": False,
     }
 
 

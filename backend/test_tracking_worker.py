@@ -139,8 +139,31 @@ def test_old_post_milestones_are_missed_without_snapshots(tracking_store):
     jobs = repository.ensure_jobs_for_tracking(tracked_id, NOW)
 
     assert {job.status for job in jobs} == {"missed"}
+    assert jobs[0].last_error_code == "tracking_started_after_24h"
     with factory() as session:
         assert list(session.scalars(select(InstagramInsightSnapshotRecord))) == []
+
+
+def test_new_post_discovery_is_idempotent(monkeypatch):
+    account = type("Account", (), {"id": "account-1", "user_id": "user-1", "status": "connected", "auto_track_new_posts": True})()
+    class Accounts:
+        def list_connections(self): return [account]
+    class Content:
+        def __init__(self): self.media = []; self.tracks = []
+        def upsert_media(self, items): self.media = items; return items
+        def tracked(self, user_id, active_only=False): return self.tracks
+        def create_tracked(self, user_id, media_id):
+            item = type("Tracked", (), {"id": f"tracked-{len(self.tracks)}", "media_id": media_id})()
+            self.tracks.append(item); return item
+    class Tracking:
+        def __init__(self): self.calls = []
+        def ensure_jobs_for_tracking(self, tracked_id, now): self.calls.append(tracked_id)
+    content, tracking = Content(), Tracking()
+    monkeypatch.setattr(tracking_worker, "_usable_token", lambda value: "token")
+    monkeypatch.setattr(tracking_worker, "fetch_instagram_media", lambda token: [{"id": "media-1", "media_type": "IMAGE", "timestamp": NOW.isoformat()}])
+    assert tracking_worker.discover_new_posts(now=NOW, instagram_repository=Accounts(), content_repository=content, tracking_repository=tracking) == 1
+    assert tracking_worker.discover_new_posts(now=NOW, instagram_repository=Accounts(), content_repository=content, tracking_repository=tracking) == 0
+    assert tracking.calls == ["tracked-0"]
 
 
 def test_worker_completes_partial_snapshot_and_keeps_scheduled_and_actual_times(tracking_store, monkeypatch):
