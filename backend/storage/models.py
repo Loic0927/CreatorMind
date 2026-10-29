@@ -185,7 +185,7 @@ class InstagramInsightSnapshot(BaseModel):
     total_watch_time_ms: Optional[int] = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
     metric_status: dict[str, str] = Field(default_factory=dict)
-    collection_type: Literal["manual_current", "milestone"] = "manual_current"
+    collection_type: Literal["manual_current", "milestone", "backfill"] = "manual_current"
     target_hour: Optional[int] = None
     scheduled_for: Optional[datetime] = None
 

@@ -17,7 +17,7 @@ export type InsightSnapshot = {
   total_watch_time_ms?: number | null;
   captured_at: string;
   metric_status?: Record<string, "available" | "unavailable" | "permission_required">;
-  collection_type?: "manual_current" | "milestone";
+  collection_type?: "manual_current" | "milestone" | "backfill";
   target_hour?: number | null;
   scheduled_for?: string | null;
 };
@@ -84,7 +84,7 @@ export type PostAnalysis = {
   };
   created_at: string;
 };
-export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; minimum?: number | null; maximum?: number | null; range_status?: string; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
+export type MetricComparison = { metric: string; current: number | null; average: number | null; median: number | null; minimum?: number | null; maximum?: number | null; range_kind?: string; range_distance?: number; range_status?: string; sample_size: number; percent_change: number | null; percent_of_median?: number | null; absolute_difference?: number | null; direction: string; is_noise?: boolean; real_gap?: boolean; significant?: boolean; comparison_text?: string; rank?: number | null; group_size?: number; percentile?: number | null; percentile_label?: string; basis?: string };
 export type AnalysisFinding = { metric: string; title: string; evidence: string; interpretation?: string | null; sample_size: number; basis: string; tone: "positive" | "neutral" | "improve" };
 export type TrackedPost = {
   tracking: { id: string; exclude_from_comparisons?: boolean };
@@ -138,6 +138,13 @@ export type AccountContext = {
   account_theme: string;
   about_this_account: string;
   target_audience: string;
+  tone_keys: string[];
+  tone_other: string;
+  content_formats: string[];
+  caption_language: string;
+  primary_category: string;
+  primary_category_other: string;
+  audience_age_ranges: string[];
 };
 export type ContentOpportunity = {
   title: string;
@@ -192,6 +199,9 @@ export type PerformancePost = {
   first_24_hours?: First24Hours | null;
   exclude_from_comparisons: boolean;
   maturity_growth_pct?: number | null;
+  has_metrics: boolean;
+  status_label: "Growing" | "Mature" | "No data" | "Needs refresh";
+  metrics_unavailable_reason?: string | null;
   /** @deprecated legacy card only; current API no longer emits milestone arrays. */
   milestones: PerformanceMilestone[];
   comparison?: { rank: number; group_size: number; metric: "views" | "reach"; group: string } | null;
@@ -295,8 +305,9 @@ export const extractFollowersOnlineScreenshot = (session: Session, screenshots: 
 export const confirmFollowersOnlineScreenshot = (session: Session, payload: { hourly_values: Array<number | null>; detected_ui_language?: string | null; chart_timezone?: string | null }) => authRequest(session, "/insights/followers-online/confirm", { method: "POST", body: JSON.stringify({ payload }) });
 export const analyzeTrackedPost = (session: Session, trackedId: string, useAccountContext = true) => authRequest<PostAnalysis>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/analyses?use_account_context=${useAccountContext}`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, `/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`);
+export const queueMetricsBackfill = (session: Session) => authRequest<{ eligible: number; queued: number; already_queued: number }>(session, "/insights/metrics-backfill", { method: "POST" });
 export const regenerateInsightThemes = (session: Session) => authRequest<{ themes: string[] }>(session, "/insights/themes/regenerate", { method: "POST" });
-export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; use_account_context: boolean; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
+export const caption = (session: Session, payload: { information: string; goal: string; platform: SocialPlatform; platforms: SocialPlatform[]; use_account_context: boolean; image?: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ caption: string; hashtags: string }>(session, "/mobile/caption", { method: "POST", body: JSON.stringify(payload) });
 export const getPublishingCapabilities = (session: Session) => authRequest<{ items: PublishingCapability[] }>(session, "/publishing/capabilities");
 export const publishPost = (session: Session, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string } }) => authRequest<{ results: PublicationResult[] }>(session, "/publications", { method: "POST", body: JSON.stringify(payload) });
 export const uploadMediaAsset = (session: Session, payload: { filename: string; mime_type: "image/jpeg" | "image/png" | "image/webp"; data: string }) => authRequest<MediaAsset>(session, "/media-assets", { method: "POST", body: JSON.stringify(payload) });
@@ -307,5 +318,7 @@ export const publishDraft = (session: Session, draftId: string, payload: { platf
 export const connectInstagram = (session: Session) => authRequest<{ authorization_url: string }>(session, "/api/instagram/connect/start?client=web", { method: "POST" });
 export const getAccountContext = (session: Session) => authRequest<AccountContext>(session, "/auth/account-context");
 export const updateAccountContext = (session: Session, accountContext: AccountContext) => authRequest<AccountContext>(session, "/auth/account-context", { method: "PATCH", body: JSON.stringify(accountContext) });
+export const suggestAccountContext = (session: Session) => authRequest<{ draft: AccountContext; source: { posts_considered: number; captions_considered: number; covers_available: number }; not_inferred: string[] }>(session, "/auth/account-context/suggest");
+export const previewAccountContext = (session: Session, accountContext: AccountContext) => authRequest<{ label: string; caption: string; stored: boolean; used_for: string[]; not_used_for: string[] }>(session, "/auth/account-context/preview", { method: "POST", body: JSON.stringify(accountContext) });
 export const logout = (session: Session) => authRequest(session, "/auth/logout", { method: "POST" });
 export const deleteAccount = (session: Session) => authRequest(session, "/auth/account", { method: "DELETE" });

@@ -921,6 +921,23 @@ def account_pattern_insights(
     return result
 
 
+@router.post("/insights/metrics-backfill")
+def queue_metrics_backfill(user: AuthenticatedUser = Depends(require_user)):
+    """Queue missing lifetime metrics; the worker fetches them in rate-limited batches."""
+    user_id = current_user(user)
+    queued = 0
+    eligible = 0
+    tracking_repository = get_tracking_repository()
+    content_repository = get_content_repository()
+    for item in tracked_payload(user_id, active_only=False):
+        tracked = item["tracking"]
+        if content_repository.snapshots([tracked.media_id]):
+            continue
+        eligible += 1
+        queued += int(tracking_repository.ensure_backfill_job(tracked.id))
+    return {"eligible": eligible, "queued": queued, "already_queued": max(0, eligible - queued)}
+
+
 @router.post("/insights/themes/regenerate")
 def regenerate_insight_themes(user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)

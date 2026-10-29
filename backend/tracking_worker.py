@@ -161,8 +161,8 @@ def process_job(repository: TrackingRepository, job: InstagramInsightCollectionJ
             average_watch_time_ms=metrics.get("average_watch_time_ms"),
             total_watch_time_ms=metrics.get("total_watch_time_ms"),
             metric_status=metric_status,
-            collection_type="milestone", target_hour=job.target_hour,
-            scheduled_for=job.due_at,
+            collection_type="backfill" if job.target_hour == -1 else "milestone",
+            target_hour=job.target_hour, scheduled_for=job.due_at,
         )
         return "completed" if repository.complete_job(job.id, worker_id, snapshot, captured_at) else "cancelled"
     except InstagramServiceError as exc:
@@ -196,6 +196,7 @@ def run_once(repository: TrackingRepository | None = None, worker_id: str | None
     if repository is None:
         discover_new_posts(tracking_repository=repo)
     repo.ensure_all_active_jobs()
+    repo.ensure_missing_metric_jobs()
     jobs = repo.claim_due(identity, limit=batch_size or int(os.getenv("POSTBRIDGE_TRACKING_BATCH_SIZE", "5")))
     for job in jobs:
         result = process_job(repo, job, identity)

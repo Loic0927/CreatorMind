@@ -30,6 +30,7 @@ export type PublicationResult = { platform: SocialPlatform; status: 'published' 
 export const publishPost = (userId: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: ImageMimeType; data: string } }) => request<{ results: PublicationResult[] }>('/publications', userId, { method: 'POST', body: JSON.stringify(payload) });
 export const getInstagramInsights = (userId: string) => request<InsightsData>('/insights/instagram?period=7d', userId);
 export const getAccountInsights = (userId: string) => request<AccountInsightsData>(`/insights/patterns?timezone_offset_minutes=${new Date().getTimezoneOffset()}`, userId);
+export const queueMetricsBackfill = (userId: string) => request<{ eligible: number; queued: number; already_queued: number }>('/insights/metrics-backfill', userId, { method: 'POST' });
 export const regenerateInsightThemes = (userId: string) => request<{ themes: string[] }>('/insights/themes/regenerate', userId, { method: 'POST' });
 export const disconnectInstagram = (userId: string) => request('/api/instagram/connection', userId, { method: 'DELETE' });
 export const deleteAccount = (accessToken: string) => request('/auth/account', accessToken, { method: 'DELETE' });

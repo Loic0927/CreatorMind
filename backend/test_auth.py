@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from backend import auth
 from backend.auth_api import AccountContextRequest, EmailRequest, VerifyCodeRequest, account_context, request_code, save_account_context, verify_code
+from backend.services.account_context import suggest_context_from_posts
 from backend.storage.database import engine_for_url, session_factory_for_url
 
 
@@ -79,7 +80,7 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
         target_audience="Beginner creators",
     ), first)
 
-    assert set(saved) == {"account_theme", "about_this_account", "target_audience"}
+    assert {"account_theme", "about_this_account", "target_audience", "tone_keys", "content_formats", "caption_language", "primary_category", "audience_age_ranges"}.issubset(saved)
     assert saved["account_theme"] == "Practical magic tutorials"
     assert account_context(first) == saved
     assert account_context(second)["account_theme"] == ""
@@ -97,8 +98,21 @@ def test_legacy_account_context_fields_are_ignored(auth_database):
         '"analysis_guidance":"Legacy analysis value","creation_guidance":"Legacy creation value"}',
     )
 
-    assert account_context(user) == {
-        "account_theme": "Travel video",
-        "about_this_account": "City guides",
-        "target_audience": "Weekend travellers",
-    }
+    restored = account_context(user)
+    assert restored["account_theme"] == "Travel video"
+    assert restored["about_this_account"] == "City guides"
+    assert restored["target_audience"] == "Weekend travellers"
+    assert restored["tone_keys"] == ()
+
+
+def test_recent_post_suggestion_is_editable_and_never_infers_sensitive_or_demographic_fields():
+    result = suggest_context_from_posts([
+        {"caption": "How do you plan this update? ✨", "media_type": "REELS", "thumbnail_url": "https://example.test/a.jpg"},
+        {"caption": "A practical update and planning notes ✨", "media_type": "IMAGE", "thumbnail_url": "https://example.test/b.jpg"},
+    ])
+    draft = result["draft"]
+    assert result["source"]["posts_considered"] == 2
+    assert set(draft["content_formats"]) == {"reel_video", "image"}
+    assert draft["audience_age_ranges"] == []
+    assert draft["target_audience"] == ""
+    assert result["not_inferred"] == ["audience demographics", "sensitive traits"]

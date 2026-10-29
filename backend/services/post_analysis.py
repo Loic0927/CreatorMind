@@ -220,6 +220,17 @@ def _ordinal(value: int) -> str:
     return f"{value}{suffix}"
 
 
+def _quantile(values: list[float], probability: float) -> float:
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * probability
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
 def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[str, Any]], basis: str) -> list[dict[str, Any]]:
     result = []
     for name in COMPARISON_METRICS:
@@ -232,7 +243,9 @@ def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[
         comparison_ready = sample_size >= MIN_COMPARABLE_PEERS and current is not None
         change = absolute / median_value * 100 if comparison_ready and absolute is not None and median_value not in (None, 0) else None
         percent_of_median = float(current) / median_value * 100 if comparison_ready and current is not None and median_value not in (None, 0) else None
-        low, high = (min(values), max(values)) if values else (None, None)
+        range_kind = "10th-90th percentile" if sample_size >= 15 else "minimum-maximum"
+        low, high = ((_quantile(values, 0.1), _quantile(values, 0.9)) if sample_size >= 15 else
+                     ((min(values), max(values)) if values else (None, None)))
         outside = "above" if comparison_ready and float(current) > high else "below" if comparison_ready and float(current) < low else None
         range_width = (high - low) if low is not None and high is not None else 0
         range_distance = ((float(current) - high) if outside == "above" else (low - float(current)) if outside == "below" else 0) / range_width if outside and range_width else (1.0 if outside else 0.0)
@@ -247,7 +260,10 @@ def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[
         elif outside is None:
             comparison_text = f"#{rank} of {len(all_values)}; within your usual range."
         else:
-            comparison_text = f"{outside.title()} your usual range."
+            current_text = f"{float(current):.1f}%" if name in RATE_METRICS else f"{int(round(float(current))):,}"
+            boundary = high if outside == "above" else low
+            boundary_text = f"{float(boundary):.1f}%" if name in RATE_METRICS else f"{int(round(float(boundary))):,}"
+            comparison_text = f"{outside.title()} your usual range: {current_text} vs {boundary_text} range edge."
         result.append({
             "metric": name, "current": _round_metric(name, current), "average": _round_metric(name, average),
             "median": _round_metric(name, median_value), "sample_size": sample_size,
@@ -255,6 +271,7 @@ def _benchmarks(metrics: dict[str, int | float | None], peer_samples: list[dict[
             "percent_of_median": round(percent_of_median, 1) if percent_of_median is not None else None,
             "absolute_difference": _round_metric(name, absolute),
             "minimum": _round_metric(name, low), "maximum": _round_metric(name, high),
+            "range_kind": range_kind,
             "range_distance": round(range_distance, 3),
             "range_status": f"{outside}_range" if outside else "in_range" if comparison_ready else "unavailable",
             "direction": outside or "same" if comparison_ready else "unavailable",
@@ -317,27 +334,11 @@ def _verdict_fragment(positives: list[dict[str, Any]], negatives: list[dict[str,
 
 
 def _experiment(media: InstagramMedia, benchmarks: list[dict[str, Any]], baseline: dict[str, Any]) -> list[dict[str, str]]:
-    if baseline["sample_size"] < MIN_COMPARABLE_PEERS:
-        return []
-    comparable = [item for item in benchmarks if item["rank"] is not None]
-    strongest = min(comparable, key=lambda item: item["rank"], default=None)
-    gaps = [item for item in comparable if item["range_status"] == "below_range" and item["metric"] != (strongest or {}).get("metric")]
-    if not gaps:
-        return []
-    target = gaps[0]
-    metric = target["metric"]
-    if metric in {"reach", "views"}:
-        variable, action = "cover", "Use one clearly different cover on your next comparable post; keep the topic, caption and posting window similar."
-    elif metric == "shares":
-        variable, action = "share prompt", "Add one direct, natural reason to share on your next comparable post; keep everything else similar."
-    elif metric == "saves":
-        variable, action = "save prompt", "Make one reusable takeaway explicit on your next comparable post; keep everything else similar."
-    else:
-        variable, action = "CTA", "Use one clear CTA on your next comparable post; keep the creative and posting window similar."
-    return [{"test_variable": variable, "metric_to_watch": metric.replace("_", " "), "action": action,
-             "reason": target["comparison_text"],
-             "comparison": f"Compare it with the {baseline['sample_size']}-post same-format median.",
-             "decision_rule": f"Keep the change if {metric.replace('_', ' ')} returns to your usual range; otherwise drop it."}]
+    # A metric gap alone does not identify a content variable to change. Until
+    # the account has repeated content-condition evidence, recommending a
+    # tactic would be invented evidence.
+    del media, benchmarks, baseline
+    return []
 
 
 def _mature_reference(media: InstagramMedia, metrics: dict[str, Any], samples: list[dict[str, Any]], current_age_hours: float | None, growth_status: str) -> dict[str, Any] | None:
@@ -364,18 +365,16 @@ def _metric_list(items: list[str]) -> str:
 
 
 def _verdict(media: InstagramMedia, baseline: dict[str, Any], benchmarks: list[dict[str, Any]], trend: dict[str, Any]) -> str:
-    age_hours = baseline.get("current_post_age_hours")
-    age = "unknown age" if age_hours is None else f"{age_hours / 24:.1f} days old"
-    del trend
+    del media, trend
     sample_size = baseline["sample_size"]
     if sample_size < MIN_COMPARABLE_PEERS:
-        return f"At {age}, there is not enough mature same-format comparison data yet."
+        return "There is not enough mature same-format comparison data yet."
     comparable = [item for item in benchmarks if item["rank"] is not None]
     positives = [item for item in comparable if item["range_status"] == "above_range"]
     negatives = [item for item in comparable if item["range_status"] == "below_range"]
     if not positives and not negatives:
-        return f"At {age}, this post is in line with your typical posts."
-    return f"At {age}, {_verdict_fragment(positives, negatives).rstrip('.').lower()}."
+        return "This post is in line with your typical posts."
+    return _verdict_fragment(positives, negatives)
 
 
 def _similar_posts(media: InstagramMedia, historical_posts: list[dict[str, Any]], theme: str) -> list[dict[str, Any]]:
@@ -456,6 +455,12 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
     if media.media_type.upper() in {"VIDEO", "REELS"} and latest.average_watch_time_ms is None:
         data_gaps.append("Average watch time is unavailable for this Reel/video snapshot.")
     diluted = False
+    reach_comparison = next((item for item in benchmarks if item["metric"] == "reach"), None)
+    rate_comparison = next((item for item in benchmarks if item["metric"] == "engagement_rate"), None)
+    diluted = bool(reach_comparison and rate_comparison and reach_comparison["range_status"] == "above_range" and rate_comparison["range_status"] == "below_range")
+    if diluted:
+        rate_comparison["comparison_text"] += " Rate diluted by wider reach."
+        improve = [item for item in improve if item["metric"] != "engagement_rate"]
     output = {"verdict": verdict, "conclusion": summary, "comparison_notice": baseline["sample_notice"] if baseline["sample_size"] < MIN_COMPARABLE_PEERS else None,
               "mature_reference": None, "diluted_by_wider_reach": diluted,
               "strongest_metric": strongest, "what_worked": worked[:2], "what_to_improve": improve[:2],
@@ -463,9 +468,9 @@ def analyze_post(media: InstagramMedia, snapshots: list[InstagramInsightSnapshot
               "experiment": _experiment(media, benchmarks, baseline), "trend": trend,
               "similar_posts": _similar_posts(media, history, current_theme),
               "evidence_quality": _evidence_quality(metrics, image_bytes is not None, baseline, trend),
-              "methodology": {"noise_rule": "Values within this account's mature same-format minimum-to-maximum range are not highlighted.",
+              "methodology": {"noise_rule": "For smaller samples the usual range is the observed minimum to maximum; from 15 posts it is the 10th to 90th percentile.",
                               "significant_rule": "Only values outside that account-specific range are highlighted.",
-                              "ranking_basis": f"Compared with the account's {baseline['age_basis']}."},
+                              "ranking_basis": f"Compared with the account's {baseline['age_basis']}. Posts become mature after the format's day rule; younger posts may qualify when their observed view growth has levelled off."},
               "data_gaps": data_gaps, "content_attributes": interpretation.content_attributes.model_dump()}
     return PostAnalysisComputation(source_snapshot_ids=[item.id for item in source_snapshots], model_name=used_model,
                                    observed_metrics=metrics, metric_deltas=deltas, content_payload=content_payload, output_payload=output)

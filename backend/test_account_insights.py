@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from backend.services.account_insights import RECOMMENDED_SAMPLE_SIZE, account_themes_meet_constraints, assign_account_theme, build_account_insights, generate_account_themes
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia, TrackedPostAnalysis
 
-NOW = datetime(2026, 10, 23, 10, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 def _item(index: int, *, caption: str, media_type: str = "IMAGE", age_days: int = 10,
@@ -76,10 +76,13 @@ def test_patterns_require_three_posts_real_difference_and_dimension_variation():
     assert small_groups["patterns"] == []
 
 
-def test_small_pattern_differences_are_hidden():
+def test_small_pattern_differences_are_reported_only_as_observed_group_values():
     items = [_item(index, caption=f"account phrase {index}", engagement_rate=8.1 if index < 3 else 8.0,
                    caption_style="Short" if index < 3 else "Long") for index in range(6)]
-    assert build_account_insights(items, themes=["Account Phrase", "Creative Notes", "Daily Work"])["patterns"] == []
+    rows = build_account_insights(items, themes=["Account Phrase", "Creative Notes", "Daily Work"])["patterns"]
+    row = next(item for item in rows if item["category"] == "Caption style")
+    assert row["posts"] == row["comparison_posts"] == 3
+    assert {row["value"], row["baseline"]} == {8.0, 8.1}
 
 
 def test_analyzed_progress_total_can_exceed_cap_but_required_cap_is_stable():
@@ -113,6 +116,17 @@ def test_maturity_uses_less_than_three_percent_view_growth_before_age_fallback()
     assert posts["1"]["mature"] is True
     assert posts["1"]["maturity_growth_pct"] == 2.0
     assert posts["2"]["mature"] is False
+
+
+def test_status_never_calls_a_post_growing_without_metrics_and_old_posts_use_day_rule():
+    missing = _item(1, caption="missing metrics", age_days=2)
+    missing["snapshots"] = []
+    old_video = _item(2, caption="old video", media_type="VIDEO", age_days=19)
+    posts = {post["instagram_media_id"]: post for post in build_account_insights([missing, old_video])["performance_posts"]}
+    assert posts["1"]["status_label"] == "No data"
+    assert posts["1"]["has_metrics"] is False
+    assert posts["2"]["status_label"] == "Mature"
+    assert posts["2"]["mature"] is True
 
 
 def test_optional_24h_view_never_substitutes_manual_lifetime_snapshot():

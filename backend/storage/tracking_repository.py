@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, sessionmaker
@@ -104,6 +104,48 @@ class TrackingRepository:
         for tracked_id in tracked_ids:
             self.ensure_jobs_for_tracking(tracked_id, now)
         return len(tracked_ids)
+
+    def ensure_backfill_job(self, tracked_id: str, now: datetime | None = None) -> bool:
+        """Queue one idempotent lifetime-metrics backfill job (target -1)."""
+        current = now or datetime.now(timezone.utc)
+        with self._factory.begin() as session:
+            row = session.execute(
+                select(TrackedPostRecord, InstagramMediaRecord)
+                .join(InstagramMediaRecord, InstagramMediaRecord.id == TrackedPostRecord.media_id)
+                .where(TrackedPostRecord.id == tracked_id)
+            ).one_or_none()
+            if row is None:
+                return False
+            tracked, _media = row
+            has_snapshot = session.scalar(select(InstagramInsightSnapshotRecord.id).where(
+                InstagramInsightSnapshotRecord.media_id == tracked.media_id
+            ).limit(1)) is not None
+            if has_snapshot:
+                return False
+            exists = session.scalar(select(InstagramInsightCollectionJobRecord.id).where(
+                InstagramInsightCollectionJobRecord.tracked_post_id == tracked.id,
+                InstagramInsightCollectionJobRecord.target_hour == -1,
+            ))
+            if exists is not None:
+                return False
+            session.add(InstagramInsightCollectionJobRecord(
+                id=str(uuid4()), user_id=tracked.user_id, tracked_post_id=tracked.id,
+                media_id=tracked.media_id, target_hour=-1, due_at=current,
+                deadline_at=current + timedelta(days=7), next_attempt_at=current,
+                attempt_count=0, status="pending", snapshot_id=None,
+                last_error_code=None, locked_at=None, locked_by=None,
+                completed_at=None, created_at=current, updated_at=current,
+            ))
+            return True
+
+    def ensure_missing_metric_jobs(self, now: datetime | None = None) -> int:
+        with self._factory() as session:
+            tracked_ids = list(session.scalars(
+                select(TrackedPostRecord.id)
+                .outerjoin(InstagramInsightSnapshotRecord, InstagramInsightSnapshotRecord.media_id == TrackedPostRecord.media_id)
+                .where(TrackedPostRecord.is_active.is_(True), InstagramInsightSnapshotRecord.id.is_(None))
+            ))
+        return sum(self.ensure_backfill_job(tracked_id, now) for tracked_id in tracked_ids)
 
     def jobs_for_tracking(self, tracked_id: str) -> list[InstagramInsightCollectionJob]:
         with self._factory() as session:
@@ -228,7 +270,7 @@ class TrackingRepository:
                     InstagramInsightCollectionJobRecord.due_at <= current,
                     InstagramInsightCollectionJobRecord.next_attempt_at <= current,
                     InstagramInsightCollectionJobRecord.deadline_at >= current,
-                    TrackedPostRecord.is_active.is_(True),
+                    or_(TrackedPostRecord.is_active.is_(True), InstagramInsightCollectionJobRecord.target_hour == -1),
                 )
                 .order_by(InstagramInsightCollectionJobRecord.next_attempt_at, InstagramInsightCollectionJobRecord.due_at)
                 .limit(limit)
@@ -265,7 +307,7 @@ class TrackingRepository:
             if row is None:
                 return None
             job, tracked, media, account = row
-            if not tracked.is_active:
+            if not tracked.is_active and job.target_hour != -1:
                 return None
             return {"job": self._job(job), "media": media, "account": account}
 
@@ -280,7 +322,7 @@ class TrackingRepository:
             if job is None or job.status != "running" or job.locked_by != worker_id:
                 return False
             active = session.scalar(select(TrackedPostRecord.is_active).where(TrackedPostRecord.id == job.tracked_post_id))
-            if not active:
+            if not active and job.target_hour != -1:
                 self._finish(job, "cancelled", "tracking_cancelled", current)
                 return False
             existing = session.scalar(select(InstagramInsightSnapshotRecord).where(

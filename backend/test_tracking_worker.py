@@ -85,6 +85,17 @@ def test_schedule_is_unique_and_has_one_24_hour_capture(tracking_store):
     assert [job.id for job in second] == [job.id for job in first]
 
 
+def test_lifetime_metrics_backfill_is_idempotent(tracking_store):
+    repository, factory = tracking_store
+    tracked_id = _seed(factory, published_at=NOW - timedelta(days=30), started_at=NOW)
+
+    assert repository.ensure_backfill_job(tracked_id, NOW) is True
+    assert repository.ensure_backfill_job(tracked_id, NOW) is False
+    jobs = repository.jobs_for_tracking(tracked_id)
+    assert [job.target_hour for job in jobs] == [-1]
+    assert jobs[0].status == "pending"
+
+
 def test_two_workers_cannot_claim_the_same_job(tracking_store):
     repository, factory = tracking_store
     tracked_id = _seed(

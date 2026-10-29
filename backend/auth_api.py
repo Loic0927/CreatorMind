@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 
 from backend.auth import AuthenticatedUser, create_login_code, get_account_context, normalize_email, require_user, revoke_session, update_account_context, verify_login_code
 from backend.config import is_production
-from backend.services.account_context import AccountContextFields, context_as_dict, serialize_account_context
+from backend.services.account_context import AccountContextFields, context_as_dict, preview_context, serialize_account_context, suggest_context_from_posts
 from backend.services.email_login import EmailDeliveryError, send_login_code
 from backend.storage.database import session_factory
 from backend.storage.sql_models import (
@@ -32,6 +32,13 @@ class AccountContextRequest(BaseModel):
     account_theme: str = Field(default="", max_length=300)
     about_this_account: str = Field(default="", max_length=3000)
     target_audience: str = Field(default="", max_length=2000)
+    tone_keys: list[str] = Field(default_factory=list, max_length=3)
+    tone_other: str = Field(default="", max_length=120)
+    content_formats: list[str] = Field(default_factory=list, max_length=5)
+    caption_language: str = Field(default="auto", max_length=40)
+    primary_category: str = Field(default="", max_length=40)
+    primary_category_other: str = Field(default="", max_length=120)
+    audience_age_ranges: list[str] = Field(default_factory=list, max_length=7)
 
 
 @router.post("/request-code")
@@ -73,6 +80,26 @@ def save_account_context(payload: AccountContextRequest, user: AuthenticatedUser
         raise HTTPException(status_code=422, detail=str(exc)) from None
     update_account_context(user.id, encoded)
     return context_as_dict(encoded)
+
+
+@router.get("/account-context/suggest")
+def suggest_account_context(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    factory = session_factory()
+    with factory() as session:
+        records = session.execute(
+            select(InstagramMediaRecord.caption, InstagramMediaRecord.media_type, InstagramMediaRecord.thumbnail_url)
+            .join(InstagramConnectionRecord, InstagramConnectionRecord.id == InstagramMediaRecord.account_id)
+            .join(TrackedPostRecord, TrackedPostRecord.media_id == InstagramMediaRecord.id)
+            .where(InstagramConnectionRecord.user_id == user.id)
+            .order_by(InstagramMediaRecord.published_at.desc()).limit(10)
+        ).all()
+    return suggest_context_from_posts([{"caption": row.caption, "media_type": row.media_type, "thumbnail_url": row.thumbnail_url} for row in records])
+
+
+@router.post("/account-context/preview")
+def preview_account_context(payload: AccountContextRequest, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    del user
+    return preview_context(AccountContextFields(**payload.model_dump()))
 
 
 @router.post("/logout")

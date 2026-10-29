@@ -75,7 +75,7 @@ def test_range_and_rank_logic_marks_only_values_outside_account_distribution():
     assert reach(inside)["range_status"] == "in_range"
     assert reach(inside)["comparison_text"].startswith("#")
     assert reach(above)["range_status"] == "above_range"
-    assert reach(above)["comparison_text"] == "Above your usual range."
+    assert reach(above)["comparison_text"].startswith("Above your usual range:")
 
 
 def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
@@ -88,18 +88,25 @@ def test_benchmark_comparison_hidden_for_zero_median_and_values_are_rounded():
     assert rate["median"] == 2.2
 
 
-def test_exactly_one_experiment_and_strongest_positive_metric_are_returned_for_real_gap():
+def test_metric_gap_without_account_condition_evidence_does_not_invent_an_experiment():
     snapshots = [_snapshot("previous", reach=80, views=90, captured_at=NOW - timedelta(days=1)), _snapshot(reach=160, views=180, shares=10, saves=0)]
     result = analyze_post(_media(), snapshots, peer_metrics=[_peer(index, age_days=20, saves=10) for index in range(6)],
                           generator=lambda *args, **kwargs: _model_output(), image_loader=lambda url: None, model_name="test")
-    assert len(result.output_payload["experiment"]) == 1
+    assert result.output_payload["experiment"] == []
     assert result.output_payload["strongest_metric"]["rank"] == 1
     assert result.output_payload["what_worked"]
-    experiment = result.output_payload["experiment"][0]
-    assert experiment["test_variable"]
-    assert experiment["metric_to_watch"] == "saves"
-    assert experiment["metric_to_watch"] != result.output_payload["strongest_metric"]["metric"]
-    assert "Keep the change if" in experiment["decision_rule"]
+
+
+def test_usual_range_switches_to_percentiles_at_fifteen_peers():
+    values = list(range(10, 25))
+    fourteen = analyze_post(_media(), [_snapshot(reach=17)], peer_metrics=[_peer(index, age_days=20, reach=value) for index, value in enumerate(values[:14])], image_loader=lambda url: None)
+    fifteen = analyze_post(_media(), [_snapshot(reach=17)], peer_metrics=[_peer(index, age_days=20, reach=value) for index, value in enumerate(values)], image_loader=lambda url: None)
+    get_reach = lambda result: next(item for item in result.output_payload["metric_comparisons"] if item["metric"] == "reach")
+    assert get_reach(fourteen)["range_kind"] == "minimum-maximum"
+    assert get_reach(fourteen)["minimum"] == 10
+    assert get_reach(fifteen)["range_kind"] == "10th-90th percentile"
+    assert get_reach(fifteen)["minimum"] == 11
+    assert get_reach(fifteen)["maximum"] == 23
 
 
 def test_unsupported_retention_explanation_is_removed():
@@ -143,8 +150,9 @@ def test_verdict_mentions_only_metrics_outside_the_usual_range():
     peers = [_peer(index, age_days=20, reach=100 + index, engagement_rate=10.0 + index / 10, saves=3) for index in range(6)]
     snapshots = [_snapshot("previous", reach=80, captured_at=NOW - timedelta(days=1)), _snapshot(reach=180, engagement_rate=5.0, saves=3)]
     result = analyze_post(_media(), snapshots, peer_metrics=peers, image_loader=lambda url: None)
-    assert "reach is above your usual range" in result.output_payload["verdict"]
-    assert "engagement rate is below your usual range" in result.output_payload["verdict"]
+    verdict = result.output_payload["verdict"].lower()
+    assert "reach is above your usual range" in verdict
+    assert "engagement rate is below your usual range" in verdict
 
 
 def test_similar_posts_are_factual_and_theme_scoped_without_content_snapshot():

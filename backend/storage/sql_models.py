@@ -146,7 +146,7 @@ class InstagramInsightCollectionJobRecord(Base):
     __tablename__ = "instagram_insight_collection_jobs"
     __table_args__ = (
         UniqueConstraint("tracked_post_id", "target_hour", name="uq_instagram_insight_job_milestone"),
-        CheckConstraint("target_hour = 24", name="ck_instagram_insight_job_target_hour"),
+        CheckConstraint("target_hour IN (-1, 24)", name="ck_instagram_insight_job_target_hour"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
