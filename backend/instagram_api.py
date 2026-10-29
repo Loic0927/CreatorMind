@@ -25,6 +25,7 @@ from backend.services.instagram import (
     fetch_instagram_media,
     fetch_instagram_media_insights,
     fetch_instagram_profile,
+    granted_instagram_scopes,
     instagram_configured,
     instagram_comment_ingestion_enabled,
     instagram_scopes,
@@ -280,6 +281,7 @@ def connect_callback(
             )
         user_id, client = consume_oauth_state_context(state)
         short_payload = exchange_authorization_code(code)
+        granted_scopes = list(granted_instagram_scopes(short_payload))
         long_payload = exchange_long_lived_token(short_payload["access_token"])
         access_token = long_payload["access_token"]
         profile = fetch_instagram_profile(access_token)
@@ -306,7 +308,7 @@ def connect_callback(
             media_count=profile.get("media_count"),
             encrypted_access_token="",
             token_expires_at=token_expiry(long_payload),
-            scopes=list(instagram_scopes(user_id, str(profile["id"]))),
+            scopes=granted_scopes,
             insight_themes=list(existing.insight_themes) if existing else [],
             insight_themes_updated_at=existing.insight_themes_updated_at if existing else None,
             auto_track_new_posts=existing.auto_track_new_posts if existing else True,
@@ -322,7 +324,7 @@ def connect_callback(
             account = repo.upsert_connection(
                 account,
                 encrypted_token=encrypted_token,
-                scopes=list(instagram_scopes(user_id, str(profile["id"]))),
+                scopes=granted_scopes,
             )
         except InstagramRepositoryError:
             raise repository_error() from None
@@ -751,7 +753,22 @@ def refresh_comments(tracked_id: str, user: AuthenticatedUser = Depends(require_
             fetched_at=now,
         ))
     get_content_repository().upsert_comments(user_id, tracked_id, stored)
-    return comment_summary(get_content_repository().comments(user_id, tracked_id))
+    summary = comment_summary(get_content_repository().comments(user_id, tracked_id))
+    latest = item.get("latest")
+    reported_total = latest.comments if latest and isinstance(latest.comments, int) else None
+    if summary["available"]:
+        summary["fetch_status"] = "data"
+    elif reported_total and reported_total > 0:
+        summary["fetch_status"] = "provider_returned_empty"
+        summary["provider_reported_total"] = reported_total
+        summary["status_message"] = (
+            f"Instagram reports {reported_total} comments in post insights, but its comment-access API returned none. "
+            "The token does not currently have effective access to those comment bodies."
+        )
+    else:
+        summary["fetch_status"] = "no_comments"
+        summary["status_message"] = "Instagram's comment-access API returned no comments for this post."
+    return summary
 
 
 def _decode_screenshot(value: ScreenshotImage) -> bytes:

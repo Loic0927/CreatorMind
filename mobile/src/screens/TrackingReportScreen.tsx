@@ -4,7 +4,7 @@ import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Tex
 import * as ImagePicker from 'expo-image-picker';
 import { Button } from '../components/ui';
 import { analyzeTrackedPost, confirmFirst24Screenshots, extractFirst24Screenshots, getTrackedPost, refreshTrackedPost, refreshTrackedPostComments, stopTracking } from '../services/api';
-import { First24Payload, ImageMimeType, PostAnalysis, TrackedPost } from '../types';
+import { CommentInsights, First24Payload, ImageMimeType, PostAnalysis, TrackedPost } from '../types';
 
 function meaningfulChanges(analysis: PostAnalysis) {
   return Object.entries(analysis.metric_deltas).filter(([metric, raw]) => {
@@ -168,10 +168,11 @@ function First24Mobile({ userId, post, onUpdated }: { userId: string; post: Trac
 
 function CommentsMobile({ userId, post, onUpdated }: { userId: string; post: TrackedPost; onUpdated: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
+  const [refreshSummary, setRefreshSummary] = useState<CommentInsights | null>(null);
   if (!post.comment_ingestion?.enabled && !post.comment_insights?.available) return null;
-  const refresh = async () => { setBusy(true); try { await refreshTrackedPostComments(userId, post.tracking.id); await onUpdated(); } catch (error) { Alert.alert('Comments unavailable', error instanceof Error ? error.message : 'Try again.'); } finally { setBusy(false); } };
-  const summary = post.comment_insights;
-  return <Panel title="Audience comments"><Text style={styles.label}>Instagram API</Text>{post.comment_ingestion?.permission_granted ? <Button label={busy ? 'Loading comments…' : 'Refresh comments'} onPress={refresh} disabled={busy} secondary /> : <Text style={styles.riskText}>Reconnect Instagram to grant instagram_business_manage_comments.</Text>}{busy ? <Text style={styles.label}>Loading comments…</Text> : null}{summary?.comments.map((comment, index) => <View key={`${comment.timestamp}-${index}`} style={styles.subcard}><Text style={styles.panelText}>{comment.text}</Text><Text style={styles.label}>{comment.like_count} likes</Text></View>)}{summary?.available ? <><Text style={styles.hypothesis}>AI GROUPING · {summary.total_comments} COMMENTS</Text><Text style={styles.label}>{Object.entries(summary.category_counts).filter(([, count]) => count > 0).map(([name, count]) => `${name.replaceAll('_', ' ')} ${count}`).join(' · ')}</Text>{summary.sentiment_note ? <Text style={styles.label}>{summary.sentiment_note}</Text> : null}{summary.next_step ? <Text style={styles.panelText}>{summary.next_step}</Text> : null}</> : post.comment_ingestion?.permission_granted && !busy ? <Text style={styles.label}>No comments.</Text> : null}</Panel>;
+  const refresh = async () => { setBusy(true); try { setRefreshSummary(await refreshTrackedPostComments(userId, post.tracking.id)); await onUpdated(); } catch (error) { Alert.alert('Comments unavailable', error instanceof Error ? error.message : 'Try again.'); } finally { setBusy(false); } };
+  const summary = refreshSummary ?? post.comment_insights;
+  return <Panel title="Audience comments"><Text style={styles.label}>Instagram API</Text>{post.comment_ingestion?.permission_granted ? <Button label={busy ? 'Loading comments…' : 'Refresh comments'} onPress={refresh} disabled={busy} secondary /> : <Text style={styles.riskText}>Reconnect Instagram to grant instagram_business_manage_comments.</Text>}{busy ? <Text style={styles.label}>Loading comments…</Text> : null}{summary?.comments.map((comment, index) => <View key={`${comment.timestamp}-${index}`} style={styles.subcard}><Text style={styles.panelText}>{comment.text}</Text><Text style={styles.label}>{comment.like_count} likes</Text></View>)}{summary?.available ? <><Text style={styles.hypothesis}>AI GROUPING · {summary.total_comments} COMMENTS</Text><Text style={styles.label}>{Object.entries(summary.category_counts).filter(([, count]) => count > 0).map(([name, count]) => `${name.replaceAll('_', ' ')} ${count}`).join(' · ')}</Text>{summary.sentiment_note ? <Text style={styles.label}>{summary.sentiment_note}</Text> : null}{summary.next_step ? <Text style={styles.panelText}>{summary.next_step}</Text> : null}</> : post.comment_ingestion?.permission_granted && !busy ? <Text style={summary?.fetch_status === 'provider_returned_empty' ? styles.riskText : styles.label}>{summary?.status_message ?? 'No comments.'}</Text> : null}</Panel>;
 }
 
 function AnalysisPanel({ analysis }: { analysis: PostAnalysis }) {

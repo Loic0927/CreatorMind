@@ -41,6 +41,23 @@ def instagram_scopes(user_id: str | None = None, instagram_user_id: str | None =
     return INSTAGRAM_SCOPES + (("instagram_business_manage_comments",) if instagram_comment_ingestion_enabled(user_id, instagram_user_id) else ())
 
 
+def granted_instagram_scopes(token_payload: dict[str, Any]) -> tuple[str, ...]:
+    """Return only permissions Meta says were granted during the code exchange."""
+    raw = token_payload.get("permissions")
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, list):
+        values = raw
+    else:
+        values = []
+    granted: list[str] = []
+    for value in values:
+        permission = str(value).strip()
+        if permission and permission not in granted:
+            granted.append(permission)
+    return tuple(granted)
+
+
 class InstagramServiceError(Exception):
     def __init__(self, code: str, message: str, status_code: int = 502, retry_after_seconds: int | None = None):
         super().__init__(message)
@@ -383,19 +400,6 @@ def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
 
 def fetch_instagram_comments(access_token: str, instagram_media_id: str) -> list[dict[str, Any]]:
     """Fetch comment text and counts without requesting or returning usernames."""
-    payload = _request_json(
-        "GET",
-        f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/comments",
-        query={
-            "fields": "id,text,like_count,timestamp,from,replies{id,text,like_count,timestamp,from}",
-            "limit": "100",
-            "access_token": access_token,
-        },
-    )
-    data = payload.get("data")
-    if not isinstance(data, list):
-        raise InstagramServiceError("instagram_comments_failed", "Instagram comments could not be loaded.", 502)
-
     def privacy_safe_comment(value: dict[str, Any]) -> dict[str, Any]:
         author = value.get("from") if isinstance(value.get("from"), dict) else {}
         return {
@@ -408,13 +412,26 @@ def fetch_instagram_comments(access_token: str, instagram_media_id: str) -> list
         }
 
     result: list[dict[str, Any]] = []
-    for value in data:
-        if not isinstance(value, dict):
-            continue
-        result.append(privacy_safe_comment(value))
-        replies = value.get("replies")
-        if isinstance(replies, dict) and isinstance(replies.get("data"), list):
-            result.extend(privacy_safe_comment(item) for item in replies["data"] if isinstance(item, dict))
+    next_url: str | None = f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/comments"
+    query: dict[str, str] | None = {
+        "fields": "id,text,like_count,timestamp,from",
+        "limit": "100",
+        "access_token": access_token,
+    }
+    # Meta uses cursor pagination for this edge. Bound the backfill so one user
+    # action cannot fan out into an unbounded number of provider calls.
+    for _ in range(5):
+        if not next_url:
+            break
+        payload = _request_json("GET", next_url, query=query)
+        query = None
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise InstagramServiceError("instagram_comments_failed", "Instagram comments could not be loaded.", 502)
+        result.extend(privacy_safe_comment(value) for value in data if isinstance(value, dict))
+        paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
+        candidate = paging.get("next")
+        next_url = candidate if isinstance(candidate, str) and candidate.startswith(f"{INSTAGRAM_GRAPH_URL}/") else None
     return result
 
 

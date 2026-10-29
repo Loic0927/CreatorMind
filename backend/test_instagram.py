@@ -141,7 +141,7 @@ def test_callback_success_encrypts_before_storage_and_hides_tokens(
     monkeypatch.setattr(
         instagram_api,
         "exchange_authorization_code",
-        lambda code: {"access_token": "short-sensitive"},
+        lambda code: {"access_token": "short-sensitive", "permissions": "instagram_business_basic,instagram_business_manage_comments"},
     )
     monkeypatch.setattr(
         instagram_api,
@@ -164,6 +164,7 @@ def test_callback_success_encrypts_before_storage_and_hides_tokens(
     assert response.headers["location"] == "creatormind://instagram-connected?status=success"
     stored = instagram_environment.get_connection("owner@example.test")
     assert stored.encrypted_access_token == ""
+    assert stored.scopes == ["instagram_business_basic", "instagram_business_manage_comments"]
     encrypted = instagram_environment.get_encrypted_token(stored.id)
     assert instagram.decrypt_access_token(encrypted) == "long-sensitive"
     rendered = response.headers["location"] + caplog.text

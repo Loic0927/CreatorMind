@@ -1,5 +1,5 @@
 from backend.services.comments import classify_comment_texts, comment_summary
-from backend.services.instagram import fetch_instagram_comments, instagram_comment_ingestion_enabled, instagram_scopes
+from backend.services.instagram import fetch_instagram_comments, granted_instagram_scopes, instagram_comment_ingestion_enabled, instagram_scopes
 from backend.storage.models import InstagramComment
 from backend.storage.sql_models import InstagramCommentRecord
 from datetime import datetime, timezone
@@ -39,18 +39,33 @@ def test_instagram_comment_fetch_strips_provider_usernames(monkeypatch):
                 "id": "comment-1", "text": "Question?", "like_count": 3,
                 "timestamp": "2026-10-28T00:00:00+0000",
                 "from": {"id": "viewer-1", "username": "must-not-leave-the-adapter"},
-                "replies": {"data": [{
-                    "id": "reply-1", "text": "Reply", "like_count": 0,
-                    "timestamp": "2026-10-28T00:01:00+0000",
-                    "from": {"id": "owner-1", "username": "owner-name"},
-                }]},
             }],
         },
     )
     values = fetch_instagram_comments("token", "media-1")
     assert values[0]["from"] == {"id": "viewer-1"}
-    assert values[1]["from"] == {"id": "owner-1"}
     assert "username" not in str(values)
+
+
+def test_instagram_comment_fetch_follows_safe_provider_pagination(monkeypatch):
+    calls = []
+    def request(method, url, **kwargs):
+        calls.append((url, kwargs.get("query")))
+        if len(calls) == 1:
+            return {"data": [{"id": "one", "text": "First", "from": {"id": "viewer"}}], "paging": {"next": "https://graph.instagram.com/page-two"}}
+        return {"data": [{"id": "two", "text": "Second", "from": {"id": "viewer"}}]}
+    monkeypatch.setattr("backend.services.instagram._request_json", request)
+    values = fetch_instagram_comments("token", "media-1")
+    assert [value["id"] for value in values] == ["one", "two"]
+    assert calls[1] == ("https://graph.instagram.com/page-two", None)
+
+
+def test_granted_instagram_scopes_uses_token_response_not_requested_scopes():
+    assert granted_instagram_scopes({"permissions": "instagram_business_basic, instagram_business_manage_comments"}) == (
+        "instagram_business_basic", "instagram_business_manage_comments",
+    )
+    assert granted_instagram_scopes({"permissions": ["instagram_business_basic"]}) == ("instagram_business_basic",)
+    assert granted_instagram_scopes({}) == ()
 
 
 def test_comment_access_can_be_enabled_for_one_allowlisted_account(monkeypatch):

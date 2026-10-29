@@ -39,6 +39,7 @@ export type CommentInsights = {
   comments: Array<{ text: string; like_count: number; timestamp: string }>;
   category_counts: Record<"question" | "request" | "praise" | "joke_or_emoji_only" | "criticism", number>;
   sentiment_conclusion: null; sentiment_note?: string | null; next_step?: string | null; account_context_used?: boolean;
+  fetch_status?: "data" | "no_comments" | "provider_returned_empty"; provider_reported_total?: number | null; status_message?: string | null;
 };
 export type PostAnalysis = {
   id: string;
