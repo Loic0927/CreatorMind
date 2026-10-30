@@ -10,6 +10,8 @@ import {
 } from "@/lib/postbridge";
 import { WireframeAnalyze } from "@/components/dashboard/WireframeAnalyze";
 import { WireframeInsights } from "@/components/dashboard/WireframeInsights";
+import { LegacyCreate } from "@/components/dashboard/LegacyCreate";
+import { LegacySettings } from "@/components/dashboard/LegacySettings";
 
 type Tab = "home" | "create" | "analyze" | "insights" | "settings";
 const tabs: Array<{ key: Tab; label: string; icon: string }> = [
@@ -40,10 +42,10 @@ export default function DashboardPage() {
     <header className="sticky top-0 z-20 flex h-16 items-center border-b border-[#e7e0f0] bg-[#f7f5ff]/90 px-5 backdrop-blur lg:ml-64 lg:px-9"><Brand compact /><div className="ml-auto text-sm font-semibold text-[#746b82]">{session.user.email}</div></header>
     <main className="mx-auto max-w-6xl px-5 pb-28 pt-7 lg:ml-64 lg:px-9 lg:pb-12">
       {tab === "home" && <Home session={session} onConnect={async () => { const result = await connectInstagram(session); window.location.href = result.authorization_url; }} />}
-      {tab === "create" && <Create session={session} />}
+      {tab === "create" && <LegacyCreate session={session} />}
       {tab === "analyze" && <WireframeAnalyze session={session} initialId={analyzeId} onClear={() => setAnalyzeId("")} />}
       {tab === "insights" && <WireframeInsights session={session} onOpen={(id) => { setAnalyzeId(id); setTab("analyze"); }} />}
-      {tab === "settings" && <Settings session={session} onLogout={finishLogout} />}
+      {tab === "settings" && <LegacySettings session={session} onLogout={finishLogout} />}
     </main>
     <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-[#e7e0f0] bg-white lg:hidden">{tabs.map((item) => <button key={item.key} onClick={() => setTab(item.key)} className={`flex min-h-16 flex-1 flex-col items-center justify-center gap-1 text-[11px] font-bold ${tab === item.key ? "text-[#7c3aed]" : "text-[#80778b]"}`}><span className="text-lg">{item.icon}</span>{item.label}</button>)}</nav>
   </div>;
