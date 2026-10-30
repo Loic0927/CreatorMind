@@ -1,3 +1,5 @@
+import base64
+
 from backend import main
 from backend.auth import AuthenticatedUser
 from backend.services.account_context import AccountContextFields, serialize_account_context
@@ -30,8 +32,8 @@ def test_caption_uses_saved_account_context_when_enabled(monkeypatch):
     result = main.mobile_caption(_request(True), _user())
 
     assert result.caption == "Try this trick"
-    assert result.hashtags == ""
-    assert "Do not add or recommend hashtags" in prompts[0]
+    assert result.hashtags == "#magic"
+    assert "HASHTAGS:" in prompts[0]
     assert "Rope magic lessons" in prompts[0]
     assert "People learning beginner rope magic" in prompts[0]
 
@@ -61,3 +63,25 @@ def test_caption_ignores_unrelated_account_context(monkeypatch):
     assert "Landscape photography" not in prompts[0]
     assert "Outdoor photography enthusiasts" not in prompts[0]
     assert "Account context reference" not in prompts[0]
+
+
+def test_caption_passes_short_video_to_model(monkeypatch):
+    captured = {}
+    request = _request(False).model_copy(update={
+        "media": main.MobileCaptionMedia(
+            mime_type="video/mp4",
+            data=base64.b64encode(b"short-video").decode("ascii"),
+            duration_seconds=42,
+        )
+    })
+    monkeypatch.setattr(
+        main,
+        "generate_gemini_content",
+        lambda prompt, **kwargs: captured.update(kwargs) or "CAPTION: Video caption\nHASHTAGS: #video #short",
+    )
+
+    result = main.mobile_caption(request, _user())
+
+    assert captured["image_bytes"] == b"short-video"
+    assert captured["image_mime_type"] == "video/mp4"
+    assert result.hashtags == "#video #short"
