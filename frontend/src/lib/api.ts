@@ -93,14 +93,6 @@ export type AuditContentResponse = {
   prediction_signal: PredictionResponse | null;
 };
 
-export type ScreenshotMetricsResponse = {
-  candidate_metrics: Record<string, number>;
-  confidence_level: string;
-  messages: string[];
-  raw_text: string;
-  filename: string;
-};
-
 export type YouTubeAuditResponse = {
   connection_required: boolean;
   platform: string;
@@ -248,38 +240,6 @@ export async function auditContent(
   );
   console.log("[CreatorMind] auditContent:response-data", data);
   return data;
-}
-
-export async function extractScreenshotMetrics(file: File): Promise<ScreenshotMetricsResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  console.log("[CreatorMind] extractScreenshotMetrics:start", {
-    name: file.name,
-    size: file.size,
-    type: file.type
-  });
-
-  try {
-    const response = await fetchWithTimeout(
-      `${API_BASE_URL}/extract-screenshot-metrics`,
-      {
-        method: "POST",
-        body: formData
-      },
-      15000
-    );
-    console.log("[CreatorMind] extractScreenshotMetrics:response-status", response.status);
-    const data = await handleJsonResponse<ScreenshotMetricsResponse>(
-      response,
-      "Screenshot metric extraction failed"
-    );
-    console.log("[CreatorMind] extractScreenshotMetrics:response-data", data);
-    return data;
-  } catch (error) {
-    console.error("[CreatorMind] extractScreenshotMetrics:error", error);
-    throw error;
-  }
 }
 
 export async function auditYouTubeUrl(url: string, userId: string): Promise<YouTubeAuditResponse> {

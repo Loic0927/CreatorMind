@@ -1,6 +1,6 @@
 # PostBridge product plan
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
 Owner: PostBridge  
 Purpose: Track the work required to turn the current Instagram MVP into a multi-platform post creation, publishing, and per-post performance analysis product.
 
@@ -42,6 +42,31 @@ PostBridge should let any signed-in creator:
 - The first multimodal creation flow supports JPG, PNG, and WebP images up to 5 MB in the web client. Video understanding remains out of scope for this phase.
 - Provider credentials and access tokens remain server-side and encrypted. Client applications never receive permanent provider tokens.
 - Account Context contains only account theme, account description, and target audience. These fields must remain platform-neutral and creator-specific.
+
+## Retired product scope
+
+- CTA detection, CTA-based grouping, CTA recommendations, and CTA experiments are removed.
+- Audience-active/Followers-online collection, screenshot extraction, posting-window analysis, and related account preferences are removed.
+- Content Patterns, Content Opportunities, AI account themes, theme regeneration, and persisted per-post theme assignments are removed.
+- Create follow-up actions and draft-prefill handoffs from Analyze are removed.
+- First-24-hour snapshots, automatic new-post discovery for that snapshot, milestone cards, screenshot backfill, and related account settings are removed.
+- These features must not be restored from the historical progress log without a new product decision. The tracking worker remains only for Instagram token maintenance; lifetime metrics and new-post discovery run once per eligible login session.
+
+## 2026-10-30 removal inventory (recorded before migration)
+
+The following inventory is the destructive-data boundary for migration `20261030_0011`. Raw Instagram media, lifetime metric snapshots (including watch-time/raw values), comments, posts, drafts, publications, and Settings Account Context are explicitly retained.
+
+- Tables removed: `external_insight_records` (uploaded screenshots and extracted provider-insight records), `instagram_insight_collection_jobs` (post-publish and backfill scheduling), and `tracked_post_analyses` (retired scores, grades, classifications, explanations, risks, experiments, confidence, history, and related derived payloads).
+- Columns removed from `instagram_insight_snapshots`: `target_hour`, `scheduled_for`, and `collection_type`. Ordinary snapshot rows and all raw metric columns remain; rows marked as milestone captures are retained as ordinary snapshots.
+- Columns removed from `instagram_connections`: `insight_themes`, `insight_themes_updated_at`, `audience_activity_insight`, `audience_activity_updated_at`, `auto_track_new_posts`, and `timezone_offset_minutes`.
+- Columns removed from `tracked_posts`: `exclude_from_comparisons` (the retired outlier-control feature).
+- Columns removed from `instagram_comments`: `category` and `classification_model`; privacy-safe comment text, provider ID, counts, timestamps, owner-reply flag, and fetch time remain.
+- API fields removed: first-24-hour payloads and capture status; milestone/capture metadata; CTA/call-to-action flags; caption-style/content attributes; scores, grades, category scores, benchmark/debug detail, explanations, risks, experiments, confidence, history, similar-post/theme data; account themes/theme statistics; content patterns; posting windows; follower-online/audience screenshot data; progress/unlock/methodology blocks; source/captured-time display fields; comparison-exclusion controls; and missing-metric bulk-job status.
+- API routes removed (must return 404): first-24-hour extract/confirm routes, audience screenshot extract/confirm routes, `/insights/themes/regenerate`, `/insights/metrics-backfill`, tracked-post analysis generation/history routes, and tracked-post comparison-exclusion updates.
+- Settings removed: Automatically track new posts, audience time zone/posting-window inputs, audience screenshot upload, theme regeneration, comparison exclusion, and every first-24-hour/screenshot preference. Account Theme, About This Account, Target Audience, caption settings, and caption generation remain unchanged.
+- Backend code paths removed: screenshot parsing/storage, milestone scheduling and capture, metric backfill job creation/claim/retry, CTA/caption-style classification, account-theme generation/assignment, content-pattern/posting-window/follower-online aggregation, score/grade/experiment analysis, analysis history, Create-prefill handoff, and scheduled new-post discovery. The worker deployment remains but performs token refresh only.
+- Web and Expo UI removed: First 24 hours, screenshot flows, Account insights header, Typical Reel, themes and Regenerate, content patterns, posting-time/audience-active panels, Fetch missing metrics, How this works, scores/grades and all Analyze extras, comparison exclusion, status chips, captions in Insights rows, and Analyze-to-Create actions.
+- Tests/docs removed or rewritten: retired feature tests and endpoint expectations; historical feature documentation in `docs/instagram-insights-capabilities.md`, `docs/oci-deployment.md`, and this plan. Intentional migration/changelog references remain for auditability.
 
 ## Current verified baseline
 
@@ -140,11 +165,11 @@ PostBridge should let any signed-in creator:
   Acceptance: The same draft created on web can be edited/published on mobile, and the resulting tracked post and analysis are visible on both clients for the same account.
   Verify: Run mobile typecheck/lint/tests and manually execute the cross-device draft-to-publish-to-analysis journey.
 
-- [-] **14. Add one safe 24-hour capture and token maintenance**
-  Spec ref: `Operations > Ongoing tracking`
-  What to build: Keep one durable automatic Instagram API snapshot at about 24 hours after publishing plus Instagram token refresh. Use retries with backoff, idempotency, locking, and failure visibility; keep manual Refresh metrics and confirmed screenshot backfill available. Do not schedule 1/3/6/12-hour jobs.
-  Acceptance: Restarting the API does not lose the 24-hour job or duplicate its snapshot, expired/revoked connections become reconnect-required, provider rate limits are respected, and older posts can use a source-labelled screenshot record.
-  Verify: Run scheduler integration tests for restart, duplicate delivery, transient failure, token expiry, rate-limit responses, and screenshot confirmation/deletion.
+- [x] **14. Maintain lifetime metrics and Instagram tokens**
+  Spec ref: `Operations > Data maintenance`
+  What to build: Keep one idempotent background job only for tracked posts whose lifetime metrics are missing. Preserve retries, locking, reconnect-required handling, manual Refresh metrics, and token maintenance. Do not discover new posts or schedule age-based snapshots.
+  Acceptance: Restarting the API does not duplicate a backfill job or snapshot, expired/revoked connections become reconnect-required, and provider rate limits are respected.
+  Verify: Run worker tests for idempotency, competing workers, transient failure, token expiry, and partial metric responses.
 
 - [ ] **15. Complete security, observability, and production rollout**
   Spec ref: `Release > Production readiness`
@@ -182,6 +207,8 @@ PostBridge should let any signed-in creator:
 
 ## Progress log
 
+Historical entries below describe what existed at that date. The Retired product scope section above supersedes older entries that mention removed features.
+
 - 2026-10-20: Created this plan from the live OCI/Instagram MVP and current responsive UI feedback.
 - 2026-10-20: Confirmed existing Instagram OAuth, media import, tracking refresh, and caption-generation foundations.
 - 2026-10-20: Implemented the first responsive web cleanup, changed Insights from aggregate totals to per-post cards, and removed viral score from the current dashboard UI. Production build passed; responsive visual review and backend/legacy viral cleanup remain.
@@ -214,3 +241,5 @@ PostBridge should let any signed-in creator:
 - 2026-10-29: Corrected comment-access verification after a live account reported an Instagram insight count but an empty comment list. OAuth now persists Meta's actually granted permissions instead of assuming every requested scope was granted; comment reads use the minimal official fields with bounded cursor pagination; and web/mobile distinguish a genuine empty list from the provider returning no comment bodies despite a positive insight count. Verification passed: backend 135 passed/1 skipped, web production build passed, and mobile typecheck, lint, and Jest passed.
 - 2026-10-29: Deferred audience comment reading so it does not block completion of the remaining product features. The implementation and tests stay in place, but the feature should remain disabled in production and excluded from the active OAuth scope until final public-release preparation. Resume only alongside Meta Advanced Access/App Review and App Store submission work, with a live non-role audience-comment verification before release.
 - 2026-10-30: Completed the sixth Analyze/Insights pass while keeping audience comments deferred. Added idempotent, batched lifetime-metric backfill jobs and a bulk fetch action; corrected maturity to use current post age with the format-specific day rule taking precedence; added explicit Growing/Mature/No data/Needs refresh states; limited the default performance list to ten metric-bearing posts; grouped missing-metric posts; removed repeated cell-level source labels; and switched usual ranges from min-max to the account's 10th-90th percentile at n>=15. Analyze now leads with deterministic Stands out/Watch point cards, keeps the range table collapsed, does not invent tactic experiments, and can open a neutral Create follow-up with only source format/caption/date. Settings now owns automatic tracking and adds user-scoped Quick setup fields, editable recent-post suggestions with no demographic/sensitive inference or implicit save, and an unstored Sample preview; legacy context remains compatible and analysis ignores unrelated structured settings. Verification passed: backend 139 passed/1 skipped, Alembic upgraded an empty SQLite database to `20261029_0010`, web production build passed, and mobile typecheck, lint, and both Jest suites passed (Expo emitted only a Node 20.18.1 upgrade advisory).
+- 2026-10-30: Retired CTA analysis, Audience Active/Followers Online, Content Patterns/Opportunities, Create follow-up handoffs, and all First-24-Hours collection/UI. Removed their active API routes, storage models, account preferences, web/mobile components, client types, screenshot extraction, scheduling/discovery logic, and feature-specific tests. The existing worker/container remains only for shared lifetime-metric backfill and connection maintenance; migration `20261030_0011` removes retired stored data and milestone-only columns. Verification passed: backend 125 passed/1 skipped, empty SQLite upgraded through Alembic head, web production build passed, mobile typecheck/lint/Jest passed, and OCI Compose configuration parsed successfully with non-secret placeholders for values absent from the local `.env.oci`.
+- 2026-10-30: Rebuilt Analyze and Insights from the four exported wireframes across responsive web and Expo. Added account-relative ranges (n>=6; min-max below n=15 and p10-p90 from n=15), input-keyed Summary/Audience/Suggestion caches, login-triggered locked 30-minute account sync, isolated/idempotent post refresh, one-minute manual cooldowns, and the shared 24-hour stale constant. Removed the inventoried milestone, external-extraction, persisted-analysis, grouping, audience-activity, CTA/style, score/grade, and scheduling surfaces; retained raw snapshots/watch-time fields, posts/media, drafts/publications, username-free comments, Account Context, and caption generation. Migration `20261030_0011` passed empty and populated upgrade/downgrade tests and preserved raw snapshots. Backend verification: 96 passed/1 skipped; web production build passed; Expo typecheck, lint, and 2 Jest suites passed. The mandated production backup invocation was stopped by the managed safety review because its configured OCI destination could not be independently trusted; no production migration was attempted.

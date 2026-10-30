@@ -1,6 +1,6 @@
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -8,6 +8,7 @@ from backend.auth import AuthenticatedUser, create_login_code, get_account_conte
 from backend.config import is_production
 from backend.services.account_context import AccountContextFields, context_as_dict, preview_context, serialize_account_context, suggest_context_from_posts
 from backend.services.email_login import EmailDeliveryError, send_login_code
+from backend.services.instagram_sync import request_account_sync
 from backend.storage.database import session_factory
 from backend.storage.sql_models import (
     AuthSessionRecord, InstagramConnectionRecord, InstagramInsightSnapshotRecord,
@@ -56,9 +57,11 @@ def request_code(payload: EmailRequest) -> dict:
 
 
 @router.post("/verify-code")
-def verify_code(payload: VerifyCodeRequest) -> dict:
+def verify_code(payload: VerifyCodeRequest, background_tasks: BackgroundTasks = None) -> dict:
     email = normalize_email(payload.email)
     user, token, expires_at = verify_login_code(email, payload.code)
+    if background_tasks is not None:
+        background_tasks.add_task(request_account_sync, user.id)
     return {"access_token": token, "token_type": "bearer", "expires_at": expires_at.isoformat(), "user": {"id": user.id, "email": user.email}}
 
 

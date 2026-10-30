@@ -115,7 +115,7 @@ def download_private_bytes(object_name: str, *, max_bytes: int = 10 * 1024 * 102
 
 
 def delete_private_object(object_name: str) -> None:
-    """Delete one exact private object after a confirmed screenshot extraction."""
+    """Delete one exact private object."""
     namespace = os.getenv("OCI_NAMESPACE")
     bucket = os.getenv("OCI_BUCKET_NAME")
     if not namespace or not bucket:

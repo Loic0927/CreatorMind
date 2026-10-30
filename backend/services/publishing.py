@@ -16,7 +16,6 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from backend.services.instagram import InstagramServiceError, publish_instagram_image
 from backend.storage.content_repository import ContentRepository, get_content_repository
 from backend.storage.models import InstagramMedia
-from backend.storage.tracking_repository import get_tracking_repository
 from backend.storage.oci_object_storage import (
     OCIStorageConfigurationError,
     create_temporary_read_url,
@@ -211,14 +210,6 @@ class InstagramPublishingAdapter(PublishingAdapter):
             repository = self._repository_loader()
             repository.upsert_media([media_item])
             tracked = repository.create_tracked(user_id, media_item.id)
-            if os.getenv("POSTBRIDGE_DATABASE_URL"):
-                try:
-                    get_tracking_repository().ensure_jobs_for_tracking(tracked.id)
-                except Exception:
-                    # The durable worker also reconciles active tracking records, so
-                    # a queue outage must not turn an already-published post into a
-                    # false publishing failure.
-                    pass
             return PublicationResult(
                 self.platform, "published", "Published and added to tracking.",
                 provider_post_id=media_item.instagram_media_id, permalink=media_item.permalink,

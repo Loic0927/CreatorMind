@@ -9,8 +9,6 @@ def generate_content_insights(input_data: Dict, prediction: Dict) -> Dict:
     platform = input_data.get("platform", "")
     content_type = input_data.get("contentType", "")
     caption_length = input_data.get("captionLength", 0)
-    posting_hour = input_data.get("postingHour", 0)
-
     views = prediction.get("views", 0)
     viral_score = prediction.get("viral_score", 0)
     engagement = prediction.get("engagement", 0)
@@ -25,13 +23,6 @@ def generate_content_insights(input_data: Dict, prediction: Dict) -> Dict:
         strengths.append("The predicted engagement is healthy, which suggests the format can hold audience interest.")
     elif engagement < 3:
         weaknesses.append("The content may not prompt enough reactions, comments, or saves.")
-        recommendations.append("Add a clearer call to action such as a question, opinion prompt, or save-worthy takeaway.")
-
-    if 17 <= posting_hour <= 21:
-        strengths.append("The posting time is within a strong evening window when audience activity is often higher.")
-    elif posting_hour < 8 or posting_hour > 22:
-        weaknesses.append("The posting time may limit early reach because fewer users may be active.")
-        recommendations.append("Test publishing between 5 PM and 9 PM for stronger initial distribution.")
 
     if content_type in ["Reel", "Short"]:
         strengths.append("Short-form video usually has better discovery potential on modern social platforms.")
@@ -42,8 +33,8 @@ def generate_content_insights(input_data: Dict, prediction: Dict) -> Dict:
     if 80 <= caption_length <= 180:
         strengths.append("The caption length is balanced and likely easy to consume.")
     elif caption_length < 40:
-        weaknesses.append("The caption may be too short to provide enough context or encourage action.")
-        recommendations.append("Expand the caption with a clearer benefit, hook, or next step for the audience.")
+        weaknesses.append("The caption may be too short to provide enough context.")
+        recommendations.append("Expand the caption so the main idea has enough context.")
     elif caption_length > 250:
         weaknesses.append("The caption may be longer than needed for quick social consumption.")
         recommendations.append("Tighten the caption so the main value is obvious at a glance.")

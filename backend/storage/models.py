@@ -45,21 +45,6 @@ class PredictionHistory(BaseModel):
     output_payload: dict
 
 
-class TrackedPostAnalysis(BaseModel):
-    id: str
-    user_id: str
-    tracked_post_id: str
-    source_snapshot_id: str
-    source_snapshot_ids: list[str] = Field(default_factory=list)
-    model_name: str
-    schema_version: str = "post-analysis-v1"
-    observed_metrics: dict[str, Any] = Field(default_factory=dict)
-    metric_deltas: dict[str, Any] = Field(default_factory=dict)
-    content_payload: dict[str, Any] = Field(default_factory=dict)
-    output_payload: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime
-
-
 DraftPlatform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
 
 
@@ -117,9 +102,7 @@ class StoreData(BaseModel):
     instagram_media: list["InstagramMedia"] = Field(default_factory=list)
     tracked_posts: list["TrackedPost"] = Field(default_factory=list)
     instagram_insight_snapshots: list["InstagramInsightSnapshot"] = Field(default_factory=list)
-    tracked_post_analyses: list[TrackedPostAnalysis] = Field(default_factory=list)
     instagram_comments: list["InstagramComment"] = Field(default_factory=list)
-    external_insight_records: list["ExternalInsightRecord"] = Field(default_factory=list)
 
 
 class InstagramAccount(BaseModel):
@@ -133,12 +116,8 @@ class InstagramAccount(BaseModel):
     encrypted_access_token: str
     token_expires_at: Optional[datetime] = None
     scopes: list[str] = Field(default_factory=list)
-    insight_themes: list[str] = Field(default_factory=list)
-    insight_themes_updated_at: Optional[datetime] = None
-    auto_track_new_posts: bool = True
-    timezone_offset_minutes: int = 0
-    audience_activity_insight: dict[str, Any] | None = None
-    audience_activity_updated_at: Optional[datetime] = None
+    session_synced_at: Optional[datetime] = None
+    session_sync_error: Optional[str] = None
     status: Literal[
         "connected", "expired", "reconnect_required", "disconnected", "error"
     ] = "connected"
@@ -165,7 +144,6 @@ class TrackedPost(BaseModel):
     user_id: str
     media_id: str
     is_active: bool = True
-    exclude_from_comparisons: bool = False
     started_at: datetime
     stopped_at: Optional[datetime] = None
 
@@ -185,32 +163,6 @@ class InstagramInsightSnapshot(BaseModel):
     total_watch_time_ms: Optional[int] = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
     metric_status: dict[str, str] = Field(default_factory=dict)
-    collection_type: Literal["manual_current", "milestone", "backfill"] = "manual_current"
-    target_hour: Optional[int] = None
-    scheduled_for: Optional[datetime] = None
-
-
-class InstagramInsightCollectionJob(BaseModel):
-    id: str
-    user_id: str
-    tracked_post_id: str
-    media_id: str
-    target_hour: int
-    due_at: datetime
-    deadline_at: datetime
-    next_attempt_at: datetime
-    attempt_count: int = 0
-    status: Literal[
-        "pending", "running", "retry", "completed", "missed", "cancelled",
-        "blocked_reauthorization", "permission_required", "unavailable",
-    ]
-    snapshot_id: Optional[str] = None
-    last_error_code: Optional[str] = None
-    locked_at: Optional[datetime] = None
-    locked_by: Optional[str] = None
-    completed_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
 
 
 class InstagramComment(BaseModel):
@@ -222,19 +174,16 @@ class InstagramComment(BaseModel):
     like_count: int = 0
     timestamp: datetime
     is_owner_reply: bool = False
-    category: Literal["question", "request", "praise", "joke_or_emoji_only", "criticism"] | None = None
-    classification_model: str | None = None
     fetched_at: datetime
 
 
-class ExternalInsightRecord(BaseModel):
+class InsightTextCache(BaseModel):
     id: str
     user_id: str
-    tracked_post_id: str
-    source: Literal["user_screenshot"] = "user_screenshot"
-    payload: dict[str, Any] = Field(default_factory=dict)
-    extraction_model: str
-    extraction_version: str
-    screenshot_objects: list[str] = Field(default_factory=list)
-    confirmed_at: datetime
+    tracked_post_id: Optional[str] = None
+    cache_key: str
+    input_hash: str
+    text: str
+    model_name: str
     created_at: datetime
+    updated_at: datetime

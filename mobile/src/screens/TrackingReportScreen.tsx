@@ -1,292 +1,63 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { Button } from '../components/ui';
-import { analyzeTrackedPost, confirmFirst24Screenshots, extractFirst24Screenshots, getTrackedPost, refreshTrackedPost, refreshTrackedPostComments, stopTracking } from '../services/api';
-import { CommentInsights, First24Payload, ImageMimeType, PostAnalysis, TrackedPost } from '../types';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { getTrackedPost, getTrackedPosts, refreshTrackedPost } from '../services/api';
+import { MetricKey, RangeRow, TrackedPost } from '../types';
 
-function meaningfulChanges(analysis: PostAnalysis) {
-  return Object.entries(analysis.metric_deltas).filter(([metric, raw]) => {
-    if (raw == null || Number(raw) === 0) return false;
-    const delta = Number(raw);
-    const current = analysis.observed_metrics[metric];
-    const previous = current == null ? null : Number(current) - delta;
-    const relative = previous == null || previous === 0 ? Number.POSITIVE_INFINITY : Math.abs(delta / previous * 100);
-    const absoluteLimit = metric === 'engagement_rate' ? 0.5 : 5;
-    return relative >= 10 && Math.abs(delta) >= absoluteLimit;
-  });
-}
+const labels: Record<MetricKey, string> = { views: 'Views', reach: 'Reach', engagement_rate: 'Engagement', shares: 'Shares', saves: 'Saves', comments: 'Comments' };
+const count = (value?: number | null) => value == null ? '–' : value.toLocaleString();
+const rate = (value?: number | null) => value == null ? '–' : `${value.toFixed(1)}%`;
+const display = (key: MetricKey, value?: number | null) => key === 'engagement_rate' ? rate(value) : count(value);
 
-export function TrackingReportScreen({ userId, initial, onBack }: { userId: string; initial: TrackedPost; onBack: () => void }) {
-  const [post, setPost] = useState(initial);
-  const [working, setWorking] = useState<'refresh' | 'analyze' | null>(null);
-  const [viewingAnalysisId, setViewingAnalysisId] = useState('');
-  const [showHistory, setShowHistory] = useState(false);
-  const [showSnapshots, setShowSnapshots] = useState(false);
+export function TrackingReportScreen({ userId, initial, onBack }: { userId: string; initial?: TrackedPost | null; onBack?: () => void }) {
+  const [post, setPost] = useState<TrackedPost | null>(initial ?? null);
+  const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cooldown, setCooldown] = useState(false);
+  const [error, setError] = useState('');
   const load = useCallback(async () => {
-    setPost(await getTrackedPost(userId, initial.tracking.id));
-  }, [initial.tracking.id, userId]);
-
-  // The state update happens after the asynchronous API request.
+    setError('');
+    try {
+      if (post) setPost(await getTrackedPost(userId, post.tracking.id));
+      else setPosts((await getTrackedPosts(userId)).items);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load this post.'); }
+    finally { setLoading(false); }
+  // The full post object is intentionally excluded: only identity changes reload it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post?.tracking.id, userId]);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
-
   const refresh = async () => {
-    setWorking('refresh');
-    try {
-      await refreshTrackedPost(userId, post.tracking.id);
-      await load();
-    } catch (error) {
-      Alert.alert('Refresh unavailable', error instanceof Error ? error.message : 'Try again.');
-    } finally {
-      setWorking(null);
-    }
+    if (!post || cooldown) return;
+    setRefreshing(true); setError('');
+    try { setPost(await refreshTrackedPost(userId, post.tracking.id)); setCooldown(true); setTimeout(() => setCooldown(false), 60000); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not refresh this post.'); }
+    finally { setRefreshing(false); }
   };
-  const analyze = async () => {
-    setWorking('analyze');
-    try {
-      const result = await analyzeTrackedPost(userId, post.tracking.id);
-      setViewingAnalysisId(result.id);
-      await load();
-    } catch (error) {
-      Alert.alert('Analysis unavailable', error instanceof Error ? error.message : 'Try again.');
-    } finally {
-      setWorking(null);
-    }
-  };
-  const stop = () => Alert.alert(
-    'Stop tracking?',
-    'Historical snapshots and analyses will be kept, but this post will no longer sync.',
-    [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Stop tracking', style: 'destructive', onPress: async () => { await stopTracking(userId, post.tracking.id); onBack(); } },
-    ],
-  );
-
-  const image = post.media.thumbnail_url || post.media.media_url;
-  const latest = post.latest;
-  const displayedAnalysis = post.analyses?.find((item) => item.id === viewingAnalysisId) ?? post.analyses?.[0];
-  return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Post analysis</Text>
-      <View style={styles.hero}>{image ? <Image source={{ uri: image }} style={styles.image} /> : <View style={styles.image} />}<View style={styles.heroText}><Text style={styles.eyebrow}>VERDICT</Text><Text style={styles.heroVerdict}>{displayedAnalysis?.output_payload.verdict ?? 'Run the analysis to compare this post with your account.'}</Text></View></View>
-      <Text style={styles.date}>{new Date(post.media.published_at).toLocaleString()}</Text>
-      <Text style={styles.caption} numberOfLines={2}>{post.media.caption || 'No caption'}</Text>
-
-      <Text style={styles.section}>Observed metrics</Text>
-      <View style={styles.metrics}>
-        {[
-          ['Likes', latest?.likes],
-          ['Comments', latest?.comments],
-          ['Saves', latest?.saves],
-          ['Shares', latest?.shares],
-          ['Reach', latest?.reach],
-          ['Views', latest?.views],
-          ['Engagement rate', latest?.engagement_rate == null ? null : `${latest.engagement_rate.toFixed(1)}%`],
-        ].map(([label, value]) => (
-          <View key={String(label)} style={styles.metric}>
-            <Text style={styles.value}>{value ?? '—'}</Text>
-            <Text style={styles.label}>{label}</Text>
-          </View>
-        ))}
+  if (!post) return <ScrollView contentContainerStyle={styles.content}><Text style={styles.title}>Analyze</Text>{loading ? <ActivityIndicator color="#6D28D9" /> : posts.map((item) => <Pressable key={item.tracking.id} onPress={() => { setPost(item); setLoading(true); }} style={styles.card}><View style={styles.postChoice}>{item.media.thumbnail_url || item.media.media_url ? <Image source={{ uri: item.media.thumbnail_url || item.media.media_url }} style={styles.choiceImage} /> : <View style={styles.choiceImage} />}<Text numberOfLines={2} style={styles.choiceText}>{item.media.caption || 'Instagram post'}</Text></View></Pressable>)}</ScrollView>;
+  const analysis = post.analysis;
+  return <ScrollView contentContainerStyle={styles.content}>
+    <View style={styles.titleRow}>{onBack ? <Pressable onPress={onBack} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable> : null}<Text style={styles.title}>Analyze</Text></View>
+    {error ? <Text style={styles.error}>{error}</Text> : null}
+    {loading ? <ActivityIndicator color="#6D28D9" /> : <>
+      <View style={styles.card}>
+        <View style={styles.hero}>{post.media.thumbnail_url || post.media.media_url ? <Image source={{ uri: post.media.thumbnail_url || post.media.media_url }} style={styles.cover} /> : <View style={styles.cover} />}<View style={styles.heroText}><Text numberOfLines={1} style={styles.caption}>{post.media.caption || 'Instagram post'}</Text><Text style={styles.muted}>{new Date(post.media.published_at).toLocaleDateString()} · {analysis?.media_format ?? 'Post'} · {analysis?.age_days ?? 0} days</Text><Pressable disabled={refreshing || cooldown} onPress={refresh} style={styles.textButton}><Text style={styles.link}>{refreshing ? 'Refreshing…' : cooldown ? 'Refreshed' : 'Refresh metrics'}</Text></Pressable></View></View>
+        <View style={styles.metrics}><Headline label="Reach" value={count(post.latest?.reach)} /><Headline label="Views" value={count(post.latest?.views)} /><Headline label="Engagement rate" value={rate(post.latest?.engagement_rate)} /></View>
       </View>
-      <Text style={styles.label}>Instagram API · last updated {latest ? new Date(latest.captured_at).toLocaleString() : '—'}</Text>
-      {working && <ActivityIndicator color="#7c3aed" />}
-      <View style={styles.actions}>
-        <View style={styles.action}><Button label={working === 'refresh' ? 'Refreshing…' : 'Refresh metrics'} onPress={refresh} disabled={working !== null} secondary /></View>
-        <View style={styles.action}><Button label={working === 'analyze' ? 'Analyzing…' : 'Analyze post'} onPress={analyze} disabled={working !== null || !latest} /></View>
-      </View>
-
-      {displayedAnalysis ? <AnalysisPanel analysis={displayedAnalysis} /> : (
-        <View style={styles.emptyAnalysis}>
-          <Text style={styles.emptyTitle}>No saved analysis yet</Text>
-          <Text style={styles.label}>Refresh the metrics, then analyze this post using its real content and performance.</Text>
-        </View>
-      )}
-
-      <First24Mobile userId={userId} post={post} onUpdated={load} />
-      <CommentsMobile userId={userId} post={post} onUpdated={load} />
-
-      {post.analyses?.some((analysis) => meaningfulChanges(analysis).length) ? <Pressable onPress={() => setShowHistory((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showHistory ? 'Hide' : 'Show'} analysis history</Text></Pressable> : null}
-      {showHistory && (post.analyses?.length ? post.analyses.filter((analysis) => meaningfulChanges(analysis).length).map((analysis) => (
-        <Pressable key={analysis.id} onPress={() => setViewingAnalysisId(analysis.id)} style={[styles.history, displayedAnalysis?.id === analysis.id && styles.historySelected]}>
-          <Text style={styles.historySummary}>{meaningfulChanges(analysis).slice(0, 3).map(([metric, value]) => `${metric.replaceAll('_', ' ')} ${Number(value) >= 0 ? '+' : ''}${metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString()}`).join(' · ')}</Text>
-          <Text style={styles.label}>{new Date(analysis.created_at).toLocaleString()}</Text>
-          <Text style={styles.label}>Changes since the prior source snapshot</Text>
-        </Pressable>
-      )) : <Text style={styles.label}>No analysis history yet.</Text>)}
-
-      <Pressable onPress={() => setShowSnapshots((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>{showSnapshots ? 'Hide' : 'Show'} snapshot history</Text></Pressable>
-      {showSnapshots && (post.snapshots?.length ? post.snapshots.map((snapshot) => (
-        <View key={snapshot.id} style={styles.snapshot}>
-          <Text>{new Date(snapshot.captured_at).toLocaleString()}</Text>
-          <Text style={styles.label}>Reach {snapshot.reach ?? '—'} · Engagement {snapshot.engagement_rate == null ? '—' : `${snapshot.engagement_rate.toFixed(1)}%`}</Text>
-        </View>
-      )) : <Text style={styles.label}>No snapshot history yet.</Text>)}
-
-      <Button label="Stop tracking" onPress={stop} secondary />
-      <Button label="Back" onPress={onBack} secondary />
-    </ScrollView>
-  );
+      {analysis?.summary ? <Card title="Summary"><Text style={styles.body}>{analysis.summary}</Text></Card> : null}
+      {analysis?.comparable ? <>
+        <View style={styles.findings}><Finding title="STANDS OUT" tone="positive" rows={analysis.stands_out} empty="Nothing above the usual range" /><Finding title="WEAKER" tone="weaker" rows={analysis.weaker} empty="Nothing below the usual range" /></View>
+        <Card title="Usual range">{analysis.usual_ranges.map((row) => <Range key={row.metric} row={row} />)}</Card>
+      </> : <View style={styles.card}><Text style={styles.muted}>Not enough comparable posts yet</Text></View>}
+      {analysis ? <Card title="Audience comments"><Text style={styles.body}>{analysis.audience_comments.description ?? analysis.audience_comments.message}</Text></Card> : null}
+    </>}
+  </ScrollView>;
 }
-
-function First24Mobile({ userId, post, onUpdated }: { userId: string; post: TrackedPost; onUpdated: () => Promise<void> }) {
-  const state = post.first_24_hours;
-  const [busy, setBusy] = useState(false);
-  const [candidate, setCandidate] = useState<First24Payload | null>(null);
-  const [token, setToken] = useState('');
-  const [warning, setWarning] = useState<string | null>(null);
-  if (!state) return null;
-  if (state.state === 'not_ready') return <Panel title="First 24 hours"><Text style={styles.label}>Not yet 24 hours. Available after {new Date(state.available_after).toLocaleString()}.</Text></Panel>;
-  const pick = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, selectionLimit: 3, base64: true, quality: 1 });
-    if (result.canceled) return;
-    const assets = result.assets.slice(0, 3);
-    if (assets.some((asset) => !asset.base64 || !asset.mimeType || !['image/jpeg', 'image/png', 'image/webp'].includes(asset.mimeType))) return Alert.alert('Unsupported screenshot', 'Choose one to three JPG, PNG or WebP screenshots.');
-    setBusy(true);
-    try {
-      const extracted = await extractFirst24Screenshots(userId, post.tracking.id, assets.map((asset, index) => ({ filename: asset.fileName ?? `screenshot-${index + 1}`, mime_type: asset.mimeType as ImageMimeType, data: asset.base64! })));
-      setCandidate(extracted.candidate); setToken(extracted.upload_token); setWarning(extracted.validation.warning ?? null);
-    } catch (error) { Alert.alert('Extraction unavailable', error instanceof Error ? error.message : 'Try again.'); }
-    finally { setBusy(false); }
-  };
-  const save = async () => {
-    if (!candidate || !token) return;
-    setBusy(true);
-    try { await confirmFirst24Screenshots(userId, post.tracking.id, { upload_token: token, payload: candidate, keep_screenshots: false }); setCandidate(null); setToken(''); await onUpdated(); }
-    catch (error) { Alert.alert('Could not save', error instanceof Error ? error.message : 'Try again.'); }
-    finally { setBusy(false); }
-  };
-  const fields: [keyof Omit<First24Payload, 'curve' | 'detected_ui_language'>, string][] = [['views', 'Views'], ['accounts_reached', 'Accounts reached'], ['engagement_rate', 'Engagement rate (%)'], ['avg_watch_time_seconds', 'Average watch time (seconds)'], ['skip_rate_pct', 'Skip rate (%)'], ['share_rate_pct', 'Share rate (%)'], ['followers_pct', 'Followers (%)'], ['non_followers_pct', 'Non-followers (%)']];
-  const record = state.record;
-  return <Panel title="First 24 hours">
-    {record ? <View style={styles.panelBody}><Text style={styles.hypothesis}>SOURCE: {record.source_label.toUpperCase()}</Text>{fields.map(([key, label]) => record.payload[key] == null ? null : <Text key={key} style={styles.panelText}>{label}: {record.payload[key]}{key.endsWith('pct') || key === 'engagement_rate' ? '%' : key === 'avg_watch_time_seconds' ? 's' : ''}</Text>)}{state.percent_of_current_lifetime_views != null ? <Text style={styles.label}>{state.percent_of_current_lifetime_views.toFixed(1)}% of current lifetime views were reached within 24 hours.</Text> : null}{state.account_typical?.metrics.views ? <Text style={styles.label}>Account 24-hour typical: {state.account_typical.metrics.views.median.toLocaleString()} views (n={state.account_typical.metrics.views.sample_size}).</Text> : null}</View> : <View><Text style={styles.label}>{state.reason ?? 'No first-24-hour data is available.'}</Text><Button label={busy ? 'Extracting…' : 'Optional: upload screenshot'} onPress={pick} disabled={busy} secondary /></View>}
-    {candidate ? <View style={styles.subcard}><Text style={styles.subcardTitle}>Confirm extracted values</Text>{warning ? <Text style={styles.riskText}>{warning}</Text> : null}{fields.map(([key, label]) => <View key={key}><Text style={styles.label}>{label}</Text><TextInput keyboardType="decimal-pad" value={candidate[key] == null ? '' : String(candidate[key])} onChangeText={(value) => setCandidate({ ...candidate, [key]: value === '' ? null : Number(value) })} style={styles.input} /></View>)}<Button label={busy ? 'Saving…' : 'Confirm and save'} onPress={save} disabled={busy} /></View> : null}
-  </Panel>;
-}
-
-function CommentsMobile({ userId, post, onUpdated }: { userId: string; post: TrackedPost; onUpdated: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
-  const [refreshSummary, setRefreshSummary] = useState<CommentInsights | null>(null);
-  if (!post.comment_ingestion?.enabled && !post.comment_insights?.available) return null;
-  const refresh = async () => { setBusy(true); try { setRefreshSummary(await refreshTrackedPostComments(userId, post.tracking.id)); await onUpdated(); } catch (error) { Alert.alert('Comments unavailable', error instanceof Error ? error.message : 'Try again.'); } finally { setBusy(false); } };
-  const summary = refreshSummary ?? post.comment_insights;
-  return <Panel title="Audience comments"><Text style={styles.label}>Instagram API</Text>{post.comment_ingestion?.permission_granted ? <Button label={busy ? 'Loading comments…' : 'Refresh comments'} onPress={refresh} disabled={busy} secondary /> : <Text style={styles.riskText}>Reconnect Instagram to grant instagram_business_manage_comments.</Text>}{busy ? <Text style={styles.label}>Loading comments…</Text> : null}{summary?.comments.map((comment, index) => <View key={`${comment.timestamp}-${index}`} style={styles.subcard}><Text style={styles.panelText}>{comment.text}</Text><Text style={styles.label}>{comment.like_count} likes</Text></View>)}{summary?.available ? <><Text style={styles.hypothesis}>AI GROUPING · {summary.total_comments} COMMENTS</Text><Text style={styles.label}>{Object.entries(summary.category_counts).filter(([, count]) => count > 0).map(([name, count]) => `${name.replaceAll('_', ' ')} ${count}`).join(' · ')}</Text>{summary.sentiment_note ? <Text style={styles.label}>{summary.sentiment_note}</Text> : null}{summary.next_step ? <Text style={styles.panelText}>{summary.next_step}</Text> : null}</> : post.comment_ingestion?.permission_granted && !busy ? <Text style={summary?.fetch_status === 'provider_returned_empty' ? styles.riskText : styles.label}>{summary?.status_message ?? 'No comments.'}</Text> : null}</Panel>;
-}
-
-function AnalysisPanel({ analysis }: { analysis: PostAnalysis }) {
-  const [showLegacy, setShowLegacy] = useState(false);
-  const [showMethod, setShowMethod] = useState(false);
-  const output = analysis.output_payload;
-  if (!output.conclusion) return <View style={styles.emptyAnalysis}><Pressable onPress={() => setShowLegacy((value) => !value)}><Text style={styles.emptyTitle}>{showLegacy ? 'Hide' : 'Show'} legacy report</Text></Pressable><Text style={styles.label}>Run a new analysis for same-format, similar-age metric ranks.</Text>{showLegacy ? <LegacyAnalysisPanel analysis={analysis} /> : null}</View>;
-  const comparisons = output.metric_comparisons ?? [];
-  const peerCount = output.baseline?.sample_size ?? 0;
-  const comparisonReady = peerCount >= 3;
-  const metricOrder = ['views', 'reach', 'engagement_rate', 'shares', 'saves', 'comments'];
-  const rows = comparisonReady && output.baseline?.is_mature_basis ? comparisons.filter((item) => item.current != null && item.median != null && item.sample_size >= 3 && item.percent_of_median != null).sort((a, b) => metricOrder.indexOf(a.metric) - metricOrder.indexOf(b.metric)) : [];
-  const experiment = comparisonReady ? output.experiment?.[0] : undefined;
-  const format = (metric: string, value: number | null | undefined) => value == null ? '—' : metric === 'engagement_rate' ? `${Number(value).toFixed(1)}%` : Number(value).toLocaleString();
-  return <View style={styles.dashboard}>
-    {rows.length ? <Panel title={`Mature comparison · Instagram API · n=${peerCount}`}>{rows.map((item) => <View key={item.metric} style={styles.comparisonRow}><Text style={styles.subcardTitle}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.label}>{format(item.metric, item.current)} · median {format(item.metric, item.median)} · {item.is_noise ? '≈ in line' : `${item.percent_of_median?.toFixed(1)}% of median`}</Text></View>)}</Panel> : null}
-    {output.similar_posts?.length ? <Panel title="Similar posts"><View style={styles.similarGrid}>{output.similar_posts.slice(0, 2).map((post) => <View key={post.tracked_post_id ?? post.title} style={styles.similarCard}>{post.thumbnail_url ? <Image source={{ uri: post.thumbnail_url }} style={styles.similarImage} /> : <View style={styles.similarImage} />}<Text style={styles.subcardTitle} numberOfLines={1}>{post.title}</Text><Text style={styles.label}>{post.views?.toLocaleString() ?? '—'} views · {post.engagement_rate == null ? '—' : `${post.engagement_rate.toFixed(1)}%`} engagement</Text></View>)}</View></Panel> : null}
-    {experiment ? <Panel title="One experiment"><Text style={styles.panelText}>{experiment.action}</Text><Text style={styles.impact}>Watch {experiment.metric_to_watch}. {experiment.decision_rule}</Text></Panel> : null}
-    <Pressable onPress={() => setShowMethod((value) => !value)} style={styles.disclosure}><Text style={styles.historySummary}>ⓘ Methodology</Text></Pressable>
-    {showMethod ? <View style={styles.history}><Text style={styles.label}>{output.methodology?.ranking_basis}</Text><Text style={styles.label}>{output.methodology?.noise_rule}</Text></View> : null}
-  </View>;
-}
-
-function LegacyAnalysisPanel({ analysis }: { analysis: PostAnalysis }) {
-  const output = analysis.output_payload;
-  if (!output.score) return <View style={styles.emptyAnalysis}><Text style={styles.emptyTitle}>Legacy analysis</Text><Text style={styles.label}>{output.summary ?? 'Run a new analysis to view the creator intelligence dashboard.'}</Text></View>;
-  return (
-    <View style={styles.dashboard}>
-      <View style={styles.scoreCard}><Text style={styles.eyebrow}>POST SCORE</Text><Text style={styles.score}>{output.score.overall}<Text style={styles.scoreOutOf}> / 100</Text></Text><Text style={styles.grade}>Grade {output.score.grade}</Text>
-        {Object.entries(output.score.categories).map(([name, value]) => <View key={name} style={styles.scoreRow}><Text style={styles.scoreLabel}>{name}</Text><View style={styles.scoreTrack}><View style={[styles.scoreFill, { width: `${value}%`, backgroundColor: value >= 75 ? '#10b981' : value >= 50 ? '#f59e0b' : '#ef4444' }]} /></View><Text style={styles.scoreNumber}>{value}</Text></View>)}
-        {output.score.method ? <Text style={styles.scoreHelp}>How scoring works: {output.score.method}</Text> : null}
-      </View>
-      {output.baseline ? <Panel title="Comparison basis"><Text style={styles.subcardTitle}>{output.baseline.label} · {output.baseline.sample_size} posts</Text><Text style={styles.label}>{output.baseline.sample_notice}</Text><Text style={styles.label}>Published: {output.baseline.published_range.start ? new Date(output.baseline.published_range.start).toLocaleDateString() : 'Unavailable'} – {output.baseline.published_range.end ? new Date(output.baseline.published_range.end).toLocaleDateString() : 'Unavailable'}</Text><Text style={styles.label}>Metric snapshots: {output.baseline.snapshot_range.start ? new Date(output.baseline.snapshot_range.start).toLocaleDateString() : 'Unavailable'} – {output.baseline.snapshot_range.end ? new Date(output.baseline.snapshot_range.end).toLocaleDateString() : 'Unavailable'}</Text><Text style={styles.label}>Primary: median · Secondary: mean</Text>{output.baseline.limitations.map((item) => <Text key={item} style={styles.label}>• {item}</Text>)}</Panel> : null}
-      <Panel title="Top insights">{output.top_insights?.map((item) => <Text key={item.text} style={styles.panelText}>{item.status === 'strong' ? '✅' : item.status === 'attention' ? '⚠️' : 'ℹ️'} {item.text}</Text>)}</Panel>
-      <Panel title="Possible explanations"><Text style={styles.label}>These are testable hypotheses, not proven causes.</Text>{!output.why_it_worked?.length ? <Text style={styles.riskText}>There is not enough evidence for a hook, pacing, or retention diagnosis.</Text> : null}{output.why_it_worked?.map((item, index) => <View key={item.title ?? item.factor ?? String(index)} style={styles.subcard}><Text style={styles.hypothesis}>{item.classification ?? 'Possible explanation'}</Text><Text style={styles.subcardTitle}>{item.title ?? item.factor}</Text><Text style={styles.label}>Evidence: {item.evidence ?? item.explanation}</Text>{item.interpretation ? <Text style={styles.label}>Hypothesis: {item.interpretation}</Text> : null}</View>)}</Panel>
-      <Panel title="Compared with the baseline"><View style={styles.benchmarkGrid}>{output.benchmarks?.filter((item) => item.current != null).map((item) => { const comparable = (item.sample_size ?? 0) > 0 && item.median != null && item.median !== 0 && item.percent_change != null; return <View key={item.metric} style={styles.benchmark}><Text style={styles.analysisLabel}>{item.metric.replaceAll('_', ' ')}</Text><Text style={styles.benchmarkValue}>{item.current}</Text><Text style={[styles.label, comparable && item.percent_change! >= 0 ? styles.positive : comparable ? styles.negative : undefined]}>{comparable ? `${item.percent_change! >= 0 ? '↑' : '↓'} ${Math.abs(item.percent_change!)}% ${item.direction} median` : 'Comparison unavailable'}</Text><Text style={styles.label}>Median {item.median ?? '—'} · Mean {item.average ?? '—'} · n={item.sample_size ?? 0}</Text></View>; })}</View></Panel>
-      <Panel title="Risks">{output.risks?.length ? output.risks.map((item) => <Text key={item} style={styles.riskText}>⚠️ {item}</Text>) : <Text style={styles.label}>No evidence-backed risk detected.</Text>}</Panel>
-      <Panel title="Recommended experiment">{output.recommendations.map((item, index) => typeof item === 'string' ? <Text key={item} style={styles.panelText}>{item}</Text> : <View key={`${item.action}-${index}`} style={styles.subcard}><Text style={styles.hypothesis}>ONE PRIMARY VARIABLE</Text><Text style={styles.subcardTitle}>{item.test_variable ?? item.action}</Text><Text style={styles.label}>{item.action}</Text><Text style={styles.label}>Why test it: {item.reason}</Text>{item.metric_to_watch ? <Text style={styles.impact}>Watch: {item.metric_to_watch}</Text> : null}{item.comparison ? <Text style={styles.label}>Compare: {item.comparison}</Text> : null}</View>)}</Panel>
-      {output.trend ? <Panel title="Post metric history"><Text style={styles.panelText}>{output.trend.summary}</Text><Text style={styles.label}>{output.trend.observation_count} observations · {output.trend.span_hours} hours · Not an account growth trend</Text></Panel> : null}
-      {output.evidence_quality ? <Panel title={`Evidence quality · ${output.evidence_quality.score ?? '—'}/100`}><Text style={styles.label}>{output.evidence_quality.meaning}</Text>{output.evidence_quality.inputs?.map((item) => <Text key={item.name} style={styles.panelText}>{item.available ? '✅' : '—'} {item.name} · {item.earned}/{item.weight}{item.detail ? ` · ${item.detail}` : ''}</Text>)}</Panel> : output.confidence ? <Panel title="Legacy AI confidence"><Text style={styles.label}>Run a new analysis to see evidence quality and missing evidence.</Text></Panel> : null}
-      {output.data_gaps?.length ? <Panel title="Missing evidence">{output.data_gaps.map((item) => <Text key={item} style={styles.riskText}>— {item}</Text>)}</Panel> : null}
-      <Panel title="Content pattern winners">{output.content_patterns?.length ? output.content_patterns.map((item) => <View key={item.pattern} style={styles.subcard}><Text style={styles.subcardTitle}>{item.pattern} · {item.average_score}</Text><Text style={styles.label}>{item.sample_size} post{item.sample_size === 1 ? '' : 's'} · {item.difference_from_baseline >= 0 ? '+' : ''}{item.difference_from_baseline} vs baseline</Text></View>) : <Text style={styles.label}>Track more posts to detect repeatable formats.</Text>}</Panel>
-    </View>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: ReactNode }) { return <View style={styles.panel}><Text style={styles.panelTitle}>{title}</Text><View style={styles.panelBody}>{children}</View></View>; }
+function Card({ title, children }: { title: string; children: React.ReactNode }) { return <View style={styles.card}><Text style={styles.section}>{title}</Text><View style={styles.cardBody}>{children}</View></View>; }
+function Headline({ label, value }: { label: string; value: string }) { return <View style={styles.headline}><Text style={styles.headlineValue}>{value}</Text><Text style={styles.muted}>{label}</Text></View>; }
+function Finding({ title, tone, rows, empty }: { title: string; tone: 'positive' | 'weaker'; rows: RangeRow[]; empty: string }) { return <View style={[styles.card, styles.finding]}><Text style={[styles.eyebrow, tone === 'positive' ? styles.positive : styles.weaker]}>{title}</Text>{rows.length ? rows.map((row) => <View key={row.metric} style={styles.findingRow}><Text style={styles.findingValue}>{labels[row.metric]}: {display(row.metric, row.value)}</Text><Text style={styles.muted}>usual {display(row.metric, row.usual_min)}–{display(row.metric, row.usual_max)}</Text></View>) : <Text style={styles.muted}>{empty}</Text>}</View>; }
+function Range({ row }: { row: RangeRow }) { const color = row.status === 'above' ? '#15803D' : row.status === 'below' ? '#92400E' : '#6D28D9'; return <View style={styles.range}><Text style={styles.rangeLabel}>{row.metric === 'engagement_rate' ? 'Engage.' : labels[row.metric]}</Text><View style={styles.track}><View style={[styles.band, { left: `${row.band_start}%`, width: `${Math.max(2, row.band_end - row.band_start)}%` }]} /><View style={[styles.marker, { left: `${row.marker}%`, backgroundColor: color }]} /></View><Text style={styles.rangeValue}>{display(row.metric, row.value)} · {row.status === 'inside' ? `#${row.rank}` : row.status}</Text></View>; }
 
 const styles = StyleSheet.create({
-  content: { padding: 20, paddingBottom: 32, gap: 14 },
-  title: { fontSize: 30, lineHeight: 36, fontWeight: '800', color: '#201633' },
-  hero: { flexDirection: 'row', gap: 14, alignItems: 'flex-start', padding: 14, borderRadius: 18, backgroundColor: '#24163b' },
-  heroText: { flex: 1, gap: 7 },
-  heroVerdict: { color: 'white', fontSize: 15, lineHeight: 22, fontWeight: '800' },
-  image: { width: 120, height: 120, borderRadius: 16, backgroundColor: '#eee8fa' },
-  date: { color: '#746b82' },
-  caption: { color: '#201633', lineHeight: 21 },
-  metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  metric: { width: '30%', padding: 10, borderRadius: 12, backgroundColor: 'white' },
-  value: { fontWeight: '800', color: '#201633' },
-  label: { color: '#746b82', fontSize: 12, lineHeight: 18 },
-  section: { fontSize: 19, fontWeight: '800', color: '#201633', marginTop: 6 },
-  actions: { flexDirection: 'row', gap: 10 },
-  action: { flex: 1 },
-  emptyAnalysis: { padding: 16, gap: 5, borderRadius: 16, backgroundColor: 'white' },
-  emptyTitle: { fontWeight: '800', color: '#201633' },
-  snapshot: { padding: 12, borderRadius: 12, backgroundColor: 'white', gap: 4 },
-  history: { padding: 14, borderRadius: 14, backgroundColor: 'white', gap: 5 },
-  historySelected: { borderWidth: 2, borderColor: '#8b5cf6' },
-  historySummary: { color: '#201633', fontWeight: '700', lineHeight: 20 },
-  disclosure: { padding: 14, borderRadius: 14, backgroundColor: '#eee8fa' },
-  snapshotId: { color: '#6d28d9', fontSize: 11, fontWeight: '700' },
-  analysis: { gap: 14, padding: 18, borderRadius: 20, backgroundColor: '#24163b' },
-  eyebrow: { color: '#c4b5fd', fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
-  analysisSummary: { color: 'white', fontSize: 17, lineHeight: 25, fontWeight: '700' },
-  analysisMetrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  analysisMetric: { width: '30%', padding: 10, borderRadius: 12, backgroundColor: '#ffffff14' },
-  analysisValue: { color: 'white', fontWeight: '900' },
-  analysisLabel: { color: '#d9d0e5', fontSize: 9, textTransform: 'uppercase' },
-  delta: { color: '#c4b5fd', fontSize: 10, marginTop: 3 },
-  analysisList: { gap: 5 },
-  analysisTitle: { color: '#c4b5fd', fontWeight: '800' },
-  analysisItem: { color: '#eee8f6', lineHeight: 20 },
-  analysisMuted: { color: '#d9d0e5', fontSize: 12 },
-  source: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#ffffff22', paddingTop: 12, color: '#c4b5fd', fontSize: 10 },
-  dashboard: { gap: 14 },
-  comparisonCard: { gap: 10, padding: 18, borderRadius: 20, backgroundColor: '#24163b' },
-  scoreCard: { gap: 10, padding: 18, borderRadius: 20, backgroundColor: '#24163b' },
-  score: { color: 'white', fontSize: 42, fontWeight: '900' },
-  scoreOutOf: { color: '#c4b5fd', fontSize: 17 },
-  grade: { color: 'white', fontSize: 18, fontWeight: '800' },
-  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  scoreLabel: { color: '#ede9fe', width: 82, fontSize: 12, textTransform: 'capitalize' },
-  scoreTrack: { flex: 1, height: 7, borderRadius: 8, overflow: 'hidden', backgroundColor: '#ffffff22' },
-  scoreFill: { height: '100%', borderRadius: 8 },
-  scoreNumber: { color: 'white', width: 26, textAlign: 'right', fontWeight: '800' },
-  scoreHelp: { color: '#ddd6fe', fontSize: 11, lineHeight: 17, marginTop: 4 },
-  panel: { padding: 16, borderRadius: 18, backgroundColor: 'white', borderWidth: 1, borderColor: '#e7e0f0' },
-  panelTitle: { fontSize: 18, color: '#201633', fontWeight: '900', marginBottom: 12 },
-  panelBody: { gap: 9 },
-  comparisonRow: { paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eee8fa' },
-  panelText: { color: '#342846', lineHeight: 20 },
-  subcard: { padding: 12, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
-  input: { marginTop: 4, borderWidth: 1, borderColor: '#ddd5e8', borderRadius: 10, backgroundColor: 'white', paddingHorizontal: 10, paddingVertical: 8, color: '#201633' },
-  similarGrid: { flexDirection: 'row', gap: 8 },
-  similarCard: { flex: 1, minWidth: 0, padding: 10, borderRadius: 12, backgroundColor: '#f7f5ff', gap: 5 },
-  similarImage: { width: '100%', aspectRatio: 1.5, borderRadius: 9, backgroundColor: '#eee8fa' },
-  subcardTitle: { color: '#201633', fontWeight: '800' },
-  hypothesis: { color: '#7c3aed', fontWeight: '800', fontSize: 10, letterSpacing: 0.7 },
-  impact: { color: '#6d28d9', fontWeight: '700', fontSize: 12, lineHeight: 18 },
-  benchmarkGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  benchmark: { width: '48%', padding: 11, borderRadius: 12, backgroundColor: '#f7f5ff' },
-  benchmarkValue: { color: '#201633', fontWeight: '900', fontSize: 20, marginVertical: 3 },
-  positive: { color: '#047857' },
-  negative: { color: '#b91c1c' },
-  riskText: { color: '#92400e', lineHeight: 20 },
+  content: { padding: 16, paddingBottom: 32, gap: 14, backgroundColor: '#F6F3FF' }, titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 }, title: { fontSize: 30, lineHeight: 40, fontWeight: '900', color: '#1E1633' }, back: { width: 44, height: 44, borderRadius: 12, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#E8E2FA' }, backText: { fontSize: 30, color: '#1E1633' }, card: { borderRadius: 16, borderWidth: 1, borderColor: '#E8E2FA', backgroundColor: 'white', padding: 16, gap: 12 }, hero: { flexDirection: 'row', gap: 12 }, cover: { width: 86, height: 86, borderRadius: 12, backgroundColor: '#D9D1F5' }, heroText: { flex: 1 }, caption: { fontWeight: '800', color: '#1E1633' }, muted: { color: '#5F587A', fontSize: 12 }, textButton: { minHeight: 44, justifyContent: 'flex-end', alignSelf: 'flex-start' }, link: { color: '#6D28D9', fontSize: 13, fontWeight: '700' }, metrics: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#EEEAF9', paddingTop: 16 }, headline: { flex: 1 }, headlineValue: { fontSize: 24, fontWeight: '900', color: '#1E1633' }, section: { fontSize: 20, fontWeight: '900', color: '#1E1633' }, cardBody: { gap: 12 }, body: { color: '#1E1633', lineHeight: 21 }, findings: { gap: 14 }, finding: { flex: 1 }, eyebrow: { fontSize: 11, letterSpacing: .7, fontWeight: '900' }, positive: { color: '#166534' }, weaker: { color: '#92400E' }, findingRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 }, findingValue: { color: '#1E1633', fontWeight: '800', fontSize: 13 }, range: { flexDirection: 'row', alignItems: 'center', gap: 8 }, rangeLabel: { width: 60, fontWeight: '700', color: '#1E1633' }, track: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#EEEAF9' }, band: { position: 'absolute', height: 8, borderRadius: 4, backgroundColor: '#C4B5FD' }, marker: { position: 'absolute', marginLeft: -7, top: -3, width: 14, height: 14, borderRadius: 7, borderWidth: 2, borderColor: 'white' }, rangeValue: { width: 88, textAlign: 'right', color: '#5F587A', fontSize: 12 }, error: { color: '#B91C1C' }, postChoice: { flexDirection: 'row', alignItems: 'center', gap: 12 }, choiceImage: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#D9D1F5' }, choiceText: { flex: 1, fontWeight: '800', color: '#1E1633' },
 });

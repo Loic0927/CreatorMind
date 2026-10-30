@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import joblib
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import RedirectResponse
@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from backend.services.content_audit import build_content_audit
 from backend.services.connectors import get_connector_statuses
 from backend.services.insights import generate_content_insights
-from backend.services.screenshot_parser import extract_screenshot_metrics
 from backend.services.url_parser import parse_content_url
 from backend.services.youtube import (
     build_youtube_oauth_url,
@@ -163,14 +162,6 @@ class AuditContentResponse(BaseModel):
     metrics_summary: AuditMetricsSummary
     content_diagnosis: ContentDiagnosisResponse
     prediction_signal: Optional[PredictionResponse] = None
-
-
-class ScreenshotMetricsResponse(BaseModel):
-    candidate_metrics: dict[str, float]
-    confidence_level: str
-    messages: list[str]
-    raw_text: str
-    filename: str
 
 
 class YouTubeAuditRequest(BaseModel):
@@ -726,7 +717,7 @@ def mobile_caption(payload: MobileCaptionRequest, user: AuthenticatedUser = Depe
     platform_guidance = {
         "Instagram": "Write an engaging Instagram caption.",
         "Twitter": "Keep the full post within 280 characters.",
-        "Facebook": "Write a conversational Facebook post with a clear call to action.",
+        "Facebook": "Write a conversational Facebook post.",
         "Threads": "Write a concise, natural Threads post that invites conversation.",
         "YouTube": "Write a useful YouTube post description with a strong opening.",
     }
@@ -896,16 +887,3 @@ def audit_youtube(payload: YouTubeAuditRequest) -> YouTubeAuditResponse:
         advanced_analytics_message="Private YouTube Analytics fields such as average view duration and deeper retention metrics still require OAuth-backed YouTube Analytics API access.",
         connected_account_name=connection.account_name if connection else None,
     )
-
-
-@app.post("/extract-screenshot-metrics", response_model=ScreenshotMetricsResponse)
-async def extract_screenshot_metrics_route(file: UploadFile = File(...)) -> ScreenshotMetricsResponse:
-    logger.info("EXTRACT_SCREENSHOT_METRICS submit started")
-    logger.info("EXTRACT_SCREENSHOT_METRICS filename: %s", file.filename)
-    max_upload_bytes = int(os.getenv("POSTBRIDGE_MAX_UPLOAD_BYTES", "10485760"))
-    file_bytes = await file.read(max_upload_bytes + 1)
-    if len(file_bytes) > max_upload_bytes:
-        raise HTTPException(status_code=413, detail="Uploaded file exceeds the configured limit.")
-    parsed = extract_screenshot_metrics(file_bytes, file.filename or "upload")
-    logger.info("EXTRACT_SCREENSHOT_METRICS response ready: %s", parsed["candidate_metrics"])
-    return ScreenshotMetricsResponse(**parsed)

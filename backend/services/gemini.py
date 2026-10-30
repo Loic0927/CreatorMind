@@ -90,36 +90,3 @@ def generate_gemini_content(
     if not isinstance(text, str) or not text.strip():
         raise GeminiUpstreamError("Gemini returned an empty response.")
     return text.strip()
-
-
-def generate_gemini_multimodal_content(
-    prompt: str,
-    images: list[tuple[bytes, str]],
-    *,
-    api_key: str | None = None,
-    model_name: str | None = None,
-    client_factory: GeminiClientFactory | None = None,
-    image_part_factory: GeminiImagePartFactory | None = None,
-) -> str:
-    """Generate one response from one to three images without exposing them publicly."""
-    if not 1 <= len(images) <= 3:
-        raise GeminiConfigurationError("One to three screenshots are required.")
-    resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
-    resolved_model = model_name or os.getenv("GEMINI_VISION_MODEL") or os.getenv("GEMINI_MODEL")
-    if not resolved_api_key or not resolved_model:
-        raise GeminiConfigurationError("Gemini vision extraction is not configured.")
-    factory = client_factory or _client_factory
-    part_factory = image_part_factory or _image_part_factory
-    try:
-        client = factory(resolved_api_key, resolved_model)
-        contents = [part_factory(body, mime_type) for body, mime_type in images]
-        contents.append(prompt)
-        response = client.models.generate_content(model=resolved_model, contents=contents)
-        text = response.text
-    except GeminiConfigurationError:
-        raise
-    except Exception:
-        raise GeminiUpstreamError("Gemini could not extract the screenshots.") from None
-    if not isinstance(text, str) or not text.strip():
-        raise GeminiUpstreamError("Gemini returned an empty screenshot extraction.")
-    return text.strip()

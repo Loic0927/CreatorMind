@@ -1,84 +1,26 @@
-# Instagram data, comments, and first-24-hour insights
+# Instagram data and insight screens
 
-Last reviewed: 2026-10-29
+Last reviewed: 2026-10-30
 
-## Login and permissions
+## Login, syncing, and permissions
 
-PostBridge uses Instagram API with Instagram Login at `graph.instagram.com` for
-professional Business or Creator accounts. Its normal OAuth request contains:
+PostBridge uses Instagram API with Instagram Login for professional Business or Creator accounts. It requests the basic profile/media, media-insight, and publishing permissions. Comment reading stays behind `POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED` and the account allow-list until Meta grants the required access; enabled accounts must reconnect so the comments permission is present.
 
-- `instagram_business_basic` for the connected profile and owned media;
-- `instagram_business_manage_insights` for owned-media insights;
-- `instagram_business_content_publish` for the existing publishing flow.
+A successful login schedules one account sync in the background. The page serves cached data immediately. The sync is account-locked, skips when the previous successful sync is less than 30 minutes old, discovers and tracks new posts, refreshes lifetime metrics, backfills posts without metrics, reads comments when allowed, refreshes expiring tokens, and refreshes cached AI text only when its input hash changes. Provider calls are batched, retried with backoff, isolated per post, and idempotent.
 
-Comment reading is off by default. When
-`POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED=true`, OAuth also requests
-`instagram_business_manage_comments`. Meta's Comment Moderation guide requires
-Advanced Access when the app serves professional accounts the app does not own or
-manage, so general availability requires App Review. Standard Access is limited to
-accounts owned/managed by the app and added in the App Dashboard.
+The separately deployed tracking worker is retained only for Instagram long-lived-token maintenance. It does not discover posts, refresh metrics, or run milestone jobs. Login sync is the only automatic post refresh path; Analyze and Insights provide post-scoped manual refresh.
 
-Owner/app-role testing can keep the global flag off and put comma-separated
-PostBridge user IDs or Instagram account IDs in
-`POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST`. Other accounts remain gated; an
-enabled account must reconnect Instagram so its OAuth grant includes
-`instagram_business_manage_comments`.
+## Stored data and privacy
 
-References: [Instagram API with Instagram Login](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/),
-[Instagram Insights](https://developers.facebook.com/docs/instagram-platform/insights/), and
-[Instagram comment moderation](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/comment-moderation/).
+PostBridge keeps posts, media, ordinary raw Instagram metric snapshots, raw API fields including watch time, drafts, publications, account context, and username-free comments. Comment provider author IDs are used only in memory to identify owner replies; usernames are never stored or sent to the model. Comment text and captions are treated as untrusted model input.
 
-## Followers online
+The removed milestone, external extraction, derived analysis, account grouping, and audience-activity datasets are not part of the current schema. No image-derived analytics input is accepted.
 
-The current official Instagram API with Instagram Login collection does not document
-an `online_followers` insight. PostBridge therefore reports it as unsupported; no
-follower minimum or API time-zone contract applies to this integration. As a fallback,
-the owner can upload one account-level Instagram Audience “most active times” chart
-in any Instagram UI language. PostBridge stores the source and confirmation date,
-highlights the three observed peak hours, and prompts for a monthly refresh. It is
-labelled as screenshot data, not a prediction or recommendation.
+## Analyze rules
 
-Official collection checked 2026-10-29: [Meta Instagram API collection](https://www.postman.com/meta/instagram/collection/6yqw8pt/instagram-api).
+Analyze uses the selected post and mature same-format posts from the same account. Images/carousels mature at 7 days and videos/Reels at 14 days. The selected post is excluded from its own baseline.
 
-## Privacy and data sources
-
-Comment ingestion stores the provider comment ID, text, like count, timestamp,
-`is_owner_reply`, and fetch/classification metadata. It never persists or displays a
-commenter username. The provider author ID is used in memory only to exclude the
-creator's own replies. Comment text is delimited as untrusted input before model
-classification.
-
-API numbers, screenshot text values, and screenshot-curve estimates always keep
-separate source labels. Unknown screenshot fields remain `null`. Higher skip rate
-retains its unfavorable meaning.
-
-For Reels/video, PostBridge requests average and total watch time when Meta returns
-them. Skip rate, share rate, follower/non-follower split, and curve values may come
-from a user-confirmed screenshot instead; they are not inferred from API totals.
-
-## Durable 24-hour capture
-
-The PostgreSQL-backed worker periodically lists recent account media, creates tracking
-for each newly discovered post, and keeps one `target_hour=24` job per active tracked post
-and no 1/3/6/12-hour jobs. It allows two hours for transient provider recovery and
-uses locking, leases, retries, and unique constraints to prevent duplicate captures.
-Long-lived Instagram token refresh remains enabled independently.
-
-If tracking starts after the 24-hour mark, that API milestone is permanently unavailable.
-Before a post is 24 hours old, screenshot upload is unavailable. After 24 hours, a
-user can upload one to three private Instagram insights screenshots. A vision model
-extracts nullable candidates, the user edits and confirms them, and only then is an
-account-scoped `external_insight_records` row persisted. Screenshots are deleted
-after confirmation unless the user opts to retain them.
-
-Manual refreshes remain cumulative `manual_current` API snapshots and are never
-presented as historical 24-hour measurements.
-
-## Comparison rules
-
-Post performance comparisons use mature posts of the same Instagram format. Maturity
-is 7 days for images/carousels and 14 days for video/Reels.
-An excluded outlier remains visible but is removed from medians, patterns, and ranks.
+A baseline requires at least six comparable posts. With fewer than 15 observations the usual range is the observed minimum to maximum; from 15 observations it is the 10th to 90th percentile. Stands out lists values above the range. Weaker first lists values below it; otherwise it lists values in the lower half of the comparable rank.
 
 Engagement rate uses only returned interaction fields:
 
@@ -86,5 +28,14 @@ Engagement rate uses only returned interaction fields:
 engagement rate = sum(returned likes, comments, saves, shares) / reach * 100
 ```
 
-It is `null` without positive reach or any returned interaction count. Missing values
-are never converted to zero.
+It is null without positive reach or a returned interaction value. Missing values are never converted to zero.
+
+Summary text is generated and cached only when at least two ordinary snapshots contain a meaningful change. It describes non-obvious movement without repeating visible values, causal claims, or advice. Audience comments require at least three real non-owner comments and produce an explicit disabled, reconnect, access, sparse-data, error, or ready state.
+
+## Insights rules
+
+Highlights use mature same-format posts and appear only when six qualifying posts provide the relevant reach and engagement values. Ranks likewise require a six-post mature same-format comparison group.
+
+The next-post suggestion requires at least six posts with metrics and uses only the account's highest-view, most-liked, and best-commented examples. Comments contribute only when available. The text is explicitly a suggestion, never a guarantee, and cannot introduce niche assumptions, engagement bait, invented evidence, or causal claims.
+
+The Posts list contains only posts with metrics. A post needs refresh when it has no metrics or its latest snapshot is older than the shared 24-hour threshold. Manual refresh is post-scoped, has a one-minute cooldown, refreshes metrics then comments, and updates cached text only when inputs changed.
