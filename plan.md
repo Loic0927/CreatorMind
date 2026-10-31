@@ -1,6 +1,6 @@
 # PostBridge product plan
 
-Last updated: 2026-10-30
+Last updated: 2026-10-31
 Owner: PostBridge  
 Purpose: Track the work required to turn the current Instagram MVP into a multi-platform post creation, publishing, and per-post performance analysis product.
 
@@ -10,6 +10,7 @@ Purpose: Track the work required to turn the current Instagram MVP into a multi-
 - User-provided captions, screenshots, account descriptions, topics, and examples are contextual examples only. Agents must not turn them into global defaults, placeholder copy, product assumptions, scoring rules, prompt instructions, or UI structure.
 - Product copy, defaults, workflows, data contracts, analysis, and recommendations must be designed from the perspective of the broad range of social media creators and content categories the app serves.
 - Account Context is the per-user customization boundary. Personal creator details may influence that creator's opted-in generation or analysis, but must never become application-wide behavior or affect other users.
+- UI headings should stand on their own without explanatory subtitles unless a subtitle is explicitly requested or is necessary to prevent user error.
 
 ## Status legend
 

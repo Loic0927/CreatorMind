@@ -67,6 +67,5 @@ export const disconnectInstagram = (session: Session) => authRequest<{ disconnec
 export const getAccountContext = (session: Session) => authRequest<AccountContext>(session, "/auth/account-context");
 export const updateAccountContext = (session: Session, accountContext: AccountContext) => authRequest<AccountContext>(session, "/auth/account-context", { method: "PATCH", body: JSON.stringify(accountContext) });
 export const suggestAccountContext = (session: Session) => authRequest<{ draft: AccountContext; source: { posts_considered: number; captions_considered: number; covers_available: number }; not_inferred: string[] }>(session, "/auth/account-context/suggest");
-export const previewAccountContext = (session: Session, accountContext: AccountContext) => authRequest<{ label: string; caption: string; stored: boolean; used_for: string[]; not_used_for: string[] }>(session, "/auth/account-context/preview", { method: "POST", body: JSON.stringify(accountContext) });
 export const logout = (session: Session) => authRequest(session, "/auth/logout", { method: "POST" });
 export const deleteAccount = (session: Session) => authRequest(session, "/auth/account", { method: "DELETE" });
