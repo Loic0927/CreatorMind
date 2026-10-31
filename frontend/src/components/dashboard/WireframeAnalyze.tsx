@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { RangeRow, Session, TrackedPost, getTrackedPost, getTrackedPosts, refreshTrackedPost } from "@/lib/postbridge";
+import { DashboardPageTitle } from "@/components/dashboard/DashboardPageTitle";
 
 const label: Record<string, string> = { views: "Views", reach: "Reach", engagement_rate: "Engagement", shares: "Shares", saves: "Saves", comments: "Comments" };
 const value = (metric: string, amount: number | null | undefined) => amount == null ? "–" : metric === "engagement_rate" ? `${Number(amount).toFixed(1)}%` : Number(amount).toLocaleString();
@@ -39,15 +40,13 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
     finally { setRefreshing(false); }
   };
 
-  if (!selectedId) return <section className="mx-auto w-full lg:w-4/5"><h1 className="mb-7 flex flex-wrap items-baseline gap-x-3 gap-y-1 tracking-tight"><span className="text-2xl font-black md:text-3xl">Post</span><span className="text-sm font-medium text-[#80778b] md:text-base">Choose one to analyze</span></h1>{error ? <p className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</p> : null}{loading ? <Card>Loading tracked posts…</Card> : posts.length ? <div className="grid gap-5 md:grid-cols-2">{posts.map((item) => <button key={item.tracking.id} onClick={() => choose(item.tracking.id)} className="text-left"><div className="h-full rounded-3xl border border-[#e7e0f0] bg-white p-5 shadow-sm md:p-6">{item.media.thumbnail_url || item.media.media_url ? <img alt="Instagram post" src={item.media.thumbnail_url || item.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" /> : <div className="mb-4 aspect-video w-full rounded-2xl bg-[#eee8fa]" />}<p className="line-clamp-2 font-bold">{item.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><PickerMetric label="Likes" value={item.latest?.likes} /><PickerMetric label="Reach" value={item.latest?.reach} /><PickerMetric label="Engagement" value={item.latest?.engagement_rate == null ? undefined : `${Number(item.latest.engagement_rate).toFixed(1)}%`} /></div></div></button>)}</div> : <Card>Track an Instagram post first.</Card>}</section>;
+  if (!selectedId) return <section className="mx-auto w-full lg:w-4/5"><div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 md:mb-7"><DashboardPageTitle>Post</DashboardPageTitle><span className="text-sm font-medium text-[#80778b] md:text-base">Choose one to analyze</span></div>{error ? <p className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</p> : null}{loading ? <Card>Loading tracked posts…</Card> : posts.length ? <div className="grid gap-5 md:grid-cols-2">{posts.map((item) => <button key={item.tracking.id} onClick={() => choose(item.tracking.id)} className="text-left"><div className="h-full rounded-3xl border border-[#e7e0f0] bg-white p-5 shadow-sm md:p-6">{item.media.thumbnail_url || item.media.media_url ? <img alt="Instagram post" src={item.media.thumbnail_url || item.media.media_url} className="mb-4 aspect-video w-full rounded-2xl object-cover" /> : <div className="mb-4 aspect-video w-full rounded-2xl bg-[#eee8fa]" />}<p className="line-clamp-2 font-bold">{item.media.caption || "Instagram post"}</p><div className="mt-5 grid grid-cols-3 gap-2 text-sm"><PickerMetric label="Likes" value={item.latest?.likes} /><PickerMetric label="Reach" value={item.latest?.reach} /><PickerMetric label="Engagement" value={item.latest?.engagement_rate == null ? undefined : `${Number(item.latest.engagement_rate).toFixed(1)}%`} /></div></div></button>)}</div> : <Card>Track an Instagram post first.</Card>}</section>;
 
   const analysis = post?.analysis;
   return <section className="mx-auto w-full max-w-[720px]">
-    <div className="mb-5 flex items-center justify-between">
-      <button onClick={back} aria-label="Back" className="grid min-h-11 min-w-11 place-items-center rounded-2xl bg-[#EDE9FE] text-2xl font-bold text-[#4C1D95] lg:hidden">‹</button>
-      <h1 className="text-[32px] font-black tracking-tight lg:text-[34px]">Analyze</h1>
-      <button onClick={back} className="hidden min-h-11 rounded-2xl bg-[#EDE9FE] px-5 text-sm font-bold text-[#4C1D95] lg:block">Back</button>
-      <span className="w-11 lg:hidden" />
+    <div className="mb-5 flex items-center justify-between gap-3 md:mb-7">
+      <DashboardPageTitle>Analyze</DashboardPageTitle>
+      <button onClick={back} className="min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button>
     </div>
     {error ? <p className="mb-3 text-sm text-[#5F587A]">{error.includes("reconnect") ? "Reconnect Instagram to update." : "Couldn't update, showing earlier data"}</p> : null}
     {loading || !post ? <Card>Loading post…</Card> : <div className="space-y-4">

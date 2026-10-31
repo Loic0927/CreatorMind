@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CaptionMedia, PublicationResult, PublishingCapability, Session, SocialPlatform, caption, getPublishingCapabilities, publishPost } from "@/lib/postbridge";
+import { DashboardPageTitle } from "@/components/dashboard/DashboardPageTitle";
 
 const goals = ["Grow engagement", "Educate", "Build trust", "Increase brand awareness", "Share an announcement", "Other"];
 const platforms: SocialPlatform[] = ["Instagram", "Twitter", "Facebook", "Threads", "YouTube"];
@@ -94,7 +95,7 @@ export function LegacyCreate({ session }: { session: Session }) {
   };
 
   return <>
-    <h1 className="mb-7 text-2xl font-black tracking-tight md:text-3xl">Create post</h1>
+    <DashboardPageTitle className="mb-5 md:mb-7">Create post</DashboardPageTitle>
     {error ? <div className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{error}</div> : null}
     <div className="grid items-start gap-6 lg:grid-cols-2">
       <section className="rounded-3xl border border-[#e7e0f0] bg-white p-5 shadow-sm md:p-6">
