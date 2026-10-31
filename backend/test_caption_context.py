@@ -25,6 +25,7 @@ def test_caption_uses_saved_account_context_when_enabled(monkeypatch):
         account_theme="Rope magic lessons",
         about_this_account="Short educational demonstrations of practical rope techniques.",
         target_audience="People learning beginner rope magic",
+        preferred_hashtags=("#RopeMagic", "#Tutorial"),
     ))
     monkeypatch.setattr(main, "get_account_context", lambda user_id: stored)
     monkeypatch.setattr(main, "generate_gemini_content", lambda prompt, **kwargs: prompts.append(prompt) or "CAPTION: Try this trick\nHASHTAGS: #magic")
@@ -36,6 +37,7 @@ def test_caption_uses_saved_account_context_when_enabled(monkeypatch):
     assert "HASHTAGS:" in prompts[0]
     assert "Rope magic lessons" in prompts[0]
     assert "People learning beginner rope magic" in prompts[0]
+    assert "Preferred Hashtags (use only when relevant): #RopeMagic #Tutorial" in prompts[0]
 
 
 def test_caption_ignores_saved_account_context_when_disabled(monkeypatch):
@@ -85,3 +87,29 @@ def test_caption_passes_short_video_to_model(monkeypatch):
     assert captured["image_bytes"] == b"short-video"
     assert captured["image_mime_type"] == "video/mp4"
     assert result.hashtags == "#video #short"
+
+
+def test_caption_honours_requested_hashtag_limit_and_removes_duplicates(monkeypatch):
+    prompts = []
+    request = _request(False).model_copy(update={"hashtag_count": 2})
+    monkeypatch.setattr(
+        main,
+        "generate_gemini_content",
+        lambda prompt, **kwargs: prompts.append(prompt) or "CAPTION: Test\nHASHTAGS: #one #two #one #three",
+    )
+
+    result = main.mobile_caption(request, _user())
+
+    assert result.hashtags == "#one #two"
+    assert "exactly 2 concise" in prompts[0]
+
+
+def test_caption_can_generate_without_hashtags(monkeypatch):
+    request = _request(False).model_copy(update={"hashtag_count": 0})
+    monkeypatch.setattr(
+        main,
+        "generate_gemini_content",
+        lambda prompt, **kwargs: "CAPTION: No tags\nHASHTAGS: #ignored",
+    )
+
+    assert main.mobile_caption(request, _user()).hashtags == ""

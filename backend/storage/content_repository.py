@@ -78,7 +78,11 @@ class ContentRepository:
     def tracked(self, user_id: str, active_only: bool = True) -> list[TrackedPost]:
         if not self.persistent:
             return json_store.get_tracked_posts(user_id, active_only)
-        statement = select(TrackedPostRecord).where(TrackedPostRecord.user_id == user_id)
+        statement = (
+            select(TrackedPostRecord)
+            .where(TrackedPostRecord.user_id == user_id)
+            .order_by(TrackedPostRecord.started_at.desc())
+        )
         if active_only:
             statement = statement.where(TrackedPostRecord.is_active.is_(True))
         factory = session_factory()

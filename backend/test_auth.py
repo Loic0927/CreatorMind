@@ -78,10 +78,12 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
         account_theme="Practical magic tutorials",
         about_this_account="Beginner-friendly lessons.",
         target_audience="Beginner creators",
+        preferred_hashtags=["#Magic", "tutorial", "#Magic"],
     ), first)
 
     assert {"account_theme", "about_this_account", "target_audience", "tone_keys", "content_formats", "caption_language", "primary_category", "audience_age_ranges"}.issubset(saved)
     assert saved["account_theme"] == "Practical magic tutorials"
+    assert saved["preferred_hashtags"] == ("#Magic", "#tutorial")
     assert account_context(first) == saved
     assert account_context(second)["account_theme"] == ""
     assert account_context(second)["about_this_account"] == ""

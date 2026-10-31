@@ -194,6 +194,43 @@ The following inventory is the destructive-data boundary for migration `20261030
 - Other social platforms must be enabled only after their official APIs, permissions, and review requirements are confirmed. No scraping or simulated publishing state.
 - Full video-content understanding is a separate workload. The first analysis version may use caption, metrics, media metadata, and thumbnail/image context while explicitly stating that the full video was not analyzed.
 
+## OCI standard deployment procedure
+
+Use this procedure for every normal production redeployment. Run the commands through SSH on the OCI server, from the PostBridge repository directory that contains `docker-compose.oci.yml`, `.env.oci`, and `scripts/oci/`.
+
+### Normal redeployment
+
+```sh
+git pull --ff-only
+sh scripts/oci/update.sh
+sh scripts/oci/validate.sh
+```
+
+What each command does:
+
+1. `git pull --ff-only` downloads the committed changes without creating an automatic merge commit. If it fails because the server has local modifications or divergent commits, stop and inspect `git status`; do not use `git reset --hard` without first confirming those server-side changes can be discarded.
+2. `sh scripts/oci/update.sh` rebuilds the API and web images, runs `alembic upgrade head`, recreates the API, lifetime-metrics worker, and frontend containers, restarts Nginx so it resolves the recreated containers, and prints container status.
+3. `sh scripts/oci/validate.sh` validates the Compose configuration, displays container status, and checks the public web, `www`, and API health endpoints.
+
+### Before deploying a destructive migration
+
+- Create or confirm a current PostgreSQL backup before running `update.sh` when a migration drops tables, columns, or stored feature data.
+- Confirm `.env.oci` contains the production database, domain, public API URL, encryption, Meta, email, Gemini, and OCI values required by `docker-compose.oci.yml`. Never paste secret values into chat or commit `.env.oci`.
+
+### If deployment verification fails
+
+Run these read-only diagnostics from the same directory:
+
+```sh
+docker compose --env-file .env.oci -f docker-compose.oci.yml ps
+docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=100 app
+docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=100 tracking-worker
+docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=100 frontend
+docker compose --env-file .env.oci -f docker-compose.oci.yml logs --tail=100 nginx
+```
+
+Do not run `docker compose down -v`: the `-v` option can delete the PostgreSQL volume. Mobile/Expo releases are separate from this OCI web/API deployment and require their own App Store build and submission process.
+
 ## Verification matrix
 
 | Area | Required check |
@@ -242,4 +279,6 @@ Historical entries below describe what existed at that date. The Retired product
 - 2026-10-29: Deferred audience comment reading so it does not block completion of the remaining product features. The implementation and tests stay in place, but the feature should remain disabled in production and excluded from the active OAuth scope until final public-release preparation. Resume only alongside Meta Advanced Access/App Review and App Store submission work, with a live non-role audience-comment verification before release.
 - 2026-10-30: Completed the sixth Analyze/Insights pass while keeping audience comments deferred. Added idempotent, batched lifetime-metric backfill jobs and a bulk fetch action; corrected maturity to use current post age with the format-specific day rule taking precedence; added explicit Growing/Mature/No data/Needs refresh states; limited the default performance list to ten metric-bearing posts; grouped missing-metric posts; removed repeated cell-level source labels; and switched usual ranges from min-max to the account's 10th-90th percentile at n>=15. Analyze now leads with deterministic Stands out/Watch point cards, keeps the range table collapsed, does not invent tactic experiments, and can open a neutral Create follow-up with only source format/caption/date. Settings now owns automatic tracking and adds user-scoped Quick setup fields, editable recent-post suggestions with no demographic/sensitive inference or implicit save, and an unstored Sample preview; legacy context remains compatible and analysis ignores unrelated structured settings. Verification passed: backend 139 passed/1 skipped, Alembic upgraded an empty SQLite database to `20261029_0010`, web production build passed, and mobile typecheck, lint, and both Jest suites passed (Expo emitted only a Node 20.18.1 upgrade advisory).
 - 2026-10-30: Retired CTA analysis, Audience Active/Followers Online, Content Patterns/Opportunities, Create follow-up handoffs, and all First-24-Hours collection/UI. Removed their active API routes, storage models, account preferences, web/mobile components, client types, screenshot extraction, scheduling/discovery logic, and feature-specific tests. The existing worker/container remains only for shared lifetime-metric backfill and connection maintenance; migration `20261030_0011` removes retired stored data and milestone-only columns. Verification passed: backend 125 passed/1 skipped, empty SQLite upgraded through Alembic head, web production build passed, mobile typecheck/lint/Jest passed, and OCI Compose configuration parsed successfully with non-secret placeholders for values absent from the local `.env.oci`.
+- 2026-10-30: Documented the canonical OCI redeployment commands, migration backup warning, script behavior, non-destructive diagnostics, and the prohibition on `docker compose down -v` so future work sessions can provide the same safe deployment instructions directly from this plan.
 - 2026-10-30: Rebuilt Analyze and Insights from the four exported wireframes across responsive web and Expo. Added account-relative ranges (n>=6; min-max below n=15 and p10-p90 from n=15), input-keyed Summary/Audience/Suggestion caches, login-triggered locked 30-minute account sync, isolated/idempotent post refresh, one-minute manual cooldowns, and the shared 24-hour stale constant. Removed the inventoried milestone, external-extraction, persisted-analysis, grouping, audience-activity, CTA/style, score/grade, and scheduling surfaces; retained raw snapshots/watch-time fields, posts/media, drafts/publications, username-free comments, Account Context, and caption generation. Migration `20261030_0011` passed empty and populated upgrade/downgrade tests and preserved raw snapshots. Backend verification: 96 passed/1 skipped; web production build passed; Expo typecheck, lint, and 2 Jest suites passed. The mandated production backup invocation was stopped by the managed safety review because its configured OCI destination could not be independently trusted; no production migration was attempted.
+- [ ] Post feedback follow-up: include privacy-preserving audience comment themes only after the production comment-ingestion flow is available and verified. Until then, Post feedback must not imply or invent comment content.

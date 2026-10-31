@@ -1,5 +1,8 @@
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -34,7 +37,7 @@ from backend.services.publishing import (
 )
 from backend.services.comments import audience_comment_state
 from backend.services.account_insights import build_account_insights, build_post_analysis
-from backend.services.insight_texts import audience_description, next_post_suggestion, post_summary
+from backend.services.insight_texts import audience_description, next_post_suggestion, post_feedback
 from backend.services.instagram_sync import refresh_one_post, usable_token
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
@@ -458,6 +461,37 @@ def tracked_payload(user_id: str, active_only: bool = True):
     return payload
 
 
+def _feedback_media(media) -> tuple[bytes, str] | None:
+    """Fetch only bounded media URLs previously supplied by Meta."""
+    media_type = str(media.media_type or "").upper()
+    url = media.media_url if media_type in {"VIDEO", "REELS"} else media.thumbnail_url or media.media_url
+    if not url:
+        return None
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    allowed_host = hostname == "instagram.com" or hostname.endswith((".instagram.com", ".cdninstagram.com", ".fbcdn.net"))
+    if parsed.scheme != "https" or not allowed_host:
+        return None
+    maximum = int(os.getenv("POSTBRIDGE_FEEDBACK_MEDIA_BYTES", str(10 * 1024 * 1024)))
+    request = Request(url, headers={"User-Agent": "PostBridge/1.0"})
+    try:
+        with urlopen(request, timeout=8) as response:
+            content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+            allowed_types = {
+                "image/jpeg", "image/png", "image/webp",
+                "video/mp4", "video/webm", "video/quicktime",
+            }
+            if content_type not in allowed_types:
+                return None
+            length = response.headers.get("Content-Length")
+            if length and int(length) > maximum:
+                return None
+            content = response.read(maximum + 1)
+    except (HTTPError, URLError, OSError, ValueError):
+        return None
+    return (content, content_type) if content and len(content) <= maximum else None
+
+
 def _tracked_item(user_id: str, tracked_id: str) -> dict:
     item = next(
         (
@@ -502,9 +536,17 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
     audience = audience_comment_state(comments, feature_enabled=enabled, permission_granted=permission, description=description)
     if account and account.session_sync_error == "comment_access_denied":
         audience = {"state": "access_denied", "message": "Instagram denied access to comments."}
-    summary = post_summary(user_id, tracked_id, snapshots)
     selected_for_analysis = next(value for value in all_items if value["tracking"].id == tracked_id)
-    item["analysis"] = build_post_analysis(selected_for_analysis, all_items, summary=summary, audience_comments=audience)
+    analysis = build_post_analysis(selected_for_analysis, all_items, summary=None, audience_comments=audience)
+    analysis["summary"] = post_feedback(
+        user_id,
+        tracked_id,
+        item["media"],
+        item.get("latest"),
+        analysis,
+        media_loader=lambda: _feedback_media(item["media"]),
+    )
+    item["analysis"] = analysis
     return item
 
 

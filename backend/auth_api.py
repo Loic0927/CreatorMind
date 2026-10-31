@@ -40,6 +40,7 @@ class AccountContextRequest(BaseModel):
     primary_category: str = Field(default="", max_length=40)
     primary_category_other: str = Field(default="", max_length=120)
     audience_age_ranges: list[str] = Field(default_factory=list, max_length=7)
+    preferred_hashtags: list[str] = Field(default_factory=list, max_length=10)
 
 
 @router.post("/request-code")

@@ -96,7 +96,8 @@ def create_tracked_post(user_id: str, media_id: str) -> TrackedPost:
 
 
 def get_tracked_posts(user_id: str, active_only: bool = True) -> list[TrackedPost]:
-    return [item for item in load_store().tracked_posts if item.user_id == user_id and (item.is_active or not active_only)]
+    items = [item for item in load_store().tracked_posts if item.user_id == user_id and (item.is_active or not active_only)]
+    return sorted(items, key=lambda item: item.started_at, reverse=True)
 
 
 def stop_tracked_post(user_id: str, tracked_id: str) -> bool:

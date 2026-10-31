@@ -67,7 +67,7 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
         </div>
       </Card>
 
-      {analysis?.summary ? <Card><h2 className="text-xl font-black">Summary</h2><p className="mt-3 text-[15px] leading-5 text-[#1E1633]">{analysis.summary}</p></Card> : null}
+      {analysis?.summary ? <Card><h2 className="text-xl font-black">Post feedback</h2><p className="mt-3 text-[15px] leading-5 text-[#1E1633]">{analysis.summary}</p></Card> : null}
 
       {analysis?.comparable ? <>
         <div className="grid gap-4 lg:grid-cols-2">
