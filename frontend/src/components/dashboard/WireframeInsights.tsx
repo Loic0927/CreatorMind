@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AccountInsights, MetricKey, PerformancePost, Session, getAccountInsights, refreshTrackedPost } from "@/lib/postbridge";
 import { DashboardPageTitle } from "@/components/dashboard/DashboardPageTitle";
+import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
 
 type SortKey = MetricKey | "newest";
 const sortLabel: Record<SortKey, string> = { views: "Views", reach: "Reach", engagement_rate: "Engagement", shares: "Shares", saves: "Saves", comments: "Comments", newest: "Newest" };
+const sortOptions: Array<{ value: SortKey; label: string }> = ["newest", "views", "reach", "engagement_rate", "shares", "saves", "comments"].map((value) => ({ value: value as SortKey, label: sortLabel[value as SortKey] }));
 const number = (value: number | null | undefined) => value == null ? "–" : Number(value).toLocaleString();
 const rate = (value: number | null | undefined) => value == null ? "–" : `${Number(value).toFixed(1)}%`;
 const date = (value: string) => new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -48,7 +50,7 @@ export function WireframeInsights({ session, onOpen }: { session: Session; onOpe
       {data.next_post_suggestion ? <Card><h2 className="text-xl font-black">Next post suggestion</h2><p className="mt-3 text-[15px] leading-5">{data.next_post_suggestion}</p></Card> : null}
 
       <Card>
-        <div className="mb-3 flex items-center gap-3"><h2 className="text-xl font-black">Posts</h2><label className="relative ml-auto"><span className="sr-only">Sort posts</span><select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="min-h-9 w-[140px] appearance-none rounded-full border-0 bg-[#EDE9FE] px-7 py-1.5 text-center text-[13px] font-bold text-[#4C1D95] outline-none"><option value="newest">Sort: Newest</option><option value="views">Sort: Views</option><option value="reach">Sort: Reach</option><option value="engagement_rate">Sort: Engagement</option><option value="shares">Sort: Shares</option><option value="saves">Sort: Saves</option><option value="comments">Sort: Comments</option></select><span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#4C1D95]">⌄</span></label></div>
+        <div className="mb-3 flex items-center gap-3"><h2 className="text-xl font-black">Posts</h2><div className="ml-auto w-[150px]"><UnifiedSelect label="Sort" title="Sort posts" options={sortOptions} value={sort} onChange={(next) => setSort(next as SortKey)} compact /></div></div>
         <div className="hidden grid-cols-[44px_150px_repeat(6,minmax(52px,1fr))_72px] items-center gap-3 border-b border-[#EEEAF9] pb-3 text-[11px] uppercase tracking-[.06em] text-[#5F587A] lg:grid"><span className="font-normal">Rank</span><span className="font-normal">Post</span><span className={sort === "views" ? "font-black" : "font-normal"}>Views</span><span className={sort === "reach" ? "font-black" : "font-normal"}>Reach</span><span className={sort === "engagement_rate" ? "font-black" : "font-normal"}>Eng.</span><span className={sort === "shares" ? "font-black" : "font-normal"}>Shares</span><span className={sort === "saves" ? "font-black" : "font-normal"}>Saves</span><span className={sort === "comments" ? "font-black" : "font-normal"}>Comments</span><span className={sort === "newest" ? "font-black" : "font-normal"}>Date</span></div>
         {posts.map((post) => <PostRow key={post.tracked_post_id} post={post} sort={sort} refreshing={refreshing === post.tracked_post_id} cooldown={cooldowns.has(post.tracked_post_id)} onOpen={() => onOpen(post.tracked_post_id)} onRefresh={() => void refresh(post)} />)}
         {(data.performance_posts.length > 5 && !showAll) ? <button onClick={() => setShowAll(true)} className="min-h-11 pt-4 text-left text-[15px] font-black text-[#6D28D9]">Show all {data.performance_posts.length}</button> : null}

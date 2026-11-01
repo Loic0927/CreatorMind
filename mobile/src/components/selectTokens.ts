@@ -1,0 +1,16 @@
+export const selectTokens = {
+  ink: '#1E1633',
+  muted: '#5F587A',
+  border: '#E8E2FA',
+  primary: '#6D28D9',
+  selectedBackground: '#EDE9FE',
+  selectedInk: '#4C1D95',
+  hover: '#F6F3FF',
+  error: '#B91C1C',
+  checkboxBorder: '#BDB5D6',
+  radius: 12,
+  optionRadius: 8,
+  triggerHeight: 48,
+  compactHeight: 36,
+  optionHeight: 48,
+} as const;

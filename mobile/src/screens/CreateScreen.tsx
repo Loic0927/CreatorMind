@@ -1,19 +1,21 @@
 import { useRef, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { GoalDropdown } from '../components/GoalDropdown';
+import { UnifiedPicker } from '../components/UnifiedPicker';
 import { Button } from '../components/ui';
 import { generateCaption } from '../services/caption';
 import { publishPost } from '../services/api';
 import { Draft, ImageMimeType, InstagramConnection, SocialPlatform } from '../types';
 
 const PLATFORMS: SocialPlatform[] = ['Instagram', 'Twitter', 'Facebook', 'Threads', 'YouTube'];
+const PLATFORM_OPTIONS = PLATFORMS.map((value) => ({ value, label: value }));
+const GOALS = ['Grow engagement', 'Educate', 'Build trust', 'Drive conversions', 'Increase brand awareness', 'Promote a product or service', 'Start a conversation', 'Share an announcement', 'Celebrate a milestone', 'Other'];
+const GOAL_OPTIONS = GOALS.map((value) => ({ value, label: value }));
 const SUPPORTED_IMAGE_TYPES: ImageMimeType[] = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export function CreateScreen({ draft, setDraft, connection: _connection, accessToken, onPreview }: { draft: Draft; setDraft: (value: Draft) => void; connection: InstagramConnection | null; accessToken: string; onPreview: () => void }) {
   const scroll = useRef<ScrollView>(null);
-  const [open, setOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [publishing, setPublishing] = useState(false);
 
@@ -73,11 +75,8 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
     }
   };
 
-  const togglePlatform = (platform: SocialPlatform) => {
-    const next = draft.platforms.includes(platform)
-      ? draft.platforms.filter((item) => item !== platform)
-      : [...draft.platforms, platform];
-    setDraft({ ...draft, platforms: next, platform: next[0] ?? 'Instagram', hasResults: false });
+  const setPlatforms = (next: string[]) => {
+    setDraft({ ...draft, platforms: next as SocialPlatform[], platform: (next[0] as SocialPlatform | undefined) ?? 'Instagram', hasResults: false });
   };
 
   const publish = async () => {
@@ -116,29 +115,10 @@ export function CreateScreen({ draft, setDraft, connection: _connection, accessT
         </Pressable>
       )}
 
-      <View style={styles.field}>
-        <Text style={styles.label}>Social platform</Text>
-        <View style={styles.platforms}>
-          {PLATFORMS.map((platform) => {
-            const selected = draft.platforms.includes(platform);
-            return (
-              <Pressable
-                key={platform}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                onPress={() => togglePlatform(platform)}
-                style={[styles.platform, selected && styles.platformSelected]}
-              >
-                <Text style={[styles.platformText, selected && styles.platformTextSelected]}>{platform}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
+      <UnifiedPicker label="Social platform" options={PLATFORM_OPTIONS} values={draft.platforms} onValuesChange={setPlatforms} multiple placeholder="Choose platforms" />
 
       <Field label="Information" value={draft.information} onChangeText={(information) => setDraft({ ...draft, information, hasResults: false })} placeholder="Describe your content, audience and key message" multiline />
-      <GoalDropdown value={draft.goal} open={open} onToggle={() => setOpen(!open)} onSelect={(goal) => { setDraft({ ...draft, goal, otherGoal: goal === 'Other' ? draft.otherGoal : '', hasResults: false }); setOpen(false); }} />
-      {draft.goal === 'Other' && <Field label="Other goal" value={draft.otherGoal} onChangeText={(otherGoal) => setDraft({ ...draft, otherGoal: otherGoal.slice(0, 200), hasResults: false })} placeholder="Describe your goal" maxLength={200} />}
+      <UnifiedPicker label="Goal" options={GOAL_OPTIONS} value={draft.goal} onChange={(goal) => setDraft({ ...draft, goal, otherGoal: goal === 'Other' ? draft.otherGoal : '', hasResults: false })} otherOptionValue="Other" otherValue={draft.otherGoal} onOtherValueChange={(otherGoal) => setDraft({ ...draft, otherGoal: otherGoal.slice(0, 200), hasResults: false })} otherPlaceholder="Describe your goal" />
       <Button label={generating ? 'Creating…' : 'Create caption'} onPress={create} disabled={generating} />
 
       {draft.hasResults && draft.imageUri && (
@@ -177,11 +157,6 @@ const styles = StyleSheet.create({
   label: { fontWeight: '700', color: '#342846' },
   input: { minHeight: 50, borderWidth: 1, borderColor: '#ddd5e8', backgroundColor: 'white', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, color: '#201633' },
   textarea: { minHeight: 105 },
-  platforms: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  platform: { borderWidth: 1, borderColor: '#ddd5e8', borderRadius: 999, backgroundColor: 'white', paddingHorizontal: 14, paddingVertical: 10 },
-  platformSelected: { borderColor: '#7c3aed', backgroundColor: '#eee8ff' },
-  platformText: { color: '#5f566c', fontWeight: '700' },
-  platformTextSelected: { color: '#6d28d9' },
   results: { gap: 14 },
   resultsTitle: { fontSize: 22, fontWeight: '800', color: '#201633' },
   publishNote: { color: '#746b82', fontSize: 13, lineHeight: 19 },

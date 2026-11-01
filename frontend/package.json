@@ -5,20 +5,28 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "vitest run"
   },
   "dependencies": {
     "next": "16.4.2",
     "react": "19.3.1",
+    "react-aria-components": "^1.22.1",
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
     "@types/node": "22.15.3",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "autoprefixer": "10.4.20",
+    "axe-core": "^4.14.0",
+    "jsdom": "^25.0.1",
     "postcss": "8.5.31",
     "tailwindcss": "3.4.17",
-    "typescript": "5.7.2"
+    "typescript": "5.7.2",
+    "vitest": "^2.1.9"
   }
 }
