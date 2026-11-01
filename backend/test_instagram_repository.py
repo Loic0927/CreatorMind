@@ -90,6 +90,23 @@ def test_connection_create_update_read_delete(repository, monkeypatch):
     assert repository.delete_connection("user-1") is False
 
 
+def test_tracking_start_is_set_once_and_survives_reauthorization(repository, monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    first_start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    created = repository.upsert_connection(
+        _account().model_copy(update={"tracking_start_at": first_start}),
+        encrypted_token=encrypt_access_token("first-token"),
+        scopes=["instagram_business_basic"],
+    )
+    later = first_start + timedelta(days=10)
+    repository.upsert_connection(
+        created.model_copy(update={"tracking_start_at": later, "username": "reauthorized"}),
+        encrypted_token=encrypt_access_token("second-token"),
+        scopes=["instagram_business_basic"],
+    )
+    assert repository.get_connection("user-1").tracking_start_at == first_start
+
+
 def test_configured_non_postgres_database_fails_closed(monkeypatch):
     monkeypatch.setenv(
         "POSTBRIDGE_DATABASE_URL",

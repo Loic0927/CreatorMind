@@ -210,6 +210,18 @@ class InstagramPublishingAdapter(PublishingAdapter):
             repository = self._repository_loader()
             repository.upsert_media([media_item])
             tracked = repository.create_tracked(user_id, media_item.id)
+            try:
+                from backend.storage.tracking_repository import get_tracking_repository
+                if getattr(repository, "persistent", False):
+                    get_tracking_repository().ensure_jobs_for_tracking(tracked.id)
+            except Exception as scheduling_error:
+                # Publication confirmation must stay successful; the worker's
+                # ensure-all pass repairs scheduling after a transient DB issue.
+                import logging
+                logging.getLogger("postbridge.publishing").warning(
+                    "milestone_scheduling_failed tracked_post_id=%s error_type=%s",
+                    tracked.id, type(scheduling_error).__name__,
+                )
             return PublicationResult(
                 self.platform, "published", "Published and added to tracking.",
                 provider_post_id=media_item.instagram_media_id, permalink=media_item.permalink,

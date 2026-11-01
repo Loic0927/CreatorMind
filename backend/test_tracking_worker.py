@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import backend.services.instagram_sync as sync
+import backend.tracking_worker as worker
 
 NOW = datetime(2026, 10, 30, tzinfo=timezone.utc)
 
@@ -82,3 +83,53 @@ def test_refresh_is_idempotent_when_provider_metrics_are_unchanged(monkeypatch):
     monkeypatch.setattr(sync, "get_instagram_repository", lambda: SimpleNamespace(get_connection=lambda user_id: None))
     changed = sync.refresh_one_post("u", SimpleNamespace(id="t"), SimpleNamespace(id="m", instagram_media_id="ig", media_type="IMAGE"), "token")
     assert changed is False
+
+
+def test_worker_detects_only_media_after_tracking_boundary_and_is_idempotent(monkeypatch):
+    account_value = SimpleNamespace(
+        id="a", user_id="u", status="connected", tracking_start_at=NOW,
+        connected_at=NOW, model_copy=lambda update: SimpleNamespace(**update),
+    )
+    class Instagram:
+        def list_connections(self): return [account_value]
+        def upsert_connection(self, value): return value
+    class Content:
+        def __init__(self): self.ids = set(); self.created = []
+        def upsert_media(self, values): self.media = values
+        def tracked(self, user_id, active_only=False): return [SimpleNamespace(media_id=value) for value in self.ids]
+        def create_tracked(self, user_id, media_id):
+            self.ids.add(media_id); self.created.append(media_id)
+            return SimpleNamespace(id=f"tracked:{media_id}")
+    class Queue:
+        def __init__(self): self.scheduled = []
+        def ensure_jobs_for_tracking(self, tracked_id, now): self.scheduled.append(tracked_id)
+        def block_reconnect(self, user_id, now): pass
+    content = Content(); queue = Queue()
+    upstream = [
+        {"id": "old", "timestamp": (NOW - timedelta(seconds=1)).isoformat(), "media_type": "IMAGE"},
+        {"id": "new", "timestamp": (NOW + timedelta(seconds=1)).isoformat(), "media_type": "IMAGE"},
+    ]
+    monkeypatch.setattr(worker, "get_instagram_repository", lambda: Instagram())
+    monkeypatch.setattr(worker, "get_content_repository", lambda: content)
+    monkeypatch.setattr(worker, "get_tracking_repository", lambda: queue)
+    monkeypatch.setattr(worker, "usable_token", lambda account: "token")
+    monkeypatch.setattr(worker, "fetch_instagram_media", lambda token: upstream)
+    first = worker.detect_new_media(NOW)
+    second = worker.detect_new_media(NOW)
+    assert first["detected"] == 1 and second["detected"] == 0
+    assert content.created == ["instagram:new"]
+    assert queue.scheduled == ["tracked:instagram:new"]
+
+
+def test_login_sync_never_creates_tracking_records(monkeypatch):
+    instagram = InstagramRepo(account())
+    class NoCreateContent(ContentRepo):
+        def create_tracked(self, user_id, media_id): raise AssertionError("login must not auto-track")
+    content = NoCreateContent()
+    monkeypatch.setattr(sync, "get_instagram_repository", lambda: instagram)
+    monkeypatch.setattr(sync, "get_content_repository", lambda: content)
+    monkeypatch.setattr(sync, "usable_token", lambda account: "token")
+    monkeypatch.setattr(sync, "next_post_suggestion", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync, "refresh_summary_for_user", lambda *args, **kwargs: None)
+    assert sync.run_account_sync("u", now=NOW)["status"] == "complete"
+    assert content._tracked == []

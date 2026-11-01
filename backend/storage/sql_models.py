@@ -39,6 +39,7 @@ class InstagramConnectionRecord(Base):
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     session_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     session_sync_error: Mapped[str | None] = mapped_column(String(128))
+    tracking_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -110,6 +111,8 @@ class TrackedPostRecord(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_24h_status: Mapped[str] = mapped_column(String(32), nullable=False, default="collecting")
+    first_24h_reason: Mapped[str | None] = mapped_column(String(128))
 
 
 class InstagramInsightSnapshotRecord(Base):
@@ -129,6 +132,10 @@ class InstagramInsightSnapshotRecord(Base):
     total_watch_time_ms: Mapped[int | None] = mapped_column(Integer)
     raw_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     metric_status: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    milestone_hours: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="api")
+    lateness_seconds: Mapped[int | None] = mapped_column(Integer)
 
 
 class InstagramCommentRecord(Base):
@@ -159,8 +166,53 @@ class InsightTextCacheRecord(Base):
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="template")
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown")
+    facts_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstagramInsightCollectionJobRecord(Base):
+    __tablename__ = "instagram_insight_collection_jobs"
+    __table_args__ = (
+        UniqueConstraint("tracked_post_id", "milestone_hours", name="uq_instagram_insight_job_milestone"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
+    milestone_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="SET NULL"), unique=True)
+    reason: Mapped[str | None] = mapped_column(String(128))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    locked_by: Mapped[str | None] = mapped_column(String(128))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AIGenerationLogRecord(Base):
+    __tablename__ = "ai_generation_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    generator: Mapped[str] = mapped_column(String(64), nullable=False)
+    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    token_usage: Mapped[dict | None] = mapped_column(JSON)
+    raw_response: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class MediaAssetRecord(Base):

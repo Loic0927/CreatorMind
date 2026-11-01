@@ -194,7 +194,7 @@ class ContentRepository:
 
     @staticmethod
     def _tracked(item: TrackedPostRecord) -> TrackedPost:
-        return TrackedPost(id=item.id, user_id=item.user_id, media_id=item.media_id, is_active=item.is_active, started_at=_utc(item.started_at), stopped_at=_utc(item.stopped_at) if item.stopped_at else None)
+        return TrackedPost(id=item.id, user_id=item.user_id, media_id=item.media_id, is_active=item.is_active, started_at=_utc(item.started_at), stopped_at=_utc(item.stopped_at) if item.stopped_at else None, first_24h_status=item.first_24h_status, first_24h_reason=item.first_24h_reason)
 
     @staticmethod
     def _snapshot(item: InstagramInsightSnapshotRecord) -> InstagramInsightSnapshot:
@@ -205,6 +205,9 @@ class ContentRepository:
             average_watch_time_ms=item.average_watch_time_ms,
             total_watch_time_ms=item.total_watch_time_ms,
             raw_metrics=item.raw_metrics or {}, metric_status=item.metric_status or {},
+            scheduled_for=_utc(item.scheduled_for) if item.scheduled_for else None,
+            milestone_hours=item.milestone_hours, source=item.source,
+            lateness_seconds=item.lateness_seconds,
         )
 
     @staticmethod
@@ -213,6 +216,8 @@ class ContentRepository:
             id=item.id, user_id=item.user_id, tracked_post_id=item.tracked_post_id,
             cache_key=item.cache_key, input_hash=item.input_hash, text=item.text,
             model_name=item.model_name, created_at=_utc(item.created_at), updated_at=_utc(item.updated_at),
+            provider=item.provider, prompt_version=item.prompt_version,
+            facts_json=list(item.facts_json or []),
         )
 
     @staticmethod

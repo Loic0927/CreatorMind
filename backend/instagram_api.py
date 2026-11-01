@@ -37,7 +37,8 @@ from backend.services.publishing import (
 )
 from backend.services.comments import audience_comment_state
 from backend.services.account_insights import build_account_insights, build_post_analysis
-from backend.services.insight_texts import audience_description, next_post_suggestion, post_feedback
+from backend.services.insight_texts import audience_description, next_post_suggestion
+from backend.services.feedback import cached_summary, refresh_summary_for_user, summary_note
 from backend.services.instagram_sync import refresh_one_post, usable_token
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
@@ -263,6 +264,7 @@ def connect_callback(
             scopes=granted_scopes,
             session_synced_at=existing.session_synced_at if existing else None,
             session_sync_error=None,
+            tracking_start_at=existing.tracking_start_at if existing and existing.tracking_start_at else now,
             status="connected",
             connected_at=existing.connected_at if existing else now,
             last_synced_at=now,
@@ -372,6 +374,32 @@ class TrackRequest(BaseModel):
     media_id: str
 
 
+def _public_tracking(value) -> dict:
+    return {
+        "id": value.id, "media_id": value.media_id, "is_active": value.is_active,
+        "started_at": value.started_at, "stopped_at": value.stopped_at,
+    }
+
+
+def _public_snapshot(value) -> dict | None:
+    if value is None:
+        return None
+    return {name: getattr(value, name) for name in (
+        "id", "media_id", "captured_at", "likes", "comments", "saves", "shares",
+        "reach", "views", "engagement_rate", "average_watch_time_ms", "total_watch_time_ms",
+        "raw_metrics", "metric_status",
+    )}
+
+
+def _public_tracked_item(item: dict) -> dict:
+    result = dict(item)
+    result["tracking"] = _public_tracking(item["tracking"])
+    result["latest"] = _public_snapshot(item.get("latest"))
+    if "snapshots" in item:
+        result["snapshots"] = [_public_snapshot(value) for value in item["snapshots"]]
+    return result
+
+
 class PublishImage(BaseModel):
     mime_type: str
     data: str = Field(..., min_length=4)
@@ -436,7 +464,16 @@ def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)
             detail={"code": "media_not_found", "message": "Instagram post was not found."},
         )
     tracked = get_content_repository().create_tracked(user_id, payload.media_id)
-    return tracked
+    media_item = next(item for item in get_content_repository().media_for_account(account.id) if item.id == payload.media_id)
+    # The existing picker is the only path for OLD posts. Fetch current lifetime
+    # metrics immediately, then schedule only still-valid early checkpoints.
+    try:
+        refresh_one_post(user_id, tracked, media_item, usable_token(account), refresh_comments=False)
+    except InstagramServiceError as exc:
+        raise _handle_connected_service_error(account, exc) from exc
+    from backend.storage.tracking_repository import get_tracking_repository
+    get_tracking_repository().ensure_jobs_for_tracking(tracked.id)
+    return _public_tracking(tracked)
 
 
 def tracked_payload(user_id: str, active_only: bool = True):
@@ -514,7 +551,7 @@ def _tracked_item(user_id: str, tracked_id: str) -> dict:
 
 @router.get("/tracked-posts")
 def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
-    return {"items": tracked_payload(current_user(user))}
+    return {"items": [_public_tracked_item(item) for item in tracked_payload(current_user(user))]}
 
 
 @router.get("/tracked-posts/{tracked_id}")
@@ -537,17 +574,10 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
     if account and account.session_sync_error == "comment_access_denied":
         audience = {"state": "access_denied", "message": "Instagram denied access to comments."}
     selected_for_analysis = next(value for value in all_items if value["tracking"].id == tracked_id)
-    analysis = build_post_analysis(selected_for_analysis, all_items, summary=None, audience_comments=audience)
-    analysis["summary"] = post_feedback(
-        user_id,
-        tracked_id,
-        item["media"],
-        item.get("latest"),
-        analysis,
-        media_loader=lambda: _feedback_media(item["media"]),
-    )
+    analysis = build_post_analysis(selected_for_analysis, all_items, summary=cached_summary(user_id, tracked_id), audience_comments=audience)
+    analysis["summary_note"] = summary_note(item["tracking"].first_24h_status) if analysis.get("summary") else None
     item["analysis"] = analysis
-    return item
+    return _public_tracked_item(item)
 
 
 @router.get("/insights/account")
@@ -607,6 +637,7 @@ def refresh_tracking(
         refresh_one_post(user_id, tracked_item["tracking"], media_item, usable_token(account))
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
+    refresh_summary_for_user(user_id, tracked_id)
     return tracked_detail(tracked_id, user)
 
 

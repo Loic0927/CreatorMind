@@ -42,7 +42,8 @@ def test_retirement_migration_preserves_populated_raw_snapshot(tmp_path, monkeyp
     assert snapshot.views == 25
     assert "provider" in snapshot.raw_metrics
     columns = {column["name"] for column in inspect(engine).get_columns("instagram_insight_snapshots")}
-    assert not {"target_hour", "scheduled_for", "collection_type"} & columns
-    assert "instagram_insight_collection_jobs" not in inspect(engine).get_table_names()
+    assert {"scheduled_for", "milestone_hours", "source", "lateness_seconds"} <= columns
+    assert not {"target_hour", "collection_type"} & columns
+    assert "instagram_insight_collection_jobs" in inspect(engine).get_table_names()
     command.downgrade(_config(), "20261029_0010")
     assert "instagram_insight_collection_jobs" in inspect(engine).get_table_names()

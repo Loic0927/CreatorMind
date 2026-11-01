@@ -66,7 +66,7 @@ services:
     environment:
       POSTBRIDGE_ENV: production
       POSTBRIDGE_RUN_MIGRATIONS: "false"
-    command: ["python", "-m", "backend.tracking_worker", "run", "--poll-seconds", "${POSTBRIDGE_TRACKING_POLL_SECONDS:-3600}"]
+    command: ["python", "-m", "backend.tracking_worker", "run", "--poll-seconds", "${POSTBRIDGE_TRACKING_POLL_SECONDS:-60}", "--new-media-poll-seconds", "${NEW_MEDIA_POLL_SECONDS:-600}"]
     volumes:
       - ${OCI_PRIVATE_KEY_HOST_PATH:-./deploy/oci/empty-oci-key}:/run/secrets/oci_api_key.pem:ro
       - ${OCI_CONFIG_HOST_PATH:-./deploy/oci/empty-oci-config}:/run/secrets/oci_config:ro

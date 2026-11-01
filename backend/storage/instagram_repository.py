@@ -160,6 +160,7 @@ class SQLAlchemyInstagramRepository:
                         scopes=list(scopes or account.scopes),
                         session_synced_at=account.session_synced_at,
                         session_sync_error=account.session_sync_error,
+                        tracking_start_at=account.tracking_start_at or account.connected_at,
                         status=account.status,
                         created_at=account.connected_at,
                         updated_at=now,
@@ -178,6 +179,7 @@ class SQLAlchemyInstagramRepository:
                     record.status = account.status
                     record.session_synced_at = account.session_synced_at
                     record.session_sync_error = account.session_sync_error
+                    # tracking_start_at is deliberately immutable across re-authorization.
                     record.updated_at = now
                 session.flush()
                 return self._to_account(record)
@@ -251,6 +253,7 @@ class SQLAlchemyInstagramRepository:
             scopes=list(record.scopes or []),
             session_synced_at=_as_utc(record.session_synced_at),
             session_sync_error=record.session_sync_error,
+            tracking_start_at=_as_utc(record.tracking_start_at),
             status=record.status,
             connected_at=_as_utc(record.created_at),
             last_synced_at=_as_utc(record.updated_at),

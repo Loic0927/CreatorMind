@@ -9,7 +9,8 @@ from typing import Any
 from uuid import uuid4
 
 from backend.services.account_insights import build_account_insights
-from backend.services.insight_texts import audience_description, next_post_suggestion, post_summary
+from backend.services.insight_texts import audience_description, next_post_suggestion
+from backend.services.feedback import refresh_summary_for_user
 from backend.services.instagram import (
     INSTAGRAM_SCOPES,
     InstagramServiceError,
@@ -129,8 +130,6 @@ def refresh_one_post(user_id: str, tracked, media, token: str, *, refresh_commen
             ))
         repository.upsert_comments(user_id, tracked.id, stored)
 
-    snapshots = repository.snapshots([media.id])
-    post_summary(user_id, tracked.id, snapshots)
     audience_description(user_id, tracked.id, repository.comments(user_id, tracked.id))
     return changed
 
@@ -149,18 +148,8 @@ def run_account_sync(user_id: str, *, now: datetime | None = None) -> dict[str, 
         return {"status": "already_running", "refreshed": 0, "failed": 0}
     try:
         token = usable_token(account)
-        upstream = _retry(lambda: fetch_instagram_media(token))
-        media = [InstagramMedia(
-            id=f"instagram:{item['id']}", account_id=account.id, instagram_media_id=str(item["id"]),
-            media_type=str(item.get("media_type", "UNKNOWN")), media_url=item.get("media_url"),
-            thumbnail_url=item.get("thumbnail_url"), permalink=item.get("permalink"),
-            caption=str(item.get("caption", "")), published_at=_timestamp(item.get("timestamp")), last_synced_at=current,
-        ) for item in upstream if item.get("id")]
         content = get_content_repository()
-        content.upsert_media(media)
-        media_by_id = {item.id: item for item in media}
-        for item in media:
-            content.create_tracked(user_id, item.id)
+        media_by_id = {item.id: item for item in content.media_for_account(account.id)}
         tracked = content.tracked(user_id, active_only=True)
         refreshed = failed = 0
         for index, tracked_post in enumerate(tracked):
@@ -195,6 +184,14 @@ def run_account_sync(user_id: str, *, now: datetime | None = None) -> dict[str, 
             source = next((item for item in items if item["tracking"].id == post["tracked_post_id"]), None)
             internal_posts.append({**post, "caption": source["media"].caption if source and source.get("media") else ""})
         next_post_suggestion(user_id, internal_posts, {item["tracking"].id: content.comments(user_id, item["tracking"].id) for item in items})
+        try:
+            refresh_summary_for_user(user_id)
+        except Exception as exc:
+            # Summary generation is best-effort and must never make login sync fail.
+            import logging
+            logging.getLogger("postbridge.instagram_sync").warning(
+                "feedback_refresh_failed user_id=%s error_type=%s", user_id, type(exc).__name__
+            )
 
         if failed:
             instagram_repository.mark_session_sync(user_id, None, "partial_failure")

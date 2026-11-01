@@ -1,6 +1,6 @@
 # PostBridge product plan
 
-Last updated: 2026-10-31
+Last updated: 2026-11-01
 Owner: PostBridge  
 Purpose: Track the work required to turn the current Instagram MVP into a multi-platform post creation, publishing, and per-post performance analysis product.
 
@@ -46,12 +46,24 @@ PostBridge should let any signed-in creator:
 
 ## Retired product scope
 
+### 2026-11-01 decision replacement
+
+The earlier retirement of first-24-hour collection and worker new-post discovery is superseded for the narrowly defined background-only implementation below. UI milestone cards, screenshots, settings, and backfill remain retired.
+
+- Automatically track only provider media published after an account's immutable `tracking_start_at`; detection belongs to the worker, never login.
+- Old posts remain user-selected through the existing Home picker. Never back-fill missed early readings.
+- Store five evidence-preserving milestone snapshots in the background without exposing milestone data in the UI/API.
+- Generate the existing Analyze Summary only from qualifying computed facts. Use an accepted trained text model when available, otherwise Gemini, then deterministic templates.
+- The repository's trained artifact is a synthetic numeric views predictor and is disabled for feedback.
+- `post_feedback()` and its media-download helper remain present but are disabled-not-deleted. `tracked_detail()` no longer calls either path.
+- Settings and Account Context are unchanged. No Summary provider receives captions, media, comments, Account Context, usernames, or hashtags.
+
 - CTA detection, CTA-based grouping, CTA recommendations, and CTA experiments are removed.
 - Audience-active/Followers-online collection, screenshot extraction, posting-window analysis, and related account preferences are removed.
 - Content Patterns, Content Opportunities, AI account themes, theme regeneration, and persisted per-post theme assignments are removed.
 - Create follow-up actions and draft-prefill handoffs from Analyze are removed.
-- First-24-hour snapshots, automatic new-post discovery for that snapshot, milestone cards, screenshot backfill, and related account settings are removed.
-- These features must not be restored from the historical progress log without a new product decision. The tracking worker remains only for Instagram token maintenance; lifetime metrics and new-post discovery run once per eligible login session.
+- First-24-hour UI cards, screenshot backfill, related account settings, and any fabricated/back-filled milestone values remain removed. Background API snapshots and new-media detection are restored only by the 2026-11-01 decision replacement above.
+- Historical implementations are reusable only where the replacement decision explicitly permits them. The tracking worker now owns token maintenance, new-media discovery, and milestone capture; login sync never discovers posts.
 
 ## 2026-10-30 removal inventory (recorded before migration)
 
@@ -166,10 +178,10 @@ The following inventory is the destructive-data boundary for migration `20261030
   Acceptance: The same draft created on web can be edited/published on mobile, and the resulting tracked post and analysis are visible on both clients for the same account.
   Verify: Run mobile typecheck/lint/tests and manually execute the cross-device draft-to-publish-to-analysis journey.
 
-- [x] **14. Maintain lifetime metrics and Instagram tokens**
+- [x] **14. Maintain lifetime metrics, first-day snapshots, and Instagram tokens**
   Spec ref: `Operations > Data maintenance`
-  What to build: Keep one idempotent background job only for tracked posts whose lifetime metrics are missing. Preserve retries, locking, reconnect-required handling, manual Refresh metrics, and token maintenance. Do not discover new posts or schedule age-based snapshots.
-  Acceptance: Restarting the API does not duplicate a backfill job or snapshot, expired/revoked connections become reconnect-required, and provider rate limits are respected.
+  What to build: Detect only posts published after immutable account tracking start, schedule five durable first-day milestones, preserve retries, locking, reconnect-required handling, manual Refresh metrics, and token maintenance. Never auto-track old posts or back-fill a missed reading.
+  Acceptance: Restarting the worker does not duplicate a job or milestone snapshot, expired/revoked connections become reconnect-required, old posts remain picker-only, and provider rate limits are respected.
   Verify: Run worker tests for idempotency, competing workers, transient failure, token expiry, and partial metric responses.
 
 - [ ] **15. Complete security, observability, and production rollout**
@@ -282,4 +294,4 @@ Historical entries below describe what existed at that date. The Retired product
 - 2026-10-30: Retired CTA analysis, Audience Active/Followers Online, Content Patterns/Opportunities, Create follow-up handoffs, and all First-24-Hours collection/UI. Removed their active API routes, storage models, account preferences, web/mobile components, client types, screenshot extraction, scheduling/discovery logic, and feature-specific tests. The existing worker/container remains only for shared lifetime-metric backfill and connection maintenance; migration `20261030_0011` removes retired stored data and milestone-only columns. Verification passed: backend 125 passed/1 skipped, empty SQLite upgraded through Alembic head, web production build passed, mobile typecheck/lint/Jest passed, and OCI Compose configuration parsed successfully with non-secret placeholders for values absent from the local `.env.oci`.
 - 2026-10-30: Documented the canonical OCI redeployment commands, migration backup warning, script behavior, non-destructive diagnostics, and the prohibition on `docker compose down -v` so future work sessions can provide the same safe deployment instructions directly from this plan.
 - 2026-10-30: Rebuilt Analyze and Insights from the four exported wireframes across responsive web and Expo. Added account-relative ranges (n>=6; min-max below n=15 and p10-p90 from n=15), input-keyed Summary/Audience/Suggestion caches, login-triggered locked 30-minute account sync, isolated/idempotent post refresh, one-minute manual cooldowns, and the shared 24-hour stale constant. Removed the inventoried milestone, external-extraction, persisted-analysis, grouping, audience-activity, CTA/style, score/grade, and scheduling surfaces; retained raw snapshots/watch-time fields, posts/media, drafts/publications, username-free comments, Account Context, and caption generation. Migration `20261030_0011` passed empty and populated upgrade/downgrade tests and preserved raw snapshots. Backend verification: 96 passed/1 skipped; web production build passed; Expo typecheck, lint, and 2 Jest suites passed. The mandated production backup invocation was stopped by the managed safety review because its configured OCI destination could not be independently trusted; no production migration was attempted.
-- [ ] Post feedback follow-up: include privacy-preserving audience comment themes only after the production comment-ingestion flow is available and verified. Until then, Post feedback must not imply or invent comment content.
+- [ ] Summary follow-up: include privacy-preserving audience comment themes only after the production comment-ingestion flow is available and verified. Until then, Summary must not imply or invent comment content.

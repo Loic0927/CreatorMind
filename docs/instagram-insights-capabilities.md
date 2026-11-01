@@ -1,20 +1,20 @@
 # Instagram data and insight screens
 
-Last reviewed: 2026-10-30
+Last reviewed: 2026-11-01
 
 ## Login, syncing, and permissions
 
 PostBridge uses Instagram API with Instagram Login for professional Business or Creator accounts. It requests the basic profile/media, media-insight, and publishing permissions. Comment reading stays behind `POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED` and the account allow-list until Meta grants the required access; enabled accounts must reconnect so the comments permission is present.
 
-A successful login schedules one account sync in the background. The page serves cached data immediately. The sync is account-locked, skips when the previous successful sync is less than 30 minutes old, discovers and tracks new posts, refreshes lifetime metrics, backfills posts without metrics, reads comments when allowed, refreshes expiring tokens, and refreshes cached AI text only when its input hash changes. Provider calls are batched, retried with backoff, isolated per post, and idempotent.
+A successful login schedules one account sync in the background. The page serves cached data immediately. The sync is account-locked, skips when the previous successful sync is less than 30 minutes old, refreshes only already-tracked posts, reads comments when allowed, refreshes expiring tokens, and refreshes cached Summary text only when its fact hash changes. Login never discovers or tracks old posts.
 
-The separately deployed tracking worker is retained only for Instagram long-lived-token maintenance. It does not discover posts, refresh metrics, or run milestone jobs. Login sync is the only automatic post refresh path; Analyze and Insights provide post-scoped manual refresh.
+The separately deployed tracking worker maintains tokens, lists recent media once per connected account every `NEW_MEDIA_POLL_SECONDS`, tracks only media published after the account's immutable `tracking_start_at`, and runs durable first-24-hour milestone jobs. Instagram returns lifetime totals rather than per-hour history, so the 1, 3, 6, 12, and 24 hour rows are point-in-time captures made by PostBridge. Meta documents no guaranteed availability delay; transiently absent insights are retried only inside each milestone's grace window.
 
 ## Stored data and privacy
 
 PostBridge keeps posts, media, ordinary raw Instagram metric snapshots, raw API fields including watch time, drafts, publications, account context, and username-free comments. Comment provider author IDs are used only in memory to identify owner replies; usernames are never stored or sent to the model. Comment text and captions are treated as untrusted model input.
 
-The removed milestone, external extraction, derived analysis, account grouping, and audience-activity datasets are not part of the current schema. No image-derived analytics input is accepted.
+Milestone snapshots and their scheduling evidence are stored. Screenshot extraction, retired derived analysis, account grouping, and audience-activity datasets remain absent. No image-derived analytics input is accepted.
 
 ## Analyze rules
 
@@ -30,7 +30,7 @@ engagement rate = sum(returned likes, comments, saves, shares) / reach * 100
 
 It is null without positive reach or a returned interaction value. Missing values are never converted to zero.
 
-Summary text is generated and cached only when at least two ordinary snapshots contain a meaningful change. It describes non-obvious movement without repeating visible values, causal claims, or advice. Audience comments require at least three real non-owner comments and produce an explicit disabled, reconnect, access, sparse-data, error, or ready state.
+Summary facts are computed in pure code from snapshot history and mature same-format account peers. Only qualifying, novel facts are sent to a feedback provider. Gemini output is strict JSON and validated against fact IDs and safety wording; invalid output falls through to deterministic evidence-safe templates. Captions, media, comments, usernames, Account Context, hashtags, and comment text are never model inputs. Opening Analyze reads the cache and never calls a model.
 
 ## Insights rules
 

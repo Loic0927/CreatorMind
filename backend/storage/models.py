@@ -118,6 +118,7 @@ class InstagramAccount(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     session_synced_at: Optional[datetime] = None
     session_sync_error: Optional[str] = None
+    tracking_start_at: Optional[datetime] = None
     status: Literal[
         "connected", "expired", "reconnect_required", "disconnected", "error"
     ] = "connected"
@@ -146,6 +147,8 @@ class TrackedPost(BaseModel):
     is_active: bool = True
     started_at: datetime
     stopped_at: Optional[datetime] = None
+    first_24h_status: Literal["collecting", "complete", "partial", "unavailable"] = "collecting"
+    first_24h_reason: Optional[str] = None
 
 
 class InstagramInsightSnapshot(BaseModel):
@@ -163,6 +166,10 @@ class InstagramInsightSnapshot(BaseModel):
     total_watch_time_ms: Optional[int] = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
     metric_status: dict[str, str] = Field(default_factory=dict)
+    scheduled_for: Optional[datetime] = None
+    milestone_hours: Optional[int] = None
+    source: str = "api"
+    lateness_seconds: Optional[int] = None
 
 
 class InstagramComment(BaseModel):
@@ -185,5 +192,8 @@ class InsightTextCache(BaseModel):
     input_hash: str
     text: str
     model_name: str
+    provider: str = "template"
+    prompt_version: str = "unknown"
+    facts_json: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
