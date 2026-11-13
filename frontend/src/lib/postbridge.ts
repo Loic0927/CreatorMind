@@ -8,7 +8,7 @@ export type InsightSnapshot = { id: string; likes?: number | null; comments?: nu
 export type MetricKey = "views" | "reach" | "engagement_rate" | "shares" | "saves" | "comments";
 export type RangeRow = { metric: MetricKey; value: number; usual_min: number; usual_max: number; status: "above" | "below" | "inside"; rank: number; group_size: number; band_start: number; band_end: number; marker: number };
 export type AudienceComments = { state: "feature_off" | "reconnect_needed" | "access_denied" | "too_few" | "error" | "ready"; message?: string; description?: string };
-export type PostAnalysisView = { comparable: boolean; comparable_count: number; summary?: string | null; summary_note?: string | null; stands_out: RangeRow[]; weaker: RangeRow[]; usual_ranges: RangeRow[]; audience_comments: AudienceComments; age_days: number; media_format: string };
+export type PostAnalysisView = { comparable: boolean; comparable_count: number; summary?: string | null; stands_out: RangeRow[]; weaker: RangeRow[]; usual_ranges: RangeRow[]; audience_comments: AudienceComments; age_days: number; media_format: string };
 export type TrackedPost = { tracking: { id: string; media_id?: string; is_active?: boolean }; media: { id: string; instagram_media_id?: string; media_type?: string; caption: string; media_url?: string; thumbnail_url?: string; permalink?: string | null; published_at: string }; latest?: InsightSnapshot; snapshots?: InsightSnapshot[]; analysis?: PostAnalysisView };
 export type TrackingRecord = { id: string };
 export type PublishingCapability = { platform: SocialPlatform; available: boolean; reason?: string | null };
@@ -21,11 +21,22 @@ export type PerformancePost = { tracked_post_id: string; instagram_media_id: str
 export type Highlight = { label: "Highest reach" | "Lowest reach" | "Highest engagement" | "Lowest engagement"; tracked_post_id: string; thumbnail_url?: string | null; published_at: string; metric: "reach" | "engagement_rate"; value: number };
 export type AccountInsights = { highlights: Highlight[]; next_post_suggestion?: string | null; performance_posts: PerformancePost[]; needs_refresh_after_hours: number; sync_status: "ok" | "failed" | "reconnect_required" };
 
+export class ApiError extends Error {
+  constructor(public code: string, message: string, public status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function responseJson<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = payload.detail ?? payload;
-    throw new Error(detail.message ?? (typeof detail === "string" ? detail : "PostBridge could not complete the request."));
+    throw new ApiError(
+      typeof detail === "object" && detail?.code ? String(detail.code) : "request_failed",
+      detail.message ?? (typeof detail === "string" ? detail : "PostBridge could not complete the request."),
+      response.status,
+    );
   }
   return payload as T;
 }
@@ -51,6 +62,7 @@ export const getTrackedPosts = (session: Session) => authRequest<{ items: Tracke
 export const getTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);
 export const getInstagramMedia = (session: Session) => authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(session, "/api/instagram/media");
 export const trackInstagramPost = (session: Session, mediaId: string) => authRequest<TrackingRecord>(session, "/tracked-posts", { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
+export const deleteTrackedPost = (session: Session, trackedId: string) => authRequest<{ stopped: boolean }>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`, { method: "DELETE" });
 export const refreshTrackedPost = (session: Session, trackedId: string) => authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, "/insights/account");
 export type CaptionMedia = { mime_type: "image/jpeg" | "image/png" | "image/webp" | "video/mp4" | "video/webm" | "video/quicktime"; data: string; duration_seconds?: number };

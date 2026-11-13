@@ -63,7 +63,7 @@ def test_draft_publish_to_track_vertical_slice_is_idempotent(tmp_path, monkeypat
     assert repeated["results"][0]["status"] == "published"
     assert len(provider_calls) == 1
     assert media_count == 1
-    assert tracked_count == 1
+    assert tracked_count == 0
     engine.dispose()
     engine_for_url.cache_clear()
     session_factory_for_url.cache_clear()

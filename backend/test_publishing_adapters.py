@@ -65,7 +65,7 @@ def test_instagram_adapter_validates_publishes_and_normalizes_result():
     result = adapter.publish("user-1", _request())
     assert result.status == "published"
     assert result.provider_post_id == "provider-post-1"
-    assert result.tracked_post_id == "tracked-1"
+    assert result.tracked_post_id is None
     assert uploaded[0][2] == "image/jpeg"
     assert repository.media[0].caption == "Caption\n\n#tag"
     assert adapter.status("user-1", result.provider_post_id) == "published"

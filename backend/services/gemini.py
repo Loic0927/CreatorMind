@@ -1,4 +1,4 @@
-"""Gemini text and image generation boundary."""
+"""Gemini text and multimodal generation boundary."""
 
 import os
 from collections.abc import Callable
@@ -14,7 +14,9 @@ class GeminiUpstreamError(RuntimeError):
 
 
 GeminiClientFactory = Callable[[str, str], Any]
-GeminiImagePartFactory = Callable[[bytes, str], Any]
+GeminiMediaPartFactory = Callable[[bytes, str], Any]
+# Backward-compatible name retained for existing test and integration callers.
+GeminiImagePartFactory = GeminiMediaPartFactory
 
 
 def _client_factory(api_key: str, model_name: str) -> Any:
@@ -29,7 +31,7 @@ def _client_factory(api_key: str, model_name: str) -> Any:
     return genai.Client(api_key=api_key)
 
 
-def _image_part_factory(image_bytes: bytes, mime_type: str) -> Any:
+def _media_part_factory(media_bytes: bytes, mime_type: str) -> Any:
     try:
         from google.genai import types
     except ImportError as exc:
@@ -37,7 +39,7 @@ def _image_part_factory(image_bytes: bytes, mime_type: str) -> Any:
             "The Gemini SDK is not installed on the backend."
         ) from exc
 
-    return types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+    return types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
 
 
 def generate_gemini_content(
@@ -50,7 +52,7 @@ def generate_gemini_content(
     client_factory: GeminiClientFactory | None = None,
     image_part_factory: GeminiImagePartFactory | None = None,
 ) -> str:
-    """Generate content from text and an optional inline image."""
+    """Generate content from text and optional inline image or video bytes."""
 
     resolved_api_key = api_key or os.getenv("GEMINI_API_KEY")
     if not resolved_api_key:
@@ -70,7 +72,7 @@ def generate_gemini_content(
         client = factory(resolved_api_key, resolved_model)
         contents: str | list[Any] = prompt
         if image_bytes is not None and image_mime_type is not None:
-            part_factory = image_part_factory or _image_part_factory
+            part_factory = image_part_factory or _media_part_factory
             contents = [
                 part_factory(image_bytes, image_mime_type),
                 prompt,

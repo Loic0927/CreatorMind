@@ -85,7 +85,7 @@ def test_refresh_is_idempotent_when_provider_metrics_are_unchanged(monkeypatch):
     assert changed is False
 
 
-def test_worker_detects_only_media_after_tracking_boundary_and_is_idempotent(monkeypatch):
+def test_worker_syncs_media_without_creating_tracking_records(monkeypatch):
     account_value = SimpleNamespace(
         id="a", user_id="u", status="connected", tracking_start_at=NOW,
         connected_at=NOW, model_copy=lambda update: SimpleNamespace(**update),
@@ -94,12 +94,10 @@ def test_worker_detects_only_media_after_tracking_boundary_and_is_idempotent(mon
         def list_connections(self): return [account_value]
         def upsert_connection(self, value): return value
     class Content:
-        def __init__(self): self.ids = set(); self.created = []
+        def __init__(self): self.created = []
         def upsert_media(self, values): self.media = values
-        def tracked(self, user_id, active_only=False): return [SimpleNamespace(media_id=value) for value in self.ids]
         def create_tracked(self, user_id, media_id):
-            self.ids.add(media_id); self.created.append(media_id)
-            return SimpleNamespace(id=f"tracked:{media_id}")
+            raise AssertionError("media sync must not auto-track posts")
     class Queue:
         def __init__(self): self.scheduled = []
         def ensure_jobs_for_tracking(self, tracked_id, now): self.scheduled.append(tracked_id)
@@ -116,9 +114,9 @@ def test_worker_detects_only_media_after_tracking_boundary_and_is_idempotent(mon
     monkeypatch.setattr(worker, "fetch_instagram_media", lambda token: upstream)
     first = worker.detect_new_media(NOW)
     second = worker.detect_new_media(NOW)
-    assert first["detected"] == 1 and second["detected"] == 0
-    assert content.created == ["instagram:new"]
-    assert queue.scheduled == ["tracked:instagram:new"]
+    assert first["synced"] == 2 and second["synced"] == 2
+    assert content.created == []
+    assert queue.scheduled == []
 
 
 def test_login_sync_never_creates_tracking_records(monkeypatch):

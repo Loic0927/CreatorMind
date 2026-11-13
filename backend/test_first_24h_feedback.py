@@ -181,6 +181,34 @@ def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
     assert calls[-1] == "gemini-two"
 
 
+def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeypatch):
+    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
+    captured = {}
+    facts = [{"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}]
+
+    class Provider:
+        name = "gemini"
+        model = "gemini-3.8-flash"
+
+        def generate(self, received_facts, *, media_input=None):
+            captured["facts"] = received_facts
+            captured["media_input"] = media_input
+            return _payload("The attached video shows a clear visual sequence.", ids=["media_content"])
+
+    monkeypatch.setattr(feedback, "_selection", lambda: ([Provider()], "gemini:gemini-3.8-flash"))
+
+    result = feedback.generate_summary(
+        "video-feedback-user",
+        "video-feedback-post",
+        facts,
+        media_input=(b"video-content", "video/mp4"),
+    )
+
+    assert result == "The attached video shows a clear visual sequence."
+    assert captured["media_input"] == (b"video-content", "video/mp4")
+    assert any(item["id"] == "media_content" for item in captured["facts"])
+
+
 def test_trained_numeric_predictor_is_always_disabled_and_notes_are_deterministic(monkeypatch):
     assert feedback.TrainedFeedbackProvider().healthy is False
     monkeypatch.setenv("FEEDBACK_PROVIDER", "trained"); monkeypatch.setenv("FEEDBACK_TRAINED_ENABLED", "true")
@@ -200,7 +228,7 @@ def test_no_qualifying_fact_hides_summary_and_cache_read_never_selects_provider(
     assert feedback.cached_summary("empty-user", "empty-post") is None
 
 
-def test_home_picker_adds_old_post_fetches_lifetime_metrics_and_schedules_only_valid_windows(monkeypatch):
+def test_home_picker_adds_old_post_fetches_lifetime_metrics_without_scheduling_24h_jobs(monkeypatch):
     media = SimpleNamespace(id="m", instagram_media_id="provider", media_type="IMAGE", published_at=NOW - timedelta(hours=10))
     tracked = SimpleNamespace(id="t", media_id="m", is_active=True, started_at=NOW, stopped_at=None)
     class Content:
@@ -218,7 +246,7 @@ def test_home_picker_adds_old_post_fetches_lifetime_metrics_and_schedules_only_v
     monkeypatch.setattr(tracking_repository_module, "get_tracking_repository", lambda: queue)
     result = instagram_api.track(instagram_api.TrackRequest(media_id="m"), AuthenticatedUser(id="u", email="u@example.test", token_hash="h"))
     assert result["id"] == "t"
-    assert len(refreshed) == 1 and queue.ids == ["t"]
+    assert len(refreshed) == 1 and queue.ids == []
 
 
 def test_internal_first_day_fields_are_not_exposed_by_tracked_post_api():

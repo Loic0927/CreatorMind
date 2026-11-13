@@ -1,8 +1,5 @@
-import os
+import logging
 from datetime import datetime, timedelta, timezone
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -38,7 +35,8 @@ from backend.services.publishing import (
 from backend.services.comments import audience_comment_state
 from backend.services.account_insights import build_account_insights, build_post_analysis
 from backend.services.insight_texts import audience_description, next_post_suggestion
-from backend.services.feedback import cached_summary, refresh_summary_for_user, summary_note
+from backend.services.media_inputs import load_media_input
+from backend.services.feedback import cached_summary, refresh_summary_for_user
 from backend.services.instagram_sync import refresh_one_post, usable_token
 from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
@@ -52,6 +50,7 @@ from backend.storage.instagram_repository import (
 
 
 router = APIRouter()
+LOGGER = logging.getLogger("postbridge.instagram_api")
 
 
 def upsert_instagram_media(items: list[InstagramMedia]) -> list[InstagramMedia]:
@@ -471,8 +470,6 @@ def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)
         refresh_one_post(user_id, tracked, media_item, usable_token(account), refresh_comments=False)
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
-    from backend.storage.tracking_repository import get_tracking_repository
-    get_tracking_repository().ensure_jobs_for_tracking(tracked.id)
     return _public_tracking(tracked)
 
 
@@ -500,33 +497,7 @@ def tracked_payload(user_id: str, active_only: bool = True):
 
 def _feedback_media(media) -> tuple[bytes, str] | None:
     """Fetch only bounded media URLs previously supplied by Meta."""
-    media_type = str(media.media_type or "").upper()
-    url = media.media_url if media_type in {"VIDEO", "REELS"} else media.thumbnail_url or media.media_url
-    if not url:
-        return None
-    parsed = urlparse(url)
-    hostname = (parsed.hostname or "").lower()
-    allowed_host = hostname == "instagram.com" or hostname.endswith((".instagram.com", ".cdninstagram.com", ".fbcdn.net"))
-    if parsed.scheme != "https" or not allowed_host:
-        return None
-    maximum = int(os.getenv("POSTBRIDGE_FEEDBACK_MEDIA_BYTES", str(10 * 1024 * 1024)))
-    request = Request(url, headers={"User-Agent": "PostBridge/1.0"})
-    try:
-        with urlopen(request, timeout=8) as response:
-            content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
-            allowed_types = {
-                "image/jpeg", "image/png", "image/webp",
-                "video/mp4", "video/webm", "video/quicktime",
-            }
-            if content_type not in allowed_types:
-                return None
-            length = response.headers.get("Content-Length")
-            if length and int(length) > maximum:
-                return None
-            content = response.read(maximum + 1)
-    except (HTTPError, URLError, OSError, ValueError):
-        return None
-    return (content, content_type) if content and len(content) <= maximum else None
+    return load_media_input(media)
 
 
 def _tracked_item(user_id: str, tracked_id: str) -> dict:
@@ -574,8 +545,13 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
     if account and account.session_sync_error == "comment_access_denied":
         audience = {"state": "access_denied", "message": "Instagram denied access to comments."}
     selected_for_analysis = next(value for value in all_items if value["tracking"].id == tracked_id)
+    try:
+        # Analyze is the user-facing entry point for Summary. Refreshing here
+        # lets media-aware feedback replace an older text-only cache.
+        refresh_summary_for_user(user_id, tracked_id)
+    except Exception as exc:
+        LOGGER.warning("summary_refresh_failed tracked_post_id=%s error_type=%s", tracked_id, type(exc).__name__)
     analysis = build_post_analysis(selected_for_analysis, all_items, summary=cached_summary(user_id, tracked_id), audience_comments=audience)
-    analysis["summary_note"] = summary_note(item["tracking"].first_24h_status) if analysis.get("summary") else None
     item["analysis"] = analysis
     return _public_tracked_item(item)
 
@@ -637,7 +613,6 @@ def refresh_tracking(
         refresh_one_post(user_id, tracked_item["tracking"], media_item, usable_token(account))
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
-    refresh_summary_for_user(user_id, tracked_id)
     return tracked_detail(tracked_id, user)
 
 

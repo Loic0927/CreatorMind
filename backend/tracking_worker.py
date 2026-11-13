@@ -30,8 +30,8 @@ def _timestamp(value):
 
 def detect_new_media(now: datetime | None = None) -> dict[str, int]:
     current = _aware(now or datetime.now(timezone.utc))
-    instagram = get_instagram_repository(); content = get_content_repository(); queue = get_tracking_repository()
-    counts = {"accounts": 0, "detected": 0, "duplicates": 0, "failed": 0}
+    instagram = get_instagram_repository(); content = get_content_repository()
+    counts = {"accounts": 0, "synced": 0, "failed": 0}
     for account in instagram.list_connections():
         if account.status != "connected": continue
         counts["accounts"] += 1
@@ -43,22 +43,15 @@ def detect_new_media(now: datetime | None = None) -> dict[str, int]:
                 caption=str(item.get("caption", "")), published_at=_timestamp(item.get("timestamp")), last_synced_at=current)
                 for item in upstream if item.get("id")]
             content.upsert_media(items)
-            known = {row.media_id for row in content.tracked(account.user_id, active_only=False)}
-            boundary = _aware(account.tracking_start_at or account.connected_at)
             for media in items:
-                if _aware(media.published_at) <= boundary: continue
-                if media.id in known:
-                    counts["duplicates"] += 1; continue
-                tracked = content.create_tracked(account.user_id, media.id)
-                queue.ensure_jobs_for_tracking(tracked.id, current); known.add(media.id); counts["detected"] += 1
-                LOGGER.info("new_media_detected account_id=%s tracked_post_id=%s", account.id, tracked.id)
+                counts["synced"] += 1
+            LOGGER.info("instagram_media_synced account_id=%s count=%s", account.id, len(items))
         except InstagramServiceError as exc:
             counts["failed"] += 1
             if exc.code in {"instagram_token_invalid", "connection_expired"}:
                 instagram.upsert_connection(account.model_copy(update={"status": "reconnect_required", "last_error": exc.code}))
-                queue.block_reconnect(account.user_id, current)
             LOGGER.warning("new_media_detection_failed account_id=%s code=%s", account.id, exc.code)
-    LOGGER.info("new_media_detection_cycle accounts=%s detected=%s duplicates=%s failed=%s", counts["accounts"], counts["detected"], counts["duplicates"], counts["failed"])
+    LOGGER.info("media_sync_cycle accounts=%s synced=%s failed=%s", counts["accounts"], counts["synced"], counts["failed"])
     return counts
 
 def collect_due(now: datetime | None = None, worker_id: str | None = None) -> dict[str, int]:
@@ -108,10 +101,8 @@ def run_once(*, detect: bool = True) -> dict[str, object]:
         except InstagramServiceError as exc:
             if exc.code in {"instagram_token_invalid", "connection_expired"}:
                 repository.upsert_connection(account.model_copy(update={"status": "reconnect_required", "last_error": exc.code}))
-                get_tracking_repository().block_reconnect(account.user_id)
             LOGGER.warning("instagram_token_maintenance_failed account_id=%s code=%s", account.id, exc.code)
-    scheduled = get_tracking_repository().ensure_all_active_jobs()
-    return {"tokens": token_count, "scheduled_posts": scheduled, "detection": detect_new_media() if detect else None, "collection": collect_due()}
+    return {"tokens": token_count, "media_sync": detect_new_media() if detect else None}
 
 def _write_health(path: str): Path(path).write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
 def run_loop(poll_seconds: int, new_media_seconds: int, health_file: str):  # pragma: no cover

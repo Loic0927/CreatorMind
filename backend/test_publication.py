@@ -27,7 +27,7 @@ def _image_data(format_name: str) -> str:
     return base64.b64encode(output.getvalue()).decode()
 
 
-def test_instagram_publication_uploads_private_asset_publishes_and_tracks(monkeypatch):
+def test_instagram_publication_uploads_private_asset_without_auto_tracking(monkeypatch):
     repository = FakeContentRepository()
     user = AuthenticatedUser(id="user-1", email="creator@example.test", token_hash="hash")
     account = SimpleNamespace(id="account-1", instagram_user_id="ig-user-1", status="connected")
@@ -47,7 +47,7 @@ def test_instagram_publication_uploads_private_asset_publishes_and_tracks(monkey
     ), user)
 
     assert result["results"][0]["status"] == "published"
-    assert result["results"][0]["tracked_post_id"] == "tracked-1"
+    assert "tracked_post_id" not in result["results"][0]
     assert result["results"][1]["platform"] == "Threads"
     assert result["results"][1]["status"] == "unavailable"
     assert repository.media[0].instagram_media_id == "published-1"

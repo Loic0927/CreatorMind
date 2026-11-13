@@ -39,8 +39,8 @@ PostBridge should let any signed-in creator:
 - Content-aware analysis uses observed metrics plus available post content. It must identify unavailable inputs rather than invent them.
 - `viral_score` is removed from current UI, API contracts, persisted output, documentation, and tests. Existing stored history must remain readable during migration.
 - Predicted view counts are not part of the product experience. Creation returns editable copy only; performance analysis must prefer observed provider metrics and clearly labelled interpretation.
-- Caption generation can target one or more selected platforms and uses both the content brief and an uploaded image. Publication capability is evaluated independently for every selected platform.
-- The first multimodal creation flow supports JPG, PNG, and WebP images up to 5 MB in the web client. Video understanding remains out of scope for this phase.
+- Caption generation can target one or more selected platforms and uses both the content brief and uploaded media. For short videos, Gemini may use the visual sequence, audio, and on-screen text as grounded caption reference. Publication capability is evaluated independently for every selected platform.
+- The web multimodal creation flow supports JPG, PNG, and WebP images plus short MP4/WebM/MOV videos up to 7 MB and 60 seconds; the backend keeps a 10 MB safety ceiling. Mobile creation remains image-only until the cross-platform parity work is extended.
 - Provider credentials and access tokens remain server-side and encrypted. Client applications never receive permanent provider tokens.
 - Account Context contains only account theme, account description, and target audience. These fields must remain platform-neutral and creator-specific.
 
@@ -106,11 +106,11 @@ The following inventory is the destructive-data boundary for migration `20261030
   Acceptance: Selecting post A never displays metrics from post B. A post without a snapshot shows an explicit empty state and Refresh metrics action.
   Verify: Track two Instagram posts with different values, select each one, and confirm every displayed metric matches its own latest database snapshot.
 
-- [-] **2a. Make the creation composer platform- and image-aware**
+- [-] **2a. Make the creation composer platform- and media-aware**
   Spec ref: `User feedback > Creation inputs`
-  What to build: Remove the creation-time predicted views/analysis card on web and mobile; add Instagram, Twitter, Facebook, Threads, and YouTube generation targets; expand goals and provide an Other field; send validated JPG/PNG/WebP image bytes to Gemini together with the user's brief; migrate the Gemini adapter to the maintained `google-genai` SDK. Do not accept video in this phase.
-  Acceptance: Generated copy reflects both visible image content and the written brief, follows the selected platform's format, accepts a non-empty custom goal, and never displays a predicted view count in the creation result.
-  Verify: Run Gemini adapter tests and the frontend production build; manually generate from one image for each platform, test Other with empty/non-empty input, reject a video, and reject an image over 5 MB.
+  What to build: Remove the creation-time predicted views/analysis card on web and mobile; add Instagram, Twitter, Facebook, Threads, and YouTube generation targets; expand goals and provide an Other field; send validated image or short-video bytes to Gemini together with the user's brief; migrate the Gemini adapter to the maintained `google-genai` SDK. Keep video publishing separate from video understanding.
+  Acceptance: Generated copy reflects grounded visual/audio media content and the written brief, follows the selected platform's format, accepts a non-empty custom goal, and never displays a predicted view count in the creation result.
+  Verify: Run Gemini adapter tests and the frontend production build; manually generate from an image and a short video for each platform, test Other with empty/non-empty input, reject unsupported/oversized media, and reject videos over one minute.
 
 - [x] **3. Add persistent draft and publication models**
   Spec ref: `Core > Draft before publish`
@@ -156,9 +156,9 @@ The following inventory is the destructive-data boundary for migration `20261030
 
 - [-] **10. Add single-post content-aware analysis**
   Spec ref: `Core > Explain post performance`
-  What to build: Create a structured analysis service using the selected post's latest/current metric history, caption, hashtags, media type, publish time, and available thumbnail/image context. Return summary, what performed well, what underperformed, likely content reasons, and concrete next actions. Clearly label metric facts versus model interpretation.
-  Acceptance: Two posts with different content and metrics receive meaningfully different responses; missing metrics or inaccessible visual content are called out; provider data is never fabricated.
-  Verify: Add deterministic service tests with mocked model responses and manual tests for high/low engagement, missing reach, image, and video/thumbnail-only inputs.
+  What to build: Create a structured analysis service using the selected post's latest/current metric history, caption, hashtags, media type, publish time, and available thumbnail/image/video context. Return summary, what performed well, what underperformed, likely content reasons, and concrete next actions. Clearly label metric facts versus model interpretation, and keep media observations separate from performance evidence.
+  Acceptance: Two posts with different content and metrics receive meaningfully different responses; attached video content can inform feedback without being treated as proof of audience reaction or metric causation; missing metrics or inaccessible media are called out; provider data is never fabricated.
+  Verify: Add deterministic service tests with mocked model responses and manual tests for high/low engagement, missing reach, image, accessible video, inaccessible video, and thumbnail-only inputs.
 
 - [-] **11. Add analysis persistence and post detail history**
   Spec ref: `Core > Track analysis over time`
@@ -211,7 +211,7 @@ The following inventory is the destructive-data boundary for migration `20261030
 - Video and carousel publishing add asynchronous processing and format constraints; they should not block the first single-image vertical slice.
 - A private OCI bucket is compatible with publishing only if Meta receives a temporary URL it can fetch for long enough to ingest the asset.
 - Other social platforms must be enabled only after their official APIs, permissions, and review requirements are confirmed. No scraping or simulated publishing state.
-- Full video-content understanding is a separate workload. The first analysis version may use caption, metrics, media metadata, and thumbnail/image context while explicitly stating that the full video was not analyzed.
+- Full video-content understanding is now enabled for short caption-generation and Analyze feedback requests through bounded inline Gemini media input. Video publishing remains a separate workload, and media-derived observations must never be presented as measured audience response or causal performance evidence.
 
 ## OCI standard deployment procedure
 

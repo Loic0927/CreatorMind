@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { RangeRow, Session, TrackedPost, getTrackedPost, getTrackedPosts, refreshTrackedPost } from "@/lib/postbridge";
+import { ApiError, RangeRow, Session, TrackedPost, getTrackedPost, getTrackedPosts, refreshTrackedPost } from "@/lib/postbridge";
 import { DashboardPageTitle } from "@/components/dashboard/DashboardPageTitle";
 
 const label: Record<string, string> = { views: "Views", reach: "Reach", engagement_rate: "Engagement", shares: "Shares", saves: "Saves", comments: "Comments" };
@@ -15,6 +15,7 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
+  const [deleted, setDeleted] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async (id: string) => {
@@ -30,13 +31,13 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
     else getTrackedPosts(session).then(({ items }) => setPosts(items)).catch((reason) => setError(reason instanceof Error ? reason.message : "Couldn't load posts.")).finally(() => setLoading(false));
   }, [initialId, load, session]);
 
-  const choose = (id: string) => { setSelectedId(id); void load(id); };
+  const choose = (id: string) => { setDeleted(false); setSelectedId(id); void load(id); };
   const back = () => { setSelectedId(""); setPost(null); onClear(); setLoading(true); getTrackedPosts(session).then(({ items }) => setPosts(items)).finally(() => setLoading(false)); };
   const refresh = async () => {
     if (!selectedId || refreshing || cooldown) return;
     setRefreshing(true); setError("");
     try { setPost(await refreshTrackedPost(session, selectedId)); setCooldown(true); window.setTimeout(() => setCooldown(false), 60_000); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Couldn't update, showing earlier data"); }
+    catch (reason) { if (reason instanceof ApiError && ["media_not_found", "instagram_media_unavailable"].includes(reason.code)) { setDeleted(true); setError(""); } else setError(reason instanceof Error ? reason.message : "Couldn't update, showing earlier data"); }
     finally { setRefreshing(false); }
   };
 
@@ -49,7 +50,7 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
       <button onClick={back} className="min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button>
     </div>
     {error ? <p className="mb-3 text-sm text-[#5F587A]">{error.includes("reconnect") ? "Reconnect Instagram to update." : "Couldn't update, showing earlier data"}</p> : null}
-    {loading || !post ? <Card>Loading post…</Card> : <div className="space-y-4">
+    {deleted ? <Card><p className="text-lg font-black">This post is deleted</p><p className="mt-2 text-sm text-[#5F587A]">This post is no longer available on Instagram.</p><button onClick={back} className="mt-5 min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button></Card> : loading || !post ? <Card>Loading post…</Card> : <div className="space-y-4">
       <Card>
         <div className="flex gap-4">
           {post.media.thumbnail_url || post.media.media_url ? <img alt="Post cover" src={post.media.thumbnail_url || post.media.media_url} className="h-[104px] w-[104px] shrink-0 rounded-2xl object-cover" /> : <div className="h-[104px] w-[104px] shrink-0 rounded-2xl bg-[#D9D1F5]" />}
@@ -66,7 +67,7 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
         </div>
       </Card>
 
-      {analysis?.summary ? <Card><h2 className="text-xl font-black">Summary</h2><p className="mt-3 text-[15px] leading-5 text-[#1E1633]">{analysis.summary}</p>{analysis.summary_note ? <p className="mt-3 text-sm leading-5 text-[#5F587A]">{analysis.summary_note}</p> : null}</Card> : null}
+      {analysis?.summary ? <Card><h2 className="text-xl font-black">Summary</h2><p className="mt-3 text-[15px] leading-5 text-[#1E1633]">{analysis.summary}</p></Card> : null}
 
       {analysis?.comparable ? <>
         <div className="grid gap-4 lg:grid-cols-2">

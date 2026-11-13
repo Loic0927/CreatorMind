@@ -17,13 +17,15 @@ from uuid import uuid4
 from sqlalchemy import delete
 
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
+from backend.services.media_inputs import load_media_input
 from backend.storage.content_repository import get_content_repository
 from backend.storage.database import session_factory
 from backend.storage.models import InsightTextCache
 from backend.storage.sql_models import AIGenerationLogRecord
 
 LOGGER = logging.getLogger("postbridge.feedback")
-PROMPT_VERSION = "summary-facts-v1"
+PROMPT_VERSION = "summary-facts-media-v2"
+MEDIA_FACT_ID = "media_content"
 MIN_PEERS = 6
 PERCENTILE_RANGE_AT = 15
 PACE_MOST_FRACTION = .75
@@ -209,7 +211,12 @@ def validate_output(payload: Any, facts: list[dict[str, Any]]) -> bool:
 class FeedbackProvider(Protocol):
     name: str
     model: str
-    def generate(self, facts: list[dict[str, Any]]) -> dict[str, Any]: ...
+    def generate(
+        self,
+        facts: list[dict[str, Any]],
+        *,
+        media_input: tuple[bytes, str] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -221,11 +228,19 @@ class GeminiFeedbackProvider:
     def model(self) -> str:
         return os.getenv("GEMINI_MODEL", "unconfigured")
 
-    def generate(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
+    def generate(
+        self,
+        facts: list[dict[str, Any]],
+        *,
+        media_input: tuple[bytes, str] | None = None,
+    ) -> dict[str, Any]:
         prompt = (
             "Return JSON only: {\"sentences\":[{\"text\":string,\"kind\":\"observation|suggestion\",\"fact_ids\":[string]}]}. "
             "Use at most three sentences and at most one suggestion. Cite only supplied fact ids. Use plain language. "
-            "Do not restate values, ranks, ranges, dates, or titles. Make no causal, predictive, promise, visual, or creative claim. "
+            "Do not restate values, ranks, ranges, dates, or titles. Make no causal, predictive, or promise claim. "
+            "If an attached image or video is supplied, you may describe concrete visual or audible content only when it is grounded in that media "
+            "and cite the media_content fact. For video, consider the visual sequence, spoken audio, and on-screen text. Do not infer audience reaction "
+            "or claim that the media caused the performance. "
             "Give no hashtag, call-to-action, or engagement-bait advice. A suggestion must follow directly from a fact, be optional, and promise nothing.\n"
             f"FACTS_JSON={json.dumps(facts, separators=(',', ':'))}"
         )
@@ -233,7 +248,16 @@ class GeminiFeedbackProvider:
         last_error: Exception | None = None
         for attempt in range(2):
             executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(self.generator, prompt)
+            if media_input is None:
+                future = executor.submit(self.generator, prompt)
+            else:
+                media_bytes, media_mime_type = media_input
+                future = executor.submit(
+                    self.generator,
+                    prompt,
+                    image_bytes=media_bytes,
+                    image_mime_type=media_mime_type,
+                )
             try:
                 raw = future.result(timeout=timeout)
                 executor.shutdown(wait=False, cancel_futures=True)
@@ -257,8 +281,14 @@ class TrainedFeedbackProvider:
         # synthetic rows. It fails the product acceptance check by design.
         return False
 
-    def generate(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
+    def generate(
+        self,
+        facts: list[dict[str, Any]],
+        *,
+        media_input: tuple[bytes, str] | None = None,
+    ) -> dict[str, Any]:
         del facts
+        del media_input
         raise RuntimeError("The trained numeric predictor is not a feedback provider.")
 
 
@@ -296,21 +326,49 @@ def _log(tracked_post_id: str, provider: str, model: str, input_hash: str, statu
         session.execute(delete(AIGenerationLogRecord).where(AIGenerationLogRecord.created_at < now - timedelta(days=30)))
 
 
-def generate_summary(user_id: str, tracked_post_id: str, facts: list[dict[str, Any]]) -> str | None:
-    qualifying = [fact for fact in facts if fact.get("qualifies")]
+def _media_fact(media_input: tuple[bytes, str] | None) -> dict[str, Any] | None:
+    if media_input is None:
+        return None
+    media_bytes, media_mime_type = media_input
+    return _fact(
+        MEDIA_FACT_ID,
+        "media_content",
+        {
+            "source": "attached_media",
+            "mime_type": media_mime_type,
+            "sha256": hashlib.sha256(media_bytes).hexdigest(),
+        },
+        "attached",
+        True,
+    )
+
+
+def generate_summary(
+    user_id: str,
+    tracked_post_id: str,
+    facts: list[dict[str, Any]],
+    *,
+    media_input: tuple[bytes, str] | None = None,
+) -> str | None:
+    input_facts = list(facts)
+    media_fact = _media_fact(media_input)
+    if media_fact is not None:
+        input_facts.append(media_fact)
+    qualifying = [fact for fact in input_facts if fact.get("qualifies")]
+    metric_facts = [fact for fact in qualifying if fact.get("id") != MEDIA_FACT_ID]
     providers, signature = _selection()
-    input_hash = _hash({"facts": facts, "selection": signature, "prompt_version": PROMPT_VERSION})
+    input_hash = _hash({"facts": input_facts, "selection": signature, "prompt_version": PROMPT_VERSION})
     repository = get_content_repository(); key = f"summary:{tracked_post_id}"
     existing = repository.get_text_cache(user_id, key)
     if existing and existing.input_hash == input_hash:
         return existing.text or None
-    if not qualifying:
+    if not metric_facts:
         _log(tracked_post_id, "none", "none", input_hash, "empty", 0, None)
         now = datetime.now(timezone.utc)
         repository.upsert_text_cache(InsightTextCache(
             id=existing.id if existing else str(uuid4()), user_id=user_id, tracked_post_id=tracked_post_id,
             cache_key=key, input_hash=input_hash, text="", model_name="none", provider="none",
-            prompt_version=PROMPT_VERSION, facts_json=facts,
+            prompt_version=PROMPT_VERSION, facts_json=input_facts,
             created_at=existing.created_at if existing else now, updated_at=now,
         ))
         return None
@@ -319,7 +377,11 @@ def generate_summary(user_id: str, tracked_post_id: str, facts: list[dict[str, A
     for provider in providers:
         started = time.monotonic(); raw = None
         try:
-            candidate = provider.generate(qualifying); raw = json.dumps(candidate, separators=(",", ":"))
+            if media_input is None:
+                candidate = provider.generate(qualifying)
+            else:
+                candidate = provider.generate(qualifying, media_input=media_input)
+            raw = json.dumps(candidate, separators=(",", ":"))
             valid = validate_output(candidate, qualifying)
             _log(tracked_post_id, provider.name, provider.model, input_hash, "ok" if valid else "invalid",
                  int((time.monotonic() - started) * 1000), raw)
@@ -339,7 +401,7 @@ def generate_summary(user_id: str, tracked_post_id: str, facts: list[dict[str, A
     repository.upsert_text_cache(InsightTextCache(
         id=existing.id if existing else str(uuid4()), user_id=user_id, tracked_post_id=tracked_post_id,
         cache_key=key, input_hash=input_hash, text=text, model_name=model, provider=chosen,
-        prompt_version=PROMPT_VERSION, facts_json=facts,
+        prompt_version=PROMPT_VERSION, facts_json=input_facts,
         created_at=existing.created_at if existing else now, updated_at=now,
     ))
     LOGGER.info("feedback_provider_selected tracked_post_id=%s provider=%s model=%s", tracked_post_id, chosen, model)
@@ -369,7 +431,8 @@ def refresh_summary_for_user(user_id: str, tracked_post_id: str | None = None) -
         analysis = build_post_analysis(selected, items, summary=None,
             audience_comments={"state": "feature_off", "message": ""})
         facts = build_feedback_facts(selected, items, analysis)
-        generate_summary(user_id, selected["tracking"].id, facts)
+        media_input = load_media_input(selected["media"])
+        generate_summary(user_id, selected["tracking"].id, facts, media_input=media_input)
 
 
 def summary_note(status: str) -> str | None:
