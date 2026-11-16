@@ -19,9 +19,7 @@ export default function AppShell({ active, children }: AppShellProps) {
     <div className="flex min-h-screen bg-[#faf8ff] text-[#131b2e]">
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-[#f2f3ff] px-4 py-6 lg:flex">
         <div className="mb-8 flex items-center gap-3 px-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#392cc1] text-sm font-bold text-white shadow-lg shadow-[#392cc1]/20">
-            AI
-          </div>
+          <img src="/brand/logo.png" alt="CreatorMind logo" className="h-10 w-10 rounded-xl object-contain shadow-lg shadow-[#392cc1]/20" />
           <div>
             <div className="text-xl font-bold">CreatorMind</div>
             <div className="text-[10px] font-medium uppercase tracking-[0.25em] text-[#464555]">

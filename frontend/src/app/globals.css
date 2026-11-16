@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+.loading-frame {
+  opacity: 0;
+  animation: loading-frame 1s steps(1, end) infinite;
+  animation-delay: calc((var(--loading-frame) * -100ms));
+}
+
+@keyframes loading-frame {
+  0%, 9.99% {
+    opacity: 1;
+  }
+
+  10%, 100% {
+    opacity: 0;
+  }
+}
+
 :root {
   --select-ink: #1e1633;
   --select-muted: #5f587a;

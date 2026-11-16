@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { CaptionMedia, PublicationResult, PublishingCapability, Session, SocialPlatform, caption, getPublishingCapabilities, publishPost } from "@/lib/postbridge";
 import { DashboardPageTitle } from "@/components/dashboard/DashboardPageTitle";
 import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
+import { LoadingState } from "@/components/dashboard/LoadingState";
 
 const goals = ["Grow engagement", "Educate", "Build trust", "Increase brand awareness", "Share an announcement", "Other"];
 const platforms: SocialPlatform[] = ["Instagram", "Twitter", "Facebook", "Threads", "YouTube"];
@@ -118,6 +119,7 @@ export function LegacyCreate({ session }: { session: Session }) {
         <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-2xl bg-[#f7f5ff] px-4 py-3 text-sm font-bold"><input type="checkbox" checked={useContext} onChange={(event) => setUseContext(event.target.checked)} className="h-4 w-4 accent-violet-600" />Use account context</label>
         <button disabled={busy || (!information.trim() && !media) || !effectiveGoal || !selected.length} onClick={() => void run()} className="mt-5 w-full rounded-2xl bg-[#7c3aed] py-4 font-black text-white disabled:opacity-50">{busy ? "Creating…" : "Create caption"}</button>
       </section>
+      {busy ? <LoadingState label="generating caption..." description="CreatorMind is shaping your caption and hashtags." /> : null}
       {result ? <section className="rounded-3xl border border-[#e7e0f0] bg-white p-5 shadow-sm md:p-6"><h2 className="text-xl font-black">Caption</h2><textarea className="mt-4 min-h-56 w-full rounded-2xl bg-[#f7f5ff] p-4 outline-none" value={result.caption} onChange={(event) => setResult({ ...result, caption: event.target.value })} /><label className="mt-4 block text-sm font-bold">Hashtags<textarea className="mt-2 min-h-24 w-full rounded-2xl bg-[#f7f5ff] p-4 font-normal text-[#5b21b6] outline-none" value={result.hashtags} onChange={(event) => setResult({ ...result, hashtags: event.target.value })} /></label><div className="mt-5 grid gap-2 sm:grid-cols-2">{selected.map((platform) => { const capability = capabilities.find((item) => item.platform === platform); const canPublish = Boolean(capability?.available && media?.kind === "image"); const reason = media?.kind === "video" ? "Direct sharing currently supports image posts." : !media ? "Add an image before sharing." : capability?.reason || `${platform} publishing is not connected yet.`; return <button key={platform} type="button" disabled={!canPublish || Boolean(sharing)} title={canPublish ? undefined : reason} onClick={() => void share(platform)} className="min-h-12 rounded-2xl bg-[#7c3aed] px-4 py-3 text-sm font-black text-white disabled:bg-[#EDE9FE] disabled:text-[#80778b]">{sharing === platform ? "Sharing…" : `Share to ${platform}`}</button>; })}</div>{publicationResults.map((item) => <p key={item.platform} className={`mt-3 text-sm font-semibold ${item.status === "published" ? "text-green-700" : "text-red-700"}`}>{item.message}</p>)}</section> : null}
     </div>
   </>;
