@@ -1,11 +1,11 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LegacyCreate } from './LegacyCreate';
 import { LegacySettings } from './LegacySettings';
 import { WireframeInsights } from './WireframeInsights';
-import { getAccountContext, updateAccountContext } from '@/lib/postbridge';
+import { caption, getAccountContext, updateAccountContext } from '@/lib/postbridge';
 
 const { accountContext } = vi.hoisted(() => ({ accountContext: {
   account_theme: '',
@@ -79,5 +79,29 @@ describe('selection controls on active pages', () => {
         "settingsLayout": "mx-auto w-full lg:w-[80%]",
       }
     `);
+  });
+
+  it('blocks the page while creating and scrolls to the caption result', async () => {
+    let completeCaption: (value: { caption: string; hashtags: string }) => void = () => {};
+    vi.mocked(caption).mockImplementationOnce(() => new Promise((resolve) => { completeCaption = resolve; }));
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    const user = userEvent.setup();
+
+    render(<LegacyCreate session={session} />);
+    await user.type(screen.getByPlaceholderText(/Tell me about your post/i), 'A new post');
+    await user.click(screen.getByRole('button', { name: 'Create caption' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Creating your post' })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('hidden');
+    expect(screen.getByRole('button', { name: /Creating/i })).toBeDisabled();
+
+    await act(async () => {
+      completeCaption({ caption: 'Generated caption', hashtags: '#creator' });
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Creating your post' })).not.toBeInTheDocument());
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' }));
+    expect(document.body.style.overflow).toBe('');
+    scrollIntoView.mockRestore();
   });
 });

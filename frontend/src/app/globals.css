@@ -18,6 +18,34 @@
   }
 }
 
+.loading-dot {
+  width: 16px;
+  height: 16px;
+  border: 3px solid #60a5fa;
+  border-radius: 999px;
+  animation: loading-dot 1.2s ease-in-out infinite;
+}
+
+.loading-dot:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.loading-dot:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes loading-dot {
+  0%, 60%, 100% {
+    opacity: .45;
+    transform: translateY(0) scale(.9);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-5px) scale(1);
+  }
+}
+
 :root {
   --select-ink: #1e1633;
   --select-muted: #5f587a;
@@ -114,4 +142,6 @@ a {
 
 @media (prefers-reduced-motion: reduce) {
   .unified-select-trigger, .unified-select-chevron, .unified-select-popover { transition: none; }
+  .loading-frame, .loading-dot { animation: none; }
+  .loading-frame:first-child { opacity: 1; }
 }

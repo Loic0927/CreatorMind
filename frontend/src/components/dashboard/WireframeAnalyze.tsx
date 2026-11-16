@@ -51,7 +51,7 @@ export function WireframeAnalyze({ session, initialId, onClear }: { session: Ses
       <button onClick={back} className="min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button>
     </div>
     {error ? <p className="mb-3 text-sm text-[#5F587A]">{error.includes("reconnect") ? "Reconnect Instagram to update." : "Couldn't update, showing earlier data"}</p> : null}
-    {deleted ? <Card><p className="text-lg font-black">This post is deleted</p><p className="mt-2 text-sm text-[#5F587A]">This post is no longer available on Instagram.</p><button onClick={back} className="mt-5 min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button></Card> : loading || !post ? <LoadingState label="generating analyse..." description="CreatorMind is reviewing your post performance." /> : <div className="space-y-4">
+    {deleted ? <Card><p className="text-lg font-black">This post is deleted</p><p className="mt-2 text-sm text-[#5F587A]">This post is no longer available on Instagram.</p><button onClick={back} className="mt-5 min-h-10 rounded-xl bg-[#EDE9FE] px-4 text-sm font-bold text-[#4C1D95]">Back</button></Card> : loading || !post ? <LoadingState label="Analyzing your post" /> : <div className="space-y-4">
       <Card>
         <div className="flex gap-4">
           {post.media.thumbnail_url || post.media.media_url ? <img alt="Post cover" src={post.media.thumbnail_url || post.media.media_url} className="h-[104px] w-[104px] shrink-0 rounded-2xl object-cover" /> : <div className="h-[104px] w-[104px] shrink-0 rounded-2xl bg-[#D9D1F5]" />}
