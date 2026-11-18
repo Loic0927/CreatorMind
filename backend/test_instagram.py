@@ -121,6 +121,37 @@ def test_token_exchange_failure_is_sanitized(monkeypatch):
     assert "sensitive-code" not in str(failure.value)
 
 
+def test_publish_instagram_reel_waits_for_processing_then_publishes(monkeypatch):
+    calls = []
+    statuses = iter(["IN_PROGRESS", "FINISHED"])
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/ig-user/media"):
+            return {"id": "container-1"}
+        if method == "GET" and url.endswith("/container-1"):
+            return {"status_code": next(statuses)}
+        if method == "POST" and url.endswith("/ig-user/media_publish"):
+            return {"id": "media-1"}
+        if method == "GET" and url.endswith("/media-1"):
+            return {"id": "media-1", "media_type": "VIDEO", "permalink": "https://instagram.test/reel/1"}
+        raise AssertionError(f"Unexpected provider request: {method} {url}")
+
+    monkeypatch.setattr(instagram, "_request_json", fake_request)
+    monkeypatch.setattr(instagram.time, "sleep", lambda seconds: None)
+
+    result = instagram.publish_instagram_reel(
+        "token", "ig-user", "https://objects.test/video.mp4", "Caption",
+        status_attempts=3, status_interval_seconds=0,
+    )
+
+    assert result["id"] == "media-1"
+    create_form = calls[0][2]["form"]
+    assert create_form["media_type"] == "REELS"
+    assert create_form["video_url"] == "https://objects.test/video.mp4"
+    assert sum(url.endswith("/container-1") for _, url, _ in calls) == 2
+
+
 def _account(encrypted_token: str = "encrypted") -> InstagramAccount:
     return InstagramAccount(
         id="account-1",

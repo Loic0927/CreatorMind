@@ -13,7 +13,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from backend.services.instagram import InstagramServiceError, publish_instagram_image
+from backend.services.instagram import InstagramServiceError, publish_instagram_image, publish_instagram_reel
 from backend.storage.content_repository import ContentRepository, get_content_repository
 from backend.storage.models import InstagramMedia
 from backend.storage.oci_object_storage import (
@@ -25,6 +25,7 @@ from backend.storage.oci_object_storage import (
 
 
 SUPPORTED_INSTAGRAM_SOURCE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+SUPPORTED_INSTAGRAM_VIDEO_TYPES = {"video/mp4", "video/quicktime"}
 
 
 def convert_to_instagram_jpeg(body: bytes, mime_type: str) -> bytes:
@@ -68,6 +69,7 @@ class PublishInput:
     mime_type: str
     encoded_media: str | None = None
     object_name: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,7 @@ class InstagramPublishingAdapter(PublishingAdapter):
         object_loader: Callable[[str], bytes] = download_private_bytes,
         temporary_url_factory: Callable[..., str] = create_temporary_read_url,
         provider_publisher: Callable[[str, str, str, str], dict[str, Any]] = publish_instagram_image,
+        video_publisher: Callable[[str, str, str, str], dict[str, Any]] = publish_instagram_reel,
     ):
         self._account_loader = account_loader
         self._token_loader = token_loader
@@ -149,6 +152,7 @@ class InstagramPublishingAdapter(PublishingAdapter):
         self._object_loader = object_loader
         self._temporary_url_factory = temporary_url_factory
         self._provider_publisher = provider_publisher
+        self._video_publisher = video_publisher
 
     def capability(self, user_id: str) -> PublishingCapability:
         try:
@@ -162,22 +166,29 @@ class InstagramPublishingAdapter(PublishingAdapter):
         )
 
     def validate(self, request: PublishInput) -> PublicationResult | None:
-        if request.mime_type not in SUPPORTED_INSTAGRAM_SOURCE_TYPES:
+        supported_types = SUPPORTED_INSTAGRAM_SOURCE_TYPES | SUPPORTED_INSTAGRAM_VIDEO_TYPES
+        if request.mime_type not in supported_types:
             return PublicationResult(
-                self.platform, "failed", "Choose a JPG, PNG or WebP image.",
-                code="unsupported_image_format",
+                self.platform, "failed", "Choose a JPG, PNG, WebP, MP4 or MOV file.",
+                code="unsupported_media_format",
+            )
+        is_video = request.mime_type in SUPPORTED_INSTAGRAM_VIDEO_TYPES
+        if is_video and (request.duration_seconds is None or not 0 < request.duration_seconds <= 60.05):
+            return PublicationResult(
+                self.platform, "failed", "Choose a video that is one minute or shorter.",
+                code="invalid_video_duration",
             )
         if request.object_name:
             return None
         if not request.encoded_media:
-            return PublicationResult(self.platform, "failed", "A publishable image is required.", code="media_required")
+            return PublicationResult(self.platform, "failed", "Publishable media is required.", code="media_required")
         try:
             media = base64.b64decode(request.encoded_media, validate=True)
         except (binascii.Error, ValueError):
-            return PublicationResult(self.platform, "failed", "Uploaded image is not valid base64 data.", code="invalid_image")
+            return PublicationResult(self.platform, "failed", "Uploaded media is not valid base64 data.", code="invalid_media")
         max_bytes = min(int(os.getenv("POSTBRIDGE_MAX_UPLOAD_BYTES", "10485760")), 10 * 1024 * 1024)
         if not media or len(media) > max_bytes:
-            return PublicationResult(self.platform, "failed", "The publish image is empty or exceeds the configured limit.", code="image_too_large")
+            return PublicationResult(self.platform, "failed", "The publish media is empty or exceeds the configured limit.", code="media_too_large")
         return None
 
     def publish(self, user_id: str, request: PublishInput) -> PublicationResult:
@@ -186,19 +197,27 @@ class InstagramPublishingAdapter(PublishingAdapter):
             return invalid
         try:
             account = self._account_loader(user_id)
-            if request.object_name and request.mime_type == "image/jpeg":
-                image_url = self._temporary_url_factory(request.object_name, lifetime_minutes=60)
+            is_video = request.mime_type in SUPPORTED_INSTAGRAM_VIDEO_TYPES
+            if is_video:
+                if request.object_name:
+                    media_url = self._temporary_url_factory(request.object_name, lifetime_minutes=60)
+                else:
+                    media_bytes = base64.b64decode(request.encoded_media or "", validate=True)
+                    extension = ".mov" if request.mime_type == "video/quicktime" else ".mp4"
+                    object_name = f"publication-assets/{user_id}/{uuid4()}{extension}"
+                    media_url = self._uploader(media_bytes, object_name, request.mime_type)
+            elif request.object_name and request.mime_type == "image/jpeg":
+                media_url = self._temporary_url_factory(request.object_name, lifetime_minutes=60)
             else:
                 source_bytes = self._object_loader(request.object_name) if request.object_name else base64.b64decode(request.encoded_media or "", validate=True)
                 image_bytes = convert_to_instagram_jpeg(source_bytes, request.mime_type)
                 object_name = f"publication-assets/{user_id}/{uuid4()}.jpg"
-                image_url = self._uploader(image_bytes, object_name, "image/jpeg")
+                media_url = self._uploader(image_bytes, object_name, "image/jpeg")
             full_caption = "\n\n".join(
                 value.strip() for value in (request.caption, request.hashtags) if value.strip()
             )
-            item = self._provider_publisher(
-                self._token_loader(account), account.instagram_user_id, image_url, full_caption
-            )
+            publisher = self._video_publisher if is_video else self._provider_publisher
+            item = publisher(self._token_loader(account), account.instagram_user_id, media_url, full_caption)
             now = datetime.now(timezone.utc)
             media_item = InstagramMedia(
                 id=f"instagram:{item['id']}", account_id=account.id,

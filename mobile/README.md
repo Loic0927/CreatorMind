@@ -1,8 +1,8 @@
 # CreatorMind Mobile (phase one)
 
-Independent React Native + Expo + TypeScript client for CreatorMind. It does not wrap the website in a WebView and does not publish to social platforms.
+Independent React Native + Expo + TypeScript client for CreatorMind. It does not wrap the website in a WebView and supports direct Instagram publishing through the CreatorMind backend.
 
-This app currently targets Expo SDK 54 so it can be tested with the current Expo Go app on a physical iPhone. Keep the SDK and Expo-managed dependencies aligned with `npx expo install --fix`.
+This app currently targets Expo SDK 57. Keep the SDK and Expo-managed dependencies aligned with `npx expo install --fix`.
 
 ## Requirements
 
@@ -48,10 +48,8 @@ Demo login state is stored using `expo-secure-store`, not AsyncStorage. It is no
 
 ## Real versus mock
 
-- Real: native image selection and preview, editable form state, SecureStore-backed demo session, environment display.
-- Mock: caption and hashtag generation (`src/services/caption.ts`). It is visibly labelled `MOCK AI`.
-- Skeleton only: Likes, Comments, Saves, Shares, Reach, Engagement rate.
-- Not implemented: real authentication, media upload, `/mobile/caption`, Instagram OAuth, publishing, live insights.
+- Real: authentication, JPG/PNG/WebP selection with server-side JPEG conversion, MP4/MOV selection up to 60 seconds, caption generation, Instagram OAuth, direct image/Reel publishing and live insights.
+- Optional mock mode: local caption and hashtag generation in `src/services/caption.ts`.
 
 When the backend adds an authenticated `POST /mobile/caption` endpoint, set `EXPO_PUBLIC_CAPTION_MODE=api`. The endpoint must call the AI provider server-side and return `{ "caption": "...", "hashtags": "..." }`.
 

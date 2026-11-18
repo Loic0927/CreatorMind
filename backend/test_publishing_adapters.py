@@ -124,3 +124,53 @@ def test_instagram_adapter_reuses_stored_private_object(monkeypatch):
     assert result.status == "published"
     assert temporary_urls == [("draft-assets/user-1/image.jpg", 60)]
     assert repository.media[0].instagram_media_id == "provider-post-2"
+
+
+def test_instagram_adapter_uploads_and_publishes_short_video():
+    repository = FakeContentRepository()
+    account = SimpleNamespace(id="account-1", instagram_user_id="ig-user", status="connected")
+    uploaded = []
+    published = []
+    video = b"\x00\x00\x00\x18ftypmp42short-video"
+    adapter = InstagramPublishingAdapter(
+        account_loader=lambda user_id: account,
+        token_loader=lambda value: "server-side-token",
+        repository_loader=lambda: repository,
+        uploader=lambda data, name, mime: uploaded.append((data, name, mime)) or "https://temporary.example/video.mp4",
+        provider_publisher=lambda *args: (_ for _ in ()).throw(AssertionError("image publisher must not be used")),
+        video_publisher=lambda token, user_id, url, caption: published.append((token, user_id, url, caption)) or {
+            "id": "provider-reel-1", "media_type": "VIDEO", "media_url": url,
+            "thumbnail_url": "https://instagram.example/thumb.jpg",
+            "permalink": "https://instagram.example/reel/1", "caption": caption,
+            "timestamp": datetime(2026, 11, 17, tzinfo=timezone.utc).isoformat(),
+        },
+    )
+    request = PublishInput(
+        caption="Video", hashtags="#reel", mime_type="video/mp4",
+        encoded_media=base64.b64encode(video).decode(), duration_seconds=59.5,
+    )
+
+    result = adapter.publish("user-1", request)
+
+    assert result.status == "published"
+    assert uploaded[0][0] == video
+    assert uploaded[0][1].endswith(".mp4")
+    assert uploaded[0][2] == "video/mp4"
+    assert published[0][2] == "https://temporary.example/video.mp4"
+    assert repository.media[0].media_type == "VIDEO"
+
+
+def test_instagram_adapter_rejects_video_longer_than_one_minute():
+    adapter = InstagramPublishingAdapter(
+        account_loader=lambda user_id: SimpleNamespace(status="connected"),
+        token_loader=lambda value: "token",
+    )
+    request = PublishInput(
+        caption="Video", hashtags="", mime_type="video/mp4",
+        encoded_media=base64.b64encode(b"video").decode(), duration_seconds=60.1,
+    )
+
+    result = adapter.validate(request)
+
+    assert result is not None
+    assert result.code == "invalid_video_duration"

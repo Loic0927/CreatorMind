@@ -76,3 +76,27 @@ def test_instagram_publication_converts_png_before_external_publish(monkeypatch)
     assert result["results"][0]["status"] == "published"
     assert uploads[0][0].startswith(b"\xff\xd8\xff")
     assert uploads[0][2] == "image/jpeg"
+
+
+def test_instagram_publication_accepts_short_video(monkeypatch):
+    uploads = []
+    account = SimpleNamespace(id="account-1", instagram_user_id="ig-user-1", status="connected")
+    monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "_access_token", lambda value: "token")
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: FakeContentRepository())
+    monkeypatch.setattr(instagram_api, "upload_bytes_with_temporary_read_url", lambda *args: uploads.append(args) or "https://objectstorage.example/video.mp4")
+    monkeypatch.setattr(instagram_api, "publish_instagram_reel", lambda *args, **kwargs: {
+        "id": "published-reel", "media_type": "VIDEO", "media_url": "https://cdn.example/reel.mp4",
+        "thumbnail_url": "https://cdn.example/thumb.jpg", "permalink": "https://instagram.com/reel/example",
+        "caption": "Caption\n\n#tag", "timestamp": datetime(2026, 11, 17, tzinfo=timezone.utc).isoformat(),
+    })
+    user = AuthenticatedUser(id="user-1", email="creator@example.test", token_hash="hash")
+    video = base64.b64encode(b"\x00\x00\x00\x18ftypmp42short-video").decode()
+
+    result = instagram_api.publish(instagram_api.PublishRequest(
+        platforms=["Instagram"], caption="Caption", hashtags="#tag",
+        media=instagram_api.PublishImage(mime_type="video/mp4", data=video, duration_seconds=45),
+    ), user)
+
+    assert result["results"][0]["status"] == "published"
+    assert uploads[0][2] == "video/mp4"

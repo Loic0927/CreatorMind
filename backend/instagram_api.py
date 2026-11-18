@@ -24,6 +24,7 @@ from backend.services.instagram import (
     instagram_comment_ingestion_enabled,
     instagram_scopes,
     publish_instagram_image,
+    publish_instagram_reel,
     token_expiry,
 )
 from backend.services.publishing import (
@@ -402,13 +403,15 @@ def _public_tracked_item(item: dict) -> dict:
 class PublishImage(BaseModel):
     mime_type: str
     data: str = Field(..., min_length=4)
+    duration_seconds: float | None = Field(default=None, gt=0, le=60.05)
 
 
 class PublishRequest(BaseModel):
     platforms: list[str] = Field(..., min_length=1, max_length=5)
     caption: str = Field(..., min_length=1, max_length=2200)
     hashtags: str = Field(default="", max_length=1000)
-    image: PublishImage
+    image: PublishImage | None = None
+    media: PublishImage | None = None
 
 
 def publishing_registry() -> PublishingAdapterRegistry:
@@ -419,6 +422,7 @@ def publishing_registry() -> PublishingAdapterRegistry:
             repository_loader=get_content_repository,
             uploader=upload_bytes_with_temporary_read_url,
             provider_publisher=publish_instagram_image,
+            video_publisher=publish_instagram_reel,
         ),
         *[
             UnavailablePublishingAdapter(platform)
@@ -442,9 +446,15 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
     unknown = [item for item in platforms if registry.get(item) is None]
     if unknown:
         raise HTTPException(status_code=422, detail={"code": "unsupported_platform", "message": f"Unsupported platform: {unknown[0]}"})
+    if payload.image is not None and payload.media is not None:
+        raise HTTPException(status_code=422, detail={"code": "invalid_media", "message": "Provide either image or media, not both."})
+    supplied_media = payload.media or payload.image
+    if supplied_media is None:
+        raise HTTPException(status_code=422, detail={"code": "media_required", "message": "Publishable media is required."})
     request = PublishInput(
         caption=payload.caption, hashtags=payload.hashtags,
-        mime_type=payload.image.mime_type, encoded_media=payload.image.data,
+        mime_type=supplied_media.mime_type, encoded_media=supplied_media.data,
+        duration_seconds=supplied_media.duration_seconds,
     )
     results = [registry.get(platform).publish(user_id, request).as_dict() for platform in platforms]
     return {"results": results}

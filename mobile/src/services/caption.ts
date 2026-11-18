@@ -1,12 +1,15 @@
 import { API_BASE_URL, CAPTION_MODE } from '../config/environment';
-import { ImageMimeType, SocialPlatform } from '../types';
+import { ImageMimeType, MediaMimeType, SocialPlatform } from '../types';
 
 export type CaptionInput = {
   information: string;
   goal: string;
   platform: SocialPlatform;
   platforms?: SocialPlatform[];
-  image: { mime_type: ImageMimeType; data: string };
+  hashtag_count?: number;
+  use_account_context?: boolean;
+  image?: { mime_type: ImageMimeType; data: string };
+  media?: { mime_type: MediaMimeType; data: string; duration_seconds?: number };
 };
 export type CaptionResult = { caption: string; hashtags: string };
 
@@ -15,7 +18,8 @@ export function buildMockCaption(input: CaptionInput): CaptionResult {
   const goal = input.goal.trim();
   const caption = `${information}${goal ? `\n\nGoal: ${goal}.` : ''}\n\nWhat would you try first?`;
   const tags = information.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3).slice(0, 3).map((word) => `#${word}`);
-  return { caption, hashtags: [...new Set([...tags, '#contentcreator', '#postbridge'])].join(' ') };
+  const count = input.hashtag_count ?? 5;
+  return { caption, hashtags: [...new Set([...tags, '#contentcreator', '#postbridge'])].slice(0, count).join(' ') };
 }
 
 export async function generateCaption(input: CaptionInput, accessToken?: string): Promise<CaptionResult> {

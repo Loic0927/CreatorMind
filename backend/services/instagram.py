@@ -468,6 +468,72 @@ def publish_instagram_image(
     )
 
 
+def publish_instagram_reel(
+    access_token: str,
+    instagram_user_id: str,
+    video_url: str,
+    caption: str,
+    *,
+    status_attempts: int = 10,
+    status_interval_seconds: float = 10,
+) -> dict[str, Any]:
+    """Create, wait for, and publish one provider-readable short video as a Reel."""
+    container = _request_json(
+        "POST",
+        f"{INSTAGRAM_GRAPH_URL}/{instagram_user_id}/media",
+        form={
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "access_token": access_token,
+        },
+    )
+    container_id = container.get("id")
+    if not isinstance(container_id, str) or not container_id:
+        raise InstagramServiceError("instagram_publish_failed", "Instagram did not create a video container.", 502)
+
+    for attempt in range(max(1, status_attempts)):
+        status_payload = _request_json(
+            "GET",
+            f"{INSTAGRAM_GRAPH_URL}/{container_id}",
+            query={"fields": "status_code,status", "access_token": access_token},
+        )
+        status_code = str(status_payload.get("status_code") or "").upper()
+        if status_code == "FINISHED":
+            break
+        if status_code in {"ERROR", "EXPIRED"}:
+            provider_status = str(status_payload.get("status") or "").strip()
+            message = "Instagram could not process the video."
+            if provider_status:
+                message = f"{message} {provider_status}"
+            raise InstagramServiceError("instagram_video_processing_failed", message, 502)
+        if attempt + 1 < max(1, status_attempts):
+            time.sleep(max(0, status_interval_seconds))
+    else:
+        raise InstagramServiceError(
+            "instagram_video_processing_timeout",
+            "Instagram is still processing the video. Try publishing it again in a few minutes.",
+            504,
+        )
+
+    published = _request_json(
+        "POST",
+        f"{INSTAGRAM_GRAPH_URL}/{instagram_user_id}/media_publish",
+        form={"creation_id": container_id, "access_token": access_token},
+    )
+    media_id = published.get("id")
+    if not isinstance(media_id, str) or not media_id:
+        raise InstagramServiceError("instagram_publish_failed", "Instagram did not publish the video container.", 502)
+    return _request_json(
+        "GET",
+        f"{INSTAGRAM_GRAPH_URL}/{media_id}",
+        query={
+            "fields": "id,caption,media_type,media_url,permalink,thumbnail_url,timestamp",
+            "access_token": access_token,
+        },
+    )
+
+
 def fetch_instagram_media_insights(
     access_token: str,
     instagram_media_id: str,

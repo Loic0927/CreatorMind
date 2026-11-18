@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "PostBridge",
-    "slug": "postbridge-mobile",
+    "slug": "creatormind-mobile",
     "scheme": "postbridge",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "PostBridge uses your selected photo to preview a social post."
+        "NSPhotoLibraryUsageDescription": "PostBridge uses your selected photo or video to create and publish an Instagram post."
       }
     },
     "android": {
@@ -22,8 +22,10 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "READ_MEDIA_IMAGES"
-      ]
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO"
+      ],
+      "package": "com.loic0927steam.creatormindmobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -31,7 +33,8 @@
     "plugins": [
       "expo-secure-store",
       "expo-web-browser",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-build-properties"
     ],
     "extra": {
       "eas": {

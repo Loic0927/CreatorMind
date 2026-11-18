@@ -1,7 +1,7 @@
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { API_BASE_URL } from '../config/environment';
-import { AccountInsightsData, ImageMimeType, InstagramConnection, InstagramMedia, SocialPlatform, TrackedPost } from '../types';
+import { AccountInsightsData, InstagramConnection, InstagramMedia, MediaMimeType, SocialPlatform, TrackedPost } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 export class ApiError extends Error { constructor(public code: string, message: string, public status: number) { super(message); } }
@@ -19,7 +19,7 @@ export const trackPost = (token: string, mediaId: string) => request<{ id: strin
 export const refreshTrackedPost = (token: string, id: string) => request<TrackedPost>(`/tracked-posts/${encodeURIComponent(id)}/refresh`, token, { method: 'POST' });
 export const getAccountInsights = (token: string) => request<AccountInsightsData>('/insights/account', token);
 export type PublicationResult = { platform: SocialPlatform; status: 'published' | 'failed' | 'unavailable'; message: string; code?: string; permalink?: string; tracked_post_id?: string };
-export const publishPost = (token: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; image: { mime_type: ImageMimeType; data: string } }) => request<{ results: PublicationResult[] }>('/publications', token, { method: 'POST', body: JSON.stringify(payload) });
+export const publishPost = (token: string, payload: { platforms: SocialPlatform[]; caption: string; hashtags: string; media: { mime_type: MediaMimeType; data: string; duration_seconds?: number } }) => request<{ results: PublicationResult[] }>('/publications', token, { method: 'POST', body: JSON.stringify(payload) });
 export const disconnectInstagram = (token: string) => request('/api/instagram/connection', token, { method: 'DELETE' });
 export const deleteAccount = (token: string) => request('/auth/account', token, { method: 'DELETE' });
 export async function connectInstagram(token: string): Promise<void> {
