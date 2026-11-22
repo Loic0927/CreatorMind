@@ -7,11 +7,13 @@ from sqlalchemy import delete, select
 
 from backend.auth import (
     AuthenticatedUser,
+    ai_processing_consent_at,
     create_login_code,
     get_account_context,
     normalize_email,
     require_user,
     revoke_session,
+    set_ai_processing_consent,
     update_account_context,
     verify_login_code,
 )
@@ -23,8 +25,14 @@ from backend.services.account_context import (
     serialize_account_context,
     suggest_context_from_posts,
 )
-from backend.services.email_login import EmailDeliveryError, send_login_code
+from backend.services.email_login import (
+    EmailDeliveryError,
+    reviewer_login_code_matches,
+    reviewer_login_enabled_for,
+    send_login_code,
+)
 from backend.services.instagram_sync import request_account_sync
+from backend.storage.content_repository import get_content_repository
 from backend.storage.database import session_factory
 from backend.storage.instagram_repository import delete_local_user_data
 from backend.storage.oci_object_storage import delete_private_prefix, oci_storage_enabled
@@ -74,16 +82,28 @@ class AccountContextRequest(BaseModel):
     preferred_hashtags: list[str] = Field(default_factory=list, max_length=10)
 
 
+def _consent_payload(user_id: str) -> dict:
+    consented_at = ai_processing_consent_at(user_id)
+    return {
+        "ai_processing_consented": consented_at is not None,
+        "ai_processing_consented_at": consented_at.isoformat() if consented_at else None,
+    }
+
+
 @router.post("/request-code")
 def request_code(payload: EmailRequest) -> dict:
     email = normalize_email(payload.email)
     code = create_login_code(email)
-    try:
-        send_login_code(email, code)
-    except EmailDeliveryError as exc:
-        raise HTTPException(status_code=503, detail={"code": "email_unavailable", "message": str(exc)}) from None
+    reviewer_login = reviewer_login_enabled_for(email)
+    if reviewer_login:
+        logger.info("review_login_code_requested email=%s", email)
+    else:
+        try:
+            send_login_code(email, code)
+        except EmailDeliveryError as exc:
+            raise HTTPException(status_code=503, detail={"code": "email_unavailable", "message": str(exc)}) from None
     response = {"sent": True, "message": "Check your email for a six-digit sign-in code."}
-    if not is_production() and not os.getenv("POSTBRIDGE_SMTP_HOST"):
+    if not reviewer_login and not is_production() and not os.getenv("POSTBRIDGE_SMTP_HOST"):
         response["development_code"] = code
     return response
 
@@ -91,20 +111,65 @@ def request_code(payload: EmailRequest) -> dict:
 @router.post("/verify-code")
 def verify_code(payload: VerifyCodeRequest, background_tasks: BackgroundTasks = None) -> dict:
     email = normalize_email(payload.email)
-    user, token, expires_at = verify_login_code(email, payload.code)
+    reviewer_login = reviewer_login_enabled_for(email)
+    if reviewer_login:
+        logger.info("review_login_verification_attempted email=%s", email)
+    user, token, expires_at = verify_login_code(
+        email,
+        payload.code,
+        reviewer_code_match=reviewer_login_code_matches(payload.code) if reviewer_login else None,
+    )
+    if reviewer_login:
+        logger.info("review_login_verified email=%s", email)
     if background_tasks is not None:
         background_tasks.add_task(request_account_sync, user.id)
     return {
         "access_token": token,
         "token_type": "bearer",
         "expires_at": expires_at.isoformat(),
-        "user": {"id": user.id, "email": user.email},
+        "user": {"id": user.id, "email": user.email, **_consent_payload(user.id)},
     }
 
 
 @router.get("/session")
 def session(user: AuthenticatedUser = Depends(require_user)) -> dict:
-    return {"user": {"id": user.id, "email": user.email}}
+    return {"user": {"id": user.id, "email": user.email, **_consent_payload(user.id)}}
+
+
+@router.get("/ai-processing-consent")
+def ai_processing_consent(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    return _consent_payload(user.id)
+
+
+@router.post("/ai-processing-consent")
+def grant_ai_processing_consent(
+    user: AuthenticatedUser = Depends(require_user),
+    background_tasks: BackgroundTasks = None,
+) -> dict:
+    set_ai_processing_consent(user.id, True)
+    # A consent grant is a write-side event. Queue generated text rather than
+    # making the consent request itself wait for Gemini or media downloads.
+    if background_tasks is not None:
+        from backend.services.insight_refresh import refresh_cached_insights
+
+        background_tasks.add_task(refresh_cached_insights, user.id)
+    return _consent_payload(user.id)
+
+
+@router.delete("/ai-processing-consent")
+def revoke_ai_processing_consent(
+    user: AuthenticatedUser = Depends(require_user),
+    background_tasks: BackgroundTasks = None,
+) -> dict:
+    set_ai_processing_consent(user.id, False)
+    get_content_repository().clear_text_cache_for_user(user.id)
+    # Rebuild only deterministic Summary text on the write side. Audience and
+    # suggestion generators themselves remain consent-gated.
+    if background_tasks is not None:
+        from backend.services.insight_refresh import refresh_cached_insights
+
+        background_tasks.add_task(refresh_cached_insights, user.id)
+    return _consent_payload(user.id)
 
 
 @router.get("/account-context")

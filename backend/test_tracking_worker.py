@@ -63,7 +63,7 @@ def test_session_sync_runs_once_then_skips_second_login_within_30_minutes(monkey
     monkeypatch.setattr(sync, "get_instagram_repository", lambda: instagram)
     monkeypatch.setattr(sync, "get_content_repository", lambda: content)
     monkeypatch.setattr(sync, "usable_token", lambda account: "token")
-    monkeypatch.setattr(sync, "next_post_suggestion", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync, "refresh_cached_insights", lambda *args, **kwargs: None)
     first = sync.run_account_sync("u", now=NOW)
     second = sync.run_account_sync("u", now=NOW + timedelta(minutes=29))
     assert first["status"] == "complete"
@@ -90,9 +90,9 @@ def test_one_failed_post_does_not_abort_remaining_posts(monkeypatch):
     monkeypatch.setattr(sync, "get_instagram_repository", lambda: instagram)
     monkeypatch.setattr(sync, "get_content_repository", lambda: content)
     monkeypatch.setattr(sync, "usable_token", lambda account: "token")
-    monkeypatch.setattr(sync, "next_post_suggestion", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync, "refresh_cached_insights", lambda *args, **kwargs: None)
 
-    def refresh(user_id, tracked_post, media_item, token):
+    def refresh(user_id, tracked_post, media_item, token, **kwargs):
         calls.append(tracked_post.id)
         if tracked_post.id == "t1":
             raise sync.InstagramServiceError("instagram_upstream_error", "failed", 502)
@@ -208,6 +208,66 @@ def test_worker_syncs_media_without_creating_tracking_records(monkeypatch):
     assert queue.scheduled == []
 
 
+def test_worker_refreshes_derived_caches_after_a_completed_capture(monkeypatch):
+    job = SimpleNamespace(
+        id="job-1",
+        user_id="u",
+        tracked_post_id="tracked-1",
+        media_id="media-1",
+        milestone_hours=6,
+        due_at=NOW,
+        attempt_count=0,
+    )
+    media = SimpleNamespace(id="media-1", instagram_media_id="provider-media-1", media_type="IMAGE")
+
+    class Queue:
+        def claim_due(self, worker_id, now):
+            return [SimpleNamespace(id=job.id)]
+
+        def context(self, job_id, worker_id):
+            return {"job": job, "media": media}
+
+        def complete(self, job_id, worker_id, snapshot, captured):
+            self.snapshot = snapshot
+            return True
+
+        def retry(self, *args):
+            raise AssertionError("successful capture must not retry")
+
+        def block_reconnect(self, *args):
+            raise AssertionError("connected account must not block")
+
+    queue = Queue()
+    refreshed = []
+    monkeypatch.setattr(worker, "get_tracking_repository", lambda: queue)
+    monkeypatch.setattr(
+        worker, "get_instagram_repository", lambda: SimpleNamespace(get_connection=lambda user_id: account())
+    )
+    monkeypatch.setattr(worker, "usable_token", lambda account: "token")
+    monkeypatch.setattr(
+        worker,
+        "fetch_instagram_media_insights",
+        lambda *args: {"reach": 100, "views": 120, "likes": 5, "_metric_status": {}},
+    )
+    monkeypatch.setattr(
+        worker, "refresh_cached_insights", lambda user_id, tracked_id=None: refreshed.append((user_id, tracked_id))
+    )
+
+    result = worker.collect_due(NOW, "worker-test")
+
+    assert result["captured"] == 1
+    assert refreshed == [("u", "tracked-1")]
+
+
+def test_worker_cycle_collects_due_milestones(monkeypatch):
+    monkeypatch.setattr(worker, "get_instagram_repository", lambda: SimpleNamespace(list_connections=lambda: []))
+    monkeypatch.setattr(worker, "collect_due", lambda: {"claimed": 1, "captured": 1})
+
+    result = worker.run_once(detect=False)
+
+    assert result == {"tokens": 0, "media_sync": None, "collection": {"claimed": 1, "captured": 1}}
+
+
 def test_login_sync_never_creates_tracking_records(monkeypatch):
     instagram = InstagramRepo(account())
 
@@ -219,7 +279,6 @@ def test_login_sync_never_creates_tracking_records(monkeypatch):
     monkeypatch.setattr(sync, "get_instagram_repository", lambda: instagram)
     monkeypatch.setattr(sync, "get_content_repository", lambda: content)
     monkeypatch.setattr(sync, "usable_token", lambda account: "token")
-    monkeypatch.setattr(sync, "next_post_suggestion", lambda *args, **kwargs: None)
-    monkeypatch.setattr(sync, "refresh_summary_for_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync, "refresh_cached_insights", lambda *args, **kwargs: None)
     assert sync.run_account_sync("u", now=NOW)["status"] == "complete"
     assert content._tracked == []

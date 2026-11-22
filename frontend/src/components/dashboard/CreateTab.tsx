@@ -2,15 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  ApiError,
   CaptionMedia,
   PublicationResult,
   PublishingCapability,
   Session,
   SocialPlatform,
   caption,
+  getAIProcessingConsent,
   getPublishingCapabilities,
+  grantAIProcessingConsent,
   publishPost,
 } from "@/lib/postbridge";
+import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage } from "@/lib/format";
 import { LoadingState } from "@/components/dashboard/LoadingState";
 import { ErrorBanner, PageTitle, Panel } from "@/components/dashboard/ui";
@@ -29,7 +33,7 @@ const asOptions = (values: string[]) => values.map((value) => ({ value, label: v
 const hashtagOptions = asOptions(Array.from({ length: 11 }, (_, count) => String(count)));
 const allowedTypes = ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm", "video/quicktime"];
 const maxMediaBytes = 7 * 1024 * 1024;
-const textareaClass = "w-full rounded-2xl bg-slate-100 p-4 outline-none";
+const textareaClass = "w-full rounded-2xl bg-field p-4 outline-none focus:ring-2 focus:ring-primary/30";
 type SelectedMedia = CaptionMedia & { name: string; preview: string; kind: "image" | "video" };
 type ImageMimeType = "image/jpeg" | "image/png" | "image/webp";
 
@@ -74,6 +78,8 @@ export function CreateTab({ session }: { session: Session }) {
   const [sharing, setSharing] = useState<SocialPlatform | null>(null);
   const [publicationResults, setPublicationResults] = useState<PublicationResult[]>([]);
   const [busy, setBusy] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
   const [error, setError] = useState("");
   const resultRef = useRef<HTMLDivElement>(null);
   const shouldScrollToResult = useRef(false);
@@ -116,7 +122,7 @@ export function CreateTab({ session }: { session: Session }) {
     });
   };
 
-  const generate = async () => {
+  const generateWithConsent = async () => {
     shouldScrollToResult.current = true;
     setBusy(true);
     setError("");
@@ -136,9 +142,40 @@ export function CreateTab({ session }: { session: Session }) {
       );
     } catch (reason) {
       shouldScrollToResult.current = false;
+      if (reason instanceof ApiError && reason.code === "consent_required") {
+        setConsentDialogOpen(true);
+        return;
+      }
       setError(errorMessage(reason, "Generation failed."));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const generate = async () => {
+    setError("");
+    try {
+      if (!(await getAIProcessingConsent(session)).ai_processing_consented) {
+        setConsentDialogOpen(true);
+        return;
+      }
+      await generateWithConsent();
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not check AI processing consent."));
+    }
+  };
+
+  const acceptConsent = async () => {
+    setSavingConsent(true);
+    setError("");
+    try {
+      await grantAIProcessingConsent(session);
+      setConsentDialogOpen(false);
+      await generateWithConsent();
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save AI processing consent."));
+    } finally {
+      setSavingConsent(false);
     }
   };
 
@@ -186,7 +223,7 @@ export function CreateTab({ session }: { session: Session }) {
           />
 
           <label className="mt-5 block text-sm font-bold">Content</label>
-          <label className="mt-2 grid min-h-44 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-sky-200 bg-slate-100 p-4 text-center text-sm font-bold text-sky-700">
+          <label className="mt-2 grid min-h-44 cursor-pointer place-items-center overflow-hidden rounded-2xl border border-dashed border-line-strong bg-field p-4 text-center text-sm font-bold text-selected-ink">
             {media?.kind === "image" ? (
               <img src={media.preview} alt="Selected content" className="max-h-72 w-full rounded-xl object-contain" />
             ) : media?.kind === "video" ? (
@@ -194,7 +231,7 @@ export function CreateTab({ session }: { session: Session }) {
             ) : (
               <div>
                 <p>Choose an image or short video</p>
-                <p className="mt-2 text-xs font-normal text-slate-500">
+                <p className="mt-2 text-xs font-normal text-muted">
                   JPG, PNG, WebP, MP4, WebM or MOV · video up to 1 minute · maximum 7 MB
                 </p>
               </div>
@@ -211,7 +248,7 @@ export function CreateTab({ session }: { session: Session }) {
             />
           </label>
           {media ? (
-            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted">
               <span className="truncate">
                 {media.name}
                 {media.duration_seconds != null ? ` · ${Math.ceil(media.duration_seconds)}s` : ""}
@@ -222,7 +259,7 @@ export function CreateTab({ session }: { session: Session }) {
                   setMedia(null);
                   setResult(null);
                 }}
-                className="shrink-0 font-bold text-sky-700"
+                className="shrink-0 font-bold text-primary-hover"
               >
                 Remove
               </button>
@@ -233,7 +270,7 @@ export function CreateTab({ session }: { session: Session }) {
           <textarea
             value={information}
             onChange={(event) => setInformation(event.target.value)}
-            className="mt-2 min-h-40 w-full rounded-2xl border border-slate-200 p-4 outline-none focus:ring-2 focus:ring-sky-400"
+            className="mt-2 min-h-40 w-full rounded-2xl border border-line bg-field p-4 outline-none focus:ring-2 focus:ring-primary/30"
             placeholder="Tell me about your post so we can generate content that fits it better."
           />
           <div className="mt-4">
@@ -256,19 +293,19 @@ export function CreateTab({ session }: { session: Session }) {
               otherPlaceholder="Write your goal"
             />
           </div>
-          <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold">
+          <label className="mt-4 flex cursor-pointer items-center gap-3 rounded-2xl bg-subtle px-4 py-3 text-sm font-bold">
             <input
               type="checkbox"
               checked={useContext}
               onChange={(event) => setUseContext(event.target.checked)}
-              className="h-4 w-4 accent-sky-600"
+              className="h-4 w-4 accent-primary"
             />
             Use account context
           </label>
           <button
             disabled={busy || (!information.trim() && !media) || !effectiveGoal || !selected.length}
             onClick={() => void generate()}
-            className="mt-5 w-full rounded-2xl bg-sky-600 py-4 font-black text-white disabled:opacity-50"
+            className="mt-5 w-full rounded-2xl bg-primary py-4 font-black text-white hover:bg-primary-hover disabled:opacity-50"
           >
             {busy ? "Creating…" : "Create caption"}
           </button>
@@ -286,7 +323,7 @@ export function CreateTab({ session }: { session: Session }) {
               <label className="mt-4 block text-sm font-bold">
                 Hashtags
                 <textarea
-                  className={`mt-2 min-h-24 font-normal text-sky-700 ${textareaClass}`}
+                  className={`mt-2 min-h-24 font-normal text-primary-hover ${textareaClass}`}
                   value={result.hashtags}
                   onChange={(event) => setResult({ ...result, hashtags: event.target.value })}
                 />
@@ -301,7 +338,7 @@ export function CreateTab({ session }: { session: Session }) {
                       disabled={Boolean(blocker) || Boolean(sharing)}
                       title={blocker ?? undefined}
                       onClick={() => void share(platform)}
-                      className="min-h-12 rounded-2xl bg-sky-600 px-4 py-3 text-sm font-black text-white disabled:bg-sky-100 disabled:text-slate-500"
+                      className="min-h-12 rounded-2xl bg-primary px-4 py-3 text-sm font-black text-white hover:bg-primary-hover disabled:bg-selected disabled:text-muted"
                     >
                       {sharing === platform ? "Sharing…" : `Share to ${platform}`}
                     </button>
@@ -311,7 +348,7 @@ export function CreateTab({ session }: { session: Session }) {
               {publicationResults.map((item) => (
                 <p
                   key={item.platform}
-                  className={`mt-3 text-sm font-semibold ${item.status === "published" ? "text-green-700" : "text-red-700"}`}
+                  className={`mt-3 text-sm font-semibold ${item.status === "published" ? "text-green-700" : "text-danger"}`}
                 >
                   {item.message}
                 </p>
@@ -320,6 +357,12 @@ export function CreateTab({ session }: { session: Session }) {
           ) : null}
         </div>
       </div>
+      <AiConsentDialog
+        open={consentDialogOpen}
+        busy={savingConsent}
+        onAccept={acceptConsent}
+        onNotNow={() => setConsentDialogOpen(false)}
+      />
     </>
   );
 }

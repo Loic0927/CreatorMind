@@ -6,7 +6,12 @@ const SESSION_KEY = "postbridge.mobile.session";
 export type Session = {
   accessToken: string;
   expiresAt: string;
-  user: { id: string; email: string };
+  user: {
+    id: string;
+    email: string;
+    ai_processing_consented?: boolean;
+    ai_processing_consented_at?: string | null;
+  };
 };
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {

@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet, Text } from "react-native";
+import { colors } from "../theme/colors";
 
 export function Button({
   label,
@@ -30,10 +31,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0284C7",
+    backgroundColor: colors.primary,
   },
-  secondary: { backgroundColor: "#E0F2FE" },
-  text: { color: "white", fontWeight: "800" },
-  secondaryText: { color: "#0369A1" },
+  secondary: { backgroundColor: colors.selected },
+  text: { color: colors.white, fontWeight: "800" },
+  secondaryText: { color: colors.selectedInk },
   disabled: { opacity: 0.55 },
 });

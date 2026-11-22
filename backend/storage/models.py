@@ -57,6 +57,7 @@ class StoreData(BaseModel):
     tracked_posts: list["TrackedPost"] = Field(default_factory=list)
     instagram_insight_snapshots: list["InstagramInsightSnapshot"] = Field(default_factory=list)
     instagram_comments: list["InstagramComment"] = Field(default_factory=list)
+    instagram_data_deletion_requests: list["InstagramDataDeletionRequest"] = Field(default_factory=list)
 
 
 class InstagramAccount(BaseModel):
@@ -77,6 +78,20 @@ class InstagramAccount(BaseModel):
     connected_at: datetime
     last_synced_at: datetime | None = None
     last_error: str | None = None
+
+
+class InstagramDataDeletionRequest(BaseModel):
+    """Confirmation state retained after Instagram data has been removed.
+
+    The confirmation code is intentionally the only identifier kept for a Meta
+    deletion request. In particular, the app-scoped Instagram user id and the
+    signed request itself are not retained.
+    """
+
+    code: str
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
 
 
 class InstagramMedia(BaseModel):

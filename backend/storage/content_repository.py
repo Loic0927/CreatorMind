@@ -215,6 +215,19 @@ class ContentRepository:
     def clear_local_user_cache(self, user_id: str) -> None:
         self._local_text_cache = {key: value for key, value in self._local_text_cache.items() if key[0] != user_id}
 
+    def clear_text_cache_for_user(self, user_id: str) -> None:
+        """Remove generated text when a user revokes AI-processing consent."""
+        self.clear_local_user_cache(user_id)
+        if not self.persistent:
+            return
+        factory = session_factory()
+        with factory.begin() as session:
+            records = session.scalars(
+                select(InsightTextCacheRecord).where(InsightTextCacheRecord.user_id == user_id)
+            ).all()
+            for record in records:
+                session.delete(record)
+
     @staticmethod
     def _media(item: InstagramMediaRecord) -> InstagramMedia:
         return InstagramMedia(

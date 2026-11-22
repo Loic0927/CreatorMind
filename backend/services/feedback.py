@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -9,8 +10,6 @@ import os
 import re
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -18,23 +17,65 @@ from uuid import uuid4
 
 from sqlalchemy import delete
 
-from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
+from backend.auth import has_ai_processing_consent
+from backend.services.gemini import (
+    GeminiConfigurationError,
+    GeminiGeneration,
+    GeminiUpstreamError,
+    generate_gemini_content,
+)
 from backend.services.media_inputs import load_media_input
+from backend.services.tracked_items import load_tracked_items
 from backend.storage.content_repository import get_content_repository
 from backend.storage.database import session_factory
 from backend.storage.models import InsightTextCache
 from backend.storage.sql_models import AIGenerationLogRecord
 
 LOGGER = logging.getLogger("postbridge.feedback")
-PROMPT_VERSION = "summary-facts-media-v2"
+PROMPT_VERSION = "summary-facts-media-v4"
 MEDIA_FACT_ID = "media_content"
 MIN_PEERS = 6
 PERCENTILE_RANGE_AT = 15
 PACE_MOST_FRACTION = 0.75
 PACE_HALF_FRACTION = 0.40
+GROWTH_SNAPSHOT_MINIMUM_SPACING_HOURS = 6
+GROWTH_SNAPSHOT_MINIMUM_SPACING = timedelta(hours=GROWTH_SNAPSHOT_MINIMUM_SPACING_HOURS)
+GROWTH_LEVELLED_OFF_DAILY_THRESHOLD = 0.02
 CAUSAL = re.compile(r"\b(because|due to|caused|thanks to|led to)\b", re.I)
 PREDICTIVE = re.compile(r"\b(will|going to|likely to|guarantee|boost)\b", re.I)
-ADVICE = re.compile(r"\b(try|consider|could|might|option|recommend|suggest|reuse|focus|keep|make)\b", re.I)
+ADVICE = re.compile(r"\b(try|consider|could|might|option|recommend|suggest|reuse|focus|keep|make|you should)\b", re.I)
+IMPERATIVE_ADVICE = re.compile(r"\b(try|consider|recommend|suggest|you should)\b", re.I)
+
+FEEDBACK_SYSTEM_INSTRUCTION = (
+    "You write concise, evidence-first social-media post summaries. Return only JSON matching the response schema. "
+    "Use at most three sentences and at most one suggestion. Cite only supplied qualifying fact ids. Use plain language. "
+    "Do not restate values, ranks, ranges, dates, or titles. Make no causal, predictive, or promise claim. "
+    "If attached image or video input is supplied, describe only concrete visual or audible content grounded in it and cite "
+    "the media_content fact. For video, visual sequence, spoken audio, and on-screen text are eligible evidence. Do not infer "
+    "audience reaction or say media caused performance. Do not give hashtag, call-to-action, or engagement-bait advice. "
+    "A suggestion must follow directly from a fact, be optional, and promise nothing."
+)
+FEEDBACK_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "sentences": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["observation", "suggestion"]},
+                    "fact_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "kind", "fact_ids"],
+            },
+        }
+    },
+    "required": ["sentences"],
+}
+FEEDBACK_TEMPERATURE = 0.2
+FEEDBACK_MAX_OUTPUT_TOKENS = 500
 
 
 def _aware(value: datetime) -> datetime:
@@ -94,29 +135,49 @@ def build_feedback_facts(
         snapshots.sort(key=lambda row: _aware(row.captured_at))
 
     facts: list[dict[str, Any]] = []
-    spaced = next(
-        (
-            (a, b)
-            for a in snapshots
-            for b in reversed(snapshots)
-            if _aware(b.captured_at) - _aware(a.captured_at) >= timedelta(hours=6)
-        ),
-        None,
-    )
+    spaced = None
+    if snapshots:
+        last = snapshots[-1]
+        previous = next(
+            (
+                snapshot
+                for snapshot in reversed(snapshots[:-1])
+                if _aware(last.captured_at) - _aware(snapshot.captured_at) >= GROWTH_SNAPSHOT_MINIMUM_SPACING
+            ),
+            None,
+        )
+        if previous is not None:
+            spaced = (previous, last)
     growth_value = ""
+    growth_metric: str | None = None
+    elapsed_hours: float | None = None
     if spaced:
-        first, last = spaced
-        first_value = _value(first, "views") or _value(first, "reach")
-        last_value = _value(last, "views") or _value(last, "reach")
+        previous, last = spaced
+        elapsed_hours = (_aware(last.captured_at) - _aware(previous.captured_at)).total_seconds() / 3600
+        previous_views = _value(previous, "views")
+        last_views = _value(last, "views")
+        previous_reach = _value(previous, "reach")
+        last_reach = _value(last, "reach")
+        if previous_views is not None and last_views is not None:
+            growth_metric = "views"
+            first_value, last_value = previous_views, last_views
+        elif previous_reach is not None and last_reach is not None:
+            growth_metric = "reach"
+            first_value, last_value = previous_reach, last_reach
+        else:
+            first_value = last_value = None
         if first_value is not None and last_value is not None:
-            growth_value = "levelled_off" if _mature(media, current) else "still_growing"
+            daily_growth = (last_value - first_value) / max(last_value, 1) * (24 / elapsed_hours)
+            growth_value = "levelled_off" if daily_growth < GROWTH_LEVELLED_OFF_DAILY_THRESHOLD else "still_growing"
     facts.append(
         _fact(
             "growth_stage",
             "growth_stage",
             {
                 "snapshot_ids": [spaced[0].id, spaced[1].id] if spaced else [],
-                "minimum_spacing_hours": 6,
+                "metric": growth_metric,
+                "elapsed_hours": round(elapsed_hours, 2) if elapsed_hours is not None else None,
+                "minimum_spacing_hours": GROWTH_SNAPSHOT_MINIMUM_SPACING_HOURS,
             },
             growth_value,
             bool(growth_value),
@@ -313,7 +374,7 @@ def validate_output(payload: Any, facts: list[dict[str, Any]]) -> bool:
             suggestions += 1
             if not ADVICE.search(text):
                 return False
-        elif ADVICE.search(text):
+        elif IMPERATIVE_ADVICE.search(text):
             return False
     return suggestions <= 1
 
@@ -327,12 +388,20 @@ class FeedbackProvider(Protocol):
         facts: list[dict[str, Any]],
         *,
         media_input: tuple[bytes, str] | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> FeedbackGeneration | dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class FeedbackGeneration:
+    """A structured provider response plus optional audit metadata."""
+
+    payload: dict[str, Any]
+    token_usage: dict[str, Any] | None = None
 
 
 @dataclass
 class GeminiFeedbackProvider:
-    generator: Callable[..., str] = generate_gemini_content
+    generator: Callable[..., str | GeminiGeneration] = generate_gemini_content
     name: str = "gemini"
 
     @property
@@ -344,65 +413,48 @@ class GeminiFeedbackProvider:
         facts: list[dict[str, Any]],
         *,
         media_input: tuple[bytes, str] | None = None,
-    ) -> dict[str, Any]:
-        prompt = (
-            'Return JSON only: {"sentences":[{"text":string,"kind":"observation|suggestion","fact_ids":[string]}]}. '
-            "Use at most three sentences and at most one suggestion. Cite only supplied fact ids. Use plain language. "
-            "Do not restate values, ranks, ranges, dates, or titles. Make no causal, predictive, or promise claim. "
-            "If an attached image or video is supplied, you may describe concrete visual or audible content only when it is grounded in that media "
-            "and cite the media_content fact. For video, consider the visual sequence, spoken audio, and on-screen text. Do not infer audience reaction "
-            "or claim that the media caused the performance. "
-            "Give no hashtag, call-to-action, or engagement-bait advice. A suggestion must follow directly from a fact, be optional, and promise nothing.\n"
-            f"FACTS_JSON={json.dumps(facts, separators=(',', ':'))}"
-        )
-        timeout = max(1, int(os.getenv("FEEDBACK_REQUEST_TIMEOUT_SECONDS", "12")))
+    ) -> FeedbackGeneration:
+        prompt = f"FACTS_JSON={json.dumps(facts, separators=(',', ':'))}"
+        timeout_ms = max(1, int(os.getenv("FEEDBACK_REQUEST_TIMEOUT_SECONDS", "12"))) * 1000
+        request: dict[str, Any] = {
+            "system_instruction": FEEDBACK_SYSTEM_INSTRUCTION,
+            "temperature": FEEDBACK_TEMPERATURE,
+            "max_output_tokens": FEEDBACK_MAX_OUTPUT_TOKENS,
+            "response_mime_type": "application/json",
+            # google-genai normalizes direct schema dictionaries in place.
+            # Keep the reusable contract immutable across requests and retries.
+            "response_schema": copy.deepcopy(FEEDBACK_RESPONSE_SCHEMA),
+            "timeout_ms": timeout_ms,
+            "return_usage": True,
+        }
+        if media_input is not None:
+            media_bytes, media_mime_type = media_input
+            request.update(image_bytes=media_bytes, image_mime_type=media_mime_type)
+
         last_error: Exception | None = None
         for attempt in range(2):
-            executor = ThreadPoolExecutor(max_workers=1)
-            if media_input is None:
-                future = executor.submit(self.generator, prompt)
-            else:
-                media_bytes, media_mime_type = media_input
-                future = executor.submit(
-                    self.generator,
-                    prompt,
-                    image_bytes=media_bytes,
-                    image_mime_type=media_mime_type,
-                )
             try:
-                raw = future.result(timeout=timeout)
-                executor.shutdown(wait=False, cancel_futures=True)
-                return json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
-            except (FutureTimeout, json.JSONDecodeError, GeminiConfigurationError, GeminiUpstreamError) as exc:
+                generated = self.generator(prompt, **request)
+                if isinstance(generated, GeminiGeneration):
+                    raw = generated.text
+                    token_usage = generated.token_usage
+                else:
+                    raw = generated
+                    token_usage = None
+                if not isinstance(raw, str):
+                    raise GeminiUpstreamError("Gemini returned an invalid response.")
+                payload = json.loads(
+                    raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+                )
+                if not isinstance(payload, dict):
+                    raise GeminiUpstreamError("Gemini returned an invalid response.")
+                return FeedbackGeneration(payload=payload, token_usage=token_usage)
+            except (json.JSONDecodeError, GeminiConfigurationError, GeminiUpstreamError) as exc:
                 last_error = exc
-                future.cancel()
-                executor.shutdown(wait=False, cancel_futures=True)
                 if attempt == 0 and not isinstance(exc, GeminiConfigurationError):
                     continue
                 raise GeminiUpstreamError("Feedback generation failed.") from None
         raise GeminiUpstreamError("Feedback generation failed.") from last_error
-
-
-@dataclass
-class TrainedFeedbackProvider:
-    name: str = "trained"
-    model: str = "creator-linear-regression-views"
-
-    @property
-    def healthy(self) -> bool:
-        # The only repository artifact is a numeric views predictor trained on
-        # synthetic rows. It fails the product acceptance check by design.
-        return False
-
-    def generate(
-        self,
-        facts: list[dict[str, Any]],
-        *,
-        media_input: tuple[bytes, str] | None = None,
-    ) -> dict[str, Any]:
-        del facts
-        del media_input
-        raise RuntimeError("The trained numeric predictor is not a feedback provider.")
 
 
 def _hash(value: Any) -> str:
@@ -411,18 +463,11 @@ def _hash(value: Any) -> str:
 
 def _selection() -> tuple[list[FeedbackProvider], str]:
     configured = os.getenv("FEEDBACK_PROVIDER", "auto").strip().lower()
-    trained = TrainedFeedbackProvider()
     gemini = GeminiFeedbackProvider()
-    trained_enabled = trained.healthy and os.getenv("FEEDBACK_TRAINED_ENABLED", "false").lower() == "true"
-    if configured == "trained" and trained_enabled:
-        providers: list[FeedbackProvider] = [trained, gemini]
-    elif configured == "trained":
-        LOGGER.warning("feedback_provider_disabled provider=trained reason=numeric_predictor_ineligible")
-        providers = [gemini]
-    elif configured == "gemini":
-        providers = [gemini]
-    else:
-        providers = ([trained] if trained_enabled else []) + [gemini]
+    if configured not in {"auto", "gemini"}:
+        LOGGER.warning("feedback_provider_ignored provider=%s reason=unsupported", configured)
+        configured = "auto"
+    providers: list[FeedbackProvider] = [gemini]
     signature = f"{configured}:{','.join(f'{p.name}/{p.model}' for p in providers)}"
     LOGGER.info(
         "feedback_provider_selection configured=%s chain=%s",
@@ -440,6 +485,7 @@ def _log(
     status: str,
     latency_ms: int | None,
     raw: str | None,
+    token_usage: dict[str, Any] | None = None,
 ) -> None:
     if not get_content_repository().persistent:
         return
@@ -456,7 +502,7 @@ def _log(
                 input_hash=input_hash,
                 status=status,
                 latency_ms=latency_ms,
-                token_usage=None,
+                token_usage=token_usage,
                 raw_response=(raw or "")[:4000] or None,
                 created_at=now,
             )
@@ -466,21 +512,47 @@ def _log(
         )
 
 
-def _media_fact(media_input: tuple[bytes, str] | None) -> dict[str, Any] | None:
-    if media_input is None:
+def _media_fact(media_identity: dict[str, Any] | None, media_input: tuple[bytes, str] | None) -> dict[str, Any] | None:
+    """Build model evidence without putting downloaded bytes in the cache key.
+
+    The stable identity comes from persisted Meta metadata.  The MIME type is
+    useful context for the model, but intentionally does not participate in
+    the input hash; a CDN content-type change must not trigger another model
+    request for the same post.
+    """
+    if media_identity is None or media_input is None:
         return None
-    media_bytes, media_mime_type = media_input
+    _, media_mime_type = media_input
     return _fact(
         MEDIA_FACT_ID,
         "media_content",
         {
             "source": "attached_media",
             "mime_type": media_mime_type,
-            "sha256": hashlib.sha256(media_bytes).hexdigest(),
+            **media_identity,
         },
         "attached",
         True,
     )
+
+
+def _stable_media_identity(media: Any) -> dict[str, str] | None:
+    """Return the persisted identifiers used for Summary cache invalidation."""
+    if media is None:
+        return None
+    internal_id = str(getattr(media, "id", "") or "").strip()
+    provider_id = str(getattr(media, "instagram_media_id", "") or "").strip()
+    media_type = str(getattr(media, "media_type", "") or "").strip()
+    published_at = getattr(media, "published_at", None)
+    if not (internal_id or provider_id or media_type or published_at):
+        return None
+    timestamp = published_at.isoformat() if hasattr(published_at, "isoformat") else str(published_at or "")
+    return {
+        "internal_media_id": internal_id,
+        "provider_media_id": provider_id,
+        "media_type": media_type,
+        "provider_timestamp": timestamp,
+    }
 
 
 def generate_summary(
@@ -489,18 +561,42 @@ def generate_summary(
     facts: list[dict[str, Any]],
     *,
     media_input: tuple[bytes, str] | None = None,
+    media_identity: dict[str, Any] | None = None,
+    media_loader: Callable[[], tuple[bytes, str] | None] | None = None,
 ) -> str | None:
-    input_facts = list(facts)
-    media_fact = _media_fact(media_input)
-    if media_fact is not None:
-        input_facts.append(media_fact)
-    qualifying = [fact for fact in input_facts if fact.get("qualifies")]
+    """Generate or retrieve a Summary without fetching media on a cache hit.
+
+    ``media_identity`` must contain stable persisted identifiers in production.
+    ``media_input`` remains a narrow compatibility path for direct callers and
+    tests; write-side callers use ``media_loader`` so cache lookup happens
+    before a Meta CDN download.
+    """
+    base_facts = list(facts)
+    # Keep compatibility for direct callers while ensuring the normal path
+    # uses only persisted media identifiers rather than bytes in its cache key.
+    if media_identity is None and media_input is not None:
+        media_identity = {"legacy_content_hash": hashlib.sha256(media_input[0]).hexdigest()}
+    qualifying = [fact for fact in base_facts if fact.get("qualifies")]
     metric_facts = [fact for fact in qualifying if fact.get("id") != MEDIA_FACT_ID]
-    providers, signature = _selection()
-    input_hash = _hash({"facts": input_facts, "selection": signature, "prompt_version": PROMPT_VERSION})
     repository = get_content_repository()
     key = f"summary:{tracked_post_id}"
     existing = repository.get_text_cache(user_id, key)
+
+    consented = has_ai_processing_consent(user_id)
+    if consented:
+        providers, signature = _selection()
+    else:
+        # A deterministic result is deliberately separated from an AI result,
+        # so granting consent later necessarily refreshes the cache.
+        providers, signature = [], "deterministic-without-ai-consent-v1"
+    input_hash = _hash(
+        {
+            "facts": base_facts,
+            "media": media_identity,
+            "selection": signature,
+            "prompt_version": PROMPT_VERSION,
+        }
+    )
     if existing and existing.input_hash == input_hash:
         return existing.text or None
     if not metric_facts:
@@ -517,12 +613,48 @@ def generate_summary(
                 model_name="none",
                 provider="none",
                 prompt_version=PROMPT_VERSION,
-                facts_json=input_facts,
+                facts_json=base_facts,
                 created_at=existing.created_at if existing else now,
                 updated_at=now,
             )
         )
         return None
+
+    if not consented:
+        payload = template_output(metric_facts)
+        text = " ".join(sentence["text"].strip() for sentence in payload["sentences"])
+        now = datetime.now(UTC)
+        repository.upsert_text_cache(
+            InsightTextCache(
+                id=existing.id if existing else str(uuid4()),
+                user_id=user_id,
+                tracked_post_id=tracked_post_id,
+                cache_key=key,
+                input_hash=input_hash,
+                text=text,
+                model_name="deterministic-v1",
+                provider="template",
+                prompt_version=PROMPT_VERSION,
+                facts_json=base_facts,
+                created_at=existing.created_at if existing else now,
+                updated_at=now,
+            )
+        )
+        return text or None
+
+    if media_input is None and media_loader is not None:
+        try:
+            media_input = media_loader()
+        except Exception as exc:  # pragma: no cover - defensive download isolation
+            LOGGER.warning(
+                "summary_media_load_failed tracked_post_id=%s error_type=%s", tracked_post_id, type(exc).__name__
+            )
+            media_input = None
+    input_facts = list(base_facts)
+    media_fact = _media_fact(media_identity, media_input)
+    if media_fact is not None:
+        input_facts.append(media_fact)
+    qualifying = [fact for fact in input_facts if fact.get("qualifies")]
 
     payload = None
     chosen = "template"
@@ -530,11 +662,15 @@ def generate_summary(
     for provider in providers:
         started = time.monotonic()
         raw = None
+        token_usage = None
         try:
             if media_input is None:
                 candidate = provider.generate(qualifying)
             else:
                 candidate = provider.generate(qualifying, media_input=media_input)
+            if isinstance(candidate, FeedbackGeneration):
+                token_usage = candidate.token_usage
+                candidate = candidate.payload
             raw = json.dumps(candidate, separators=(",", ":"))
             valid = validate_output(candidate, qualifying)
             _log(
@@ -545,6 +681,7 @@ def generate_summary(
                 "ok" if valid else "invalid",
                 int((time.monotonic() - started) * 1000),
                 raw,
+                token_usage,
             )
             if valid:
                 payload = candidate
@@ -561,6 +698,7 @@ def generate_summary(
                 "error",
                 int((time.monotonic() - started) * 1000),
                 type(exc).__name__,
+                token_usage,
             )
             LOGGER.warning("feedback_provider_fallback provider=%s reason=%s", provider.name, type(exc).__name__)
     if payload is None:
@@ -603,18 +741,13 @@ def refresh_summary_for_user(user_id: str, tracked_post_id: str | None = None) -
     account = get_instagram_repository().get_connection(user_id)
     if not account:
         return
-    media = {row.id: row for row in content.media_for_account(account.id)}
-    items = []
-    for tracked in content.tracked(user_id, active_only=False):
-        snapshots = content.snapshots([tracked.media_id])
-        items.append(
-            {
-                "tracking": tracked,
-                "media": media.get(tracked.media_id),
-                "latest": max(snapshots, key=lambda row: _aware(row.captured_at)) if snapshots else None,
-                "snapshots": snapshots,
-            }
-        )
+    items, _ = load_tracked_items(
+        user_id,
+        account=account,
+        active_only=False,
+        include_comments=False,
+        repository=content,
+    )
     for selected in items:
         if selected.get("media") is None or (tracked_post_id and selected["tracking"].id != tracked_post_id):
             continue
@@ -622,13 +755,11 @@ def refresh_summary_for_user(user_id: str, tracked_post_id: str | None = None) -
             selected, items, summary=None, audience_comments={"state": "feature_off", "message": ""}
         )
         facts = build_feedback_facts(selected, items, analysis)
-        media_input = load_media_input(selected["media"])
-        generate_summary(user_id, selected["tracking"].id, facts, media_input=media_input)
-
-
-def summary_note(status: str) -> str | None:
-    if status == "unavailable":
-        return "Early-growth data isn't available for this post because it was added after its first 24 hours."
-    if status == "partial":
-        return "Some early-growth checkpoints are missing because tracking started late."
-    return None
+        media = selected["media"]
+        generate_summary(
+            user_id,
+            selected["tracking"].id,
+            facts,
+            media_identity=_stable_media_identity(media),
+            media_loader=lambda media=media: load_media_input(media),
+        )

@@ -95,7 +95,12 @@ def create_login_code(email: str) -> str:
     return code
 
 
-def verify_login_code(email: str, code: str) -> tuple[UserRecord, str, datetime]:
+def verify_login_code(
+    email: str,
+    code: str,
+    *,
+    reviewer_code_match: bool | None = None,
+) -> tuple[UserRecord, str, datetime]:
     now = datetime.now(UTC)
     factory = session_factory()
     with factory() as session:
@@ -110,7 +115,12 @@ def verify_login_code(email: str, code: str) -> tuple[UserRecord, str, datetime]
                 status_code=401, detail={"code": "invalid_code", "message": "The sign-in code is invalid or expired."}
             )
         record.attempts += 1
-        if not hmac.compare_digest(record.code_hash, _code_hash(email, code.strip())):
+        code_matches = (
+            reviewer_code_match
+            if reviewer_code_match is not None
+            else hmac.compare_digest(record.code_hash, _code_hash(email, code.strip()))
+        )
+        if not code_matches:
             # Persist failed attempts before returning the error; otherwise a
             # transaction rollback would let an attacker retry indefinitely.
             session.commit()
@@ -188,3 +198,27 @@ def update_account_context(user_id: str, value: str) -> str:
         user.account_context = normalized
         user.updated_at = datetime.now(UTC)
     return normalized
+
+
+def ai_processing_consent_at(user_id: str) -> datetime | None:
+    """Return the opt-in timestamp without treating an absent account as consent."""
+    factory = session_factory()
+    with factory() as session:
+        user = session.get(UserRecord, user_id)
+        return _utc(user.ai_processing_consented_at) if user and user.ai_processing_consented_at else None
+
+
+def has_ai_processing_consent(user_id: str) -> bool:
+    return ai_processing_consent_at(user_id) is not None
+
+
+def set_ai_processing_consent(user_id: str, granted: bool) -> datetime | None:
+    now = datetime.now(UTC)
+    factory = session_factory()
+    with factory.begin() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "Account was not found."})
+        user.ai_processing_consented_at = now if granted else None
+        user.updated_at = now
+        return user.ai_processing_consented_at

@@ -3,24 +3,32 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
+  NotComparableReason,
   RangeRow,
   Session,
   TrackedPost,
   getTrackedPost,
   getTrackedPosts,
+  grantAIProcessingConsent,
   refreshTrackedPost,
 } from "@/lib/postbridge";
+import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
 import { LoadingState } from "@/components/dashboard/LoadingState";
 import { Card, ErrorBanner, Metric, PageTitle } from "@/components/dashboard/ui";
 
 const deletedMediaCodes = ["media_not_found", "instagram_media_unavailable"];
 const staleMessage = "Couldn't update, showing earlier data";
-const markerColors: Record<RangeRow["status"], string> = { above: "#15803D", below: "#92400E", inside: "#0284c7" };
-const backButton = "min-h-10 rounded-xl bg-sky-100 px-4 text-sm font-bold text-sky-700";
+const markerColors: Record<RangeRow["status"], string> = { above: "#15803D", below: "#92400E", inside: "#076BD1" };
+const backButton = "min-h-10 rounded-xl bg-selected px-4 text-sm font-bold text-selected-ink hover:bg-line-strong";
 const shortDate = (date: string) =>
   new Date(date).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 const cover = (post: TrackedPost) => post.media.thumbnail_url || post.media.media_url;
+const comparisonUnavailableMessage = (reason?: NotComparableReason | null) => {
+  if (reason === "too_early") return "Too early to compare — check back later.";
+  if (reason === "too_few_posts") return "Track more posts in this format to compare.";
+  return "Not enough comparable posts yet.";
+};
 
 export function AnalyzeTab({
   session,
@@ -38,6 +46,9 @@ export function AnalyzeTab({
   const [refreshing, setRefreshing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(
@@ -72,6 +83,7 @@ export function AnalyzeTab({
 
   const choose = (id: string) => {
     setDeleted(false);
+    setShowComments(false);
     setSelectedId(id);
     void load(id);
   };
@@ -84,7 +96,7 @@ export function AnalyzeTab({
     void loadPosts();
   };
 
-  const refresh = async () => {
+  const refreshMetrics = async () => {
     if (!selectedId || refreshing || cooldown) return;
     setRefreshing(true);
     setError("");
@@ -94,9 +106,24 @@ export function AnalyzeTab({
       window.setTimeout(() => setCooldown(false), 60_000);
     } catch (reason) {
       if (reason instanceof ApiError && deletedMediaCodes.includes(reason.code)) setDeleted(true);
+      else if (reason instanceof ApiError && reason.code === "consent_required") setConsentDialogOpen(true);
       else setError(errorMessage(reason, staleMessage));
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const acceptConsent = async () => {
+    setSavingConsent(true);
+    setError("");
+    try {
+      await grantAIProcessingConsent(session);
+      setConsentDialogOpen(false);
+      await refreshMetrics();
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save AI processing consent."));
+    } finally {
+      setSavingConsent(false);
     }
   };
 
@@ -105,7 +132,7 @@ export function AnalyzeTab({
       <section className="mx-auto w-full lg:w-4/5">
         <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 md:mb-7">
           <PageTitle>Post</PageTitle>
-          <span className="text-sm font-medium text-slate-500 md:text-base">Choose one to analyze</span>
+          <span className="text-sm font-medium text-muted md:text-base">Choose one to analyze</span>
         </div>
         <ErrorBanner message={error} />
         {loading ? (
@@ -114,7 +141,7 @@ export function AnalyzeTab({
           <div className="grid gap-5 md:grid-cols-2">
             {posts.map((item) => (
               <button key={item.tracking.id} onClick={() => choose(item.tracking.id)} className="text-left">
-                <div className="h-full rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="h-full rounded-3xl border border-line bg-surface p-5 shadow-soft md:p-6">
                   {cover(item) ? (
                     <img
                       alt="Instagram post"
@@ -122,7 +149,7 @@ export function AnalyzeTab({
                       className="mb-4 aspect-video w-full rounded-2xl object-cover"
                     />
                   ) : (
-                    <div className="mb-4 aspect-video w-full rounded-2xl bg-sky-100" />
+                    <div className="mb-4 aspect-video w-full rounded-2xl bg-selected" />
                   )}
                   <p className="line-clamp-2 font-bold">{item.media.caption || "Instagram post"}</p>
                   <div className="mt-5 grid grid-cols-3 gap-2 text-sm">
@@ -154,14 +181,14 @@ export function AnalyzeTab({
         </button>
       </div>
       {error ? (
-        <p className="mb-3 text-sm text-slate-500">
+        <p className="mb-3 text-sm text-muted">
           {error.includes("reconnect") ? "Reconnect Instagram to update." : staleMessage}
         </p>
       ) : null}
       {deleted ? (
         <Card>
           <p className="text-lg font-black">This post is deleted</p>
-          <p className="mt-2 text-sm text-slate-500">This post is no longer available on Instagram.</p>
+          <p className="mt-2 text-sm text-muted">This post is no longer available on Instagram.</p>
           <button onClick={back} className={`mt-5 ${backButton}`}>
             Back
           </button>
@@ -179,18 +206,18 @@ export function AnalyzeTab({
                   className="h-[104px] w-[104px] shrink-0 rounded-2xl object-cover"
                 />
               ) : (
-                <div className="h-[104px] w-[104px] shrink-0 rounded-2xl bg-sky-200" />
+                <div className="h-[104px] w-[104px] shrink-0 rounded-2xl bg-line-strong" />
               )}
               <div className="flex min-w-0 flex-1 flex-col">
                 <p className="truncate text-[17px] font-black lg:text-lg">{post.media.caption || "Instagram post"}</p>
-                <p className="mt-1 text-[13px] text-slate-500">
+                <p className="mt-1 text-[13px] text-muted">
                   {shortDate(post.media.published_at)} · {analysis?.media_format ?? "Post"} · {analysis?.age_days ?? 0}{" "}
                   days
                 </p>
                 <button
-                  onClick={() => void refresh()}
+                  onClick={() => void refreshMetrics()}
                   disabled={refreshing || cooldown}
-                  className="-ml-3 mt-auto flex min-h-11 w-fit items-end px-3 pb-0 text-[13px] font-semibold text-sky-600 disabled:opacity-50"
+                  className="-ml-3 mt-auto flex min-h-11 w-fit items-end px-3 pb-0 text-[13px] font-semibold text-primary disabled:opacity-50"
                 >
                   {refreshing ? "Refreshing…" : cooldown ? "Refreshed" : "Refresh metrics"}
                 </button>
@@ -206,7 +233,12 @@ export function AnalyzeTab({
           {analysis?.summary ? (
             <Card>
               <h2 className="text-xl font-black">Summary</h2>
-              <p className="mt-3 text-[15px] leading-5 text-slate-900">{analysis.summary}</p>
+              <p className="mt-3 text-[15px] leading-5 text-ink">{analysis.summary}</p>
+            </Card>
+          ) : analysis?.summary_status === "pending" ? (
+            <Card>
+              <h2 className="text-xl font-black">Summary</h2>
+              <p className="mt-3 text-[15px] leading-5 text-muted">Your summary is being prepared.</p>
             </Card>
           ) : null}
 
@@ -237,20 +269,62 @@ export function AnalyzeTab({
             </>
           ) : (
             <Card>
-              <p className="text-sm text-slate-500">Not enough comparable posts yet</p>
+              <p className="text-sm text-muted">{comparisonUnavailableMessage(analysis?.not_comparable_reason)}</p>
             </Card>
           )}
 
           {analysis ? (
             <Card>
               <h2 className="text-xl font-black">Audience comments</h2>
-              <p className="mt-4 text-sm leading-5 text-slate-500">
-                {analysis.audience_comments.description ?? analysis.audience_comments.message}
+              <p className="mt-4 text-sm leading-5 text-muted">
+                {analysis.audience_comments.description ??
+                  analysis.audience_comments.message ??
+                  "Audience comments are not available yet."}
               </p>
+              {analysis.audience_comments.state === "consent_required" ? (
+                <button
+                  type="button"
+                  onClick={() => setConsentDialogOpen(true)}
+                  className="mt-4 min-h-10 rounded-xl bg-primary px-4 text-sm font-black text-white hover:bg-primary-hover"
+                >
+                  Review AI data use
+                </button>
+              ) : null}
+              {analysis.audience_comments.items?.length ? (
+                <>
+                  <button
+                    type="button"
+                    aria-expanded={showComments}
+                    onClick={() => setShowComments((current) => !current)}
+                    className="mt-4 min-h-10 text-sm font-black text-primary-hover"
+                  >
+                    {showComments ? "Hide comments" : `Show comments (${analysis.audience_comments.items.length})`}
+                  </button>
+                  {showComments ? (
+                    <ul className="mt-2 divide-y divide-line border-t border-line">
+                      {analysis.audience_comments.items.map((comment) => (
+                        <li key={`${comment.timestamp}-${comment.text}`} className="py-3">
+                          <p className="whitespace-pre-wrap text-sm leading-5 text-ink">{comment.text}</p>
+                          <p className="mt-1 text-xs text-muted">
+                            {shortDate(comment.timestamp)} · {comment.like_count}{" "}
+                            {comment.like_count === 1 ? "like" : "likes"}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              ) : null}
             </Card>
           ) : null}
         </div>
       )}
+      <AiConsentDialog
+        open={consentDialogOpen}
+        busy={savingConsent}
+        onAccept={acceptConsent}
+        onNotNow={() => setConsentDialogOpen(false)}
+      />
     </section>
   );
 }
@@ -259,7 +333,7 @@ function Headline({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-[20px] font-black leading-none sm:text-[26px]">{value}</p>
-      <p className="mt-2 text-[12px] text-slate-500 sm:text-[13px]">{label}</p>
+      <p className="mt-2 text-[12px] text-muted sm:text-[13px]">{label}</p>
     </div>
   );
 }
@@ -289,14 +363,14 @@ function FindingCard({
               <b>
                 {metricLabel[row.metric]}: {formatMetric(row.metric, row.value)}
               </b>
-              <span className="shrink-0 text-slate-500">
+              <span className="shrink-0 text-muted">
                 usual {formatMetric(row.metric, row.usual_min)}–{formatMetric(row.metric, row.usual_max)}
               </span>
             </div>
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-slate-500">{empty}</p>
+        <p className="mt-3 text-sm text-muted">{empty}</p>
       )}
     </Card>
   );
@@ -317,28 +391,28 @@ function Range({ row }: { row: RangeRow }) {
         aria-label={`${label}: ${detail}`}
         aria-expanded={showValue}
         onClick={() => setShowValue((current) => !current)}
-        className="relative h-8 w-full rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+        className="relative h-8 w-full rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
       >
-        <span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-slate-100" />
+        <span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-subtle" />
         <span
-          className="absolute top-1/2 h-2 -translate-y-1/2 rounded-full bg-sky-200"
+          className="absolute top-1/2 h-2 -translate-y-1/2 rounded-full bg-line-strong"
           style={{ left: `${row.band_start}%`, width: `${Math.max(2, row.band_end - row.band_start)}%` }}
         />
         <span
-          className="absolute top-1/2 h-[14px] w-[14px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white"
+          className="absolute top-1/2 h-[14px] w-[14px] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface"
           style={{ left: `${row.marker}%`, background: markerColors[row.status] }}
         />
         {showValue ? (
           <span
             role="tooltip"
-            className="absolute bottom-7 z-10 -translate-x-1/2 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white shadow-lg"
+            className="absolute bottom-7 z-10 -translate-x-1/2 whitespace-nowrap rounded-lg bg-ink px-2.5 py-1.5 text-xs font-bold text-white shadow-float"
             style={{ left: `${Math.min(92, Math.max(8, row.marker))}%` }}
           >
             {detail}
           </span>
         ) : null}
       </button>
-      <span className="hidden text-right text-slate-500 sm:block">{detail}</span>
+      <span className="hidden text-right text-muted sm:block">{detail}</span>
     </div>
   );
 }

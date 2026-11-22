@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button } from "./src/components/ui";
 import { HomeScreen } from "./src/screens/HomeScreen";
@@ -20,7 +21,9 @@ import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TrackingReportScreen } from "./src/screens/TrackingReportScreen";
 import { getSession, logout, requestLoginCode, verifyLoginCode, Session } from "./src/services/auth";
 import { connectInstagram, getConnection, getTrackedPost } from "./src/services/api";
+import { legalUrl } from "./src/config/environment";
 import { AppScreen, Draft, InstagramConnection, TrackedPost } from "./src/types";
+import { colors } from "./src/theme/colors";
 
 const emptyDraft: Draft = {
   information: "",
@@ -70,7 +73,7 @@ function AppContent() {
   if (restoring)
     return (
       <View style={[styles.safe, styles.center]}>
-        <ActivityIndicator color="#0284C7" />
+        <ActivityIndicator color={colors.sky} />
       </View>
     );
   if (!session) return <Login onLogin={setSession} />;
@@ -154,6 +157,11 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const openLegal = (path: "/privacy" | "/terms") => {
+    void WebBrowser.openBrowserAsync(legalUrl(path)).catch(() =>
+      Alert.alert("Could not open this page", "Try again later."),
+    );
+  };
   const submit = async () => {
     if (!email.includes("@")) return Alert.alert("Enter a valid email");
     setBusy(true);
@@ -198,6 +206,15 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
           onChangeText={setCode}
         />
       )}
+      <View style={styles.legalLinks}>
+        <Pressable accessibilityRole="link" onPress={() => openLegal("/privacy")}>
+          <Text style={styles.legalLink}>Privacy</Text>
+        </Pressable>
+        <Text style={styles.legalSeparator}>·</Text>
+        <Pressable accessibilityRole="link" onPress={() => openLegal("/terms")}>
+          <Text style={styles.legalLink}>Terms</Text>
+        </Pressable>
+      </View>
       <Button
         label={busy ? "Please wait…" : sent ? "Verify and sign in" : "Email me a code"}
         onPress={submit}
@@ -217,36 +234,45 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   );
 }
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#F1F5F9" },
+  safe: { flex: 1, backgroundColor: colors.canvas },
   center: { alignItems: "center", justifyContent: "center" },
   appContent: { flex: 1 },
   body: { flex: 1 },
-  nav: { minHeight: 70, flexDirection: "row", backgroundColor: "white", borderTopWidth: 1, borderTopColor: "#E2E8F0" },
+  nav: {
+    minHeight: 70,
+    flexDirection: "row",
+    backgroundColor: colors.sidebar,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
   navItem: { flex: 1, minHeight: 70, gap: 2, alignItems: "center", justifyContent: "center" },
-  navIcon: { minHeight: 22, fontSize: 21, lineHeight: 23, color: "#64748B", fontWeight: "700" },
-  navText: { fontSize: 11, color: "#64748B", fontWeight: "700" },
-  navActive: { color: "#0284C7" },
-  login: { flex: 1, backgroundColor: "#0F172A", paddingHorizontal: 28, justifyContent: "center", gap: 18 },
+  navIcon: { minHeight: 22, fontSize: 21, lineHeight: 23, color: colors.muted, fontWeight: "700" },
+  navText: { fontSize: 11, color: colors.muted, fontWeight: "700" },
+  navActive: { color: colors.primary },
+  login: { flex: 1, backgroundColor: colors.ink, paddingHorizontal: 28, justifyContent: "center", gap: 18 },
   logo: {
-    color: "white",
+    color: colors.white,
     fontSize: 22,
     fontWeight: "900",
-    backgroundColor: "#0284C7",
+    backgroundColor: colors.primary,
     width: 60,
     height: 60,
     textAlign: "center",
     textAlignVertical: "center",
     borderRadius: 18,
   },
-  welcome: { color: "white", fontSize: 36, fontWeight: "900" },
+  welcome: { color: colors.white, fontSize: 36, fontWeight: "900" },
   input: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "white",
+    borderColor: colors.line,
+    backgroundColor: colors.field,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: "#0F172A",
+    color: colors.ink,
   },
+  legalLinks: { flexDirection: "row", justifyContent: "center", gap: 9 },
+  legalLink: { color: colors.white85, fontSize: 13, fontWeight: "800", textDecorationLine: "underline" },
+  legalSeparator: { color: colors.white85, fontSize: 13 },
 });

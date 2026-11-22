@@ -13,6 +13,7 @@ from uuid import uuid4
 from backend.storage.models import (
     InstagramAccount,
     InstagramComment,
+    InstagramDataDeletionRequest,
     InstagramInsightSnapshot,
     InstagramMedia,
     StoreData,
@@ -48,6 +49,81 @@ def update_store(mutator):
 
 def get_instagram_account(user_id: str) -> InstagramAccount | None:
     return next((item for item in load_store().instagram_accounts if item.user_id == user_id), None)
+
+
+def mark_instagram_connections_disconnected(instagram_user_id: str) -> list[InstagramAccount]:
+    """Disconnect matching local connections without retaining a token."""
+
+    now = datetime.now(UTC)
+
+    def mutate(store: StoreData) -> list[InstagramAccount]:
+        changed: list[InstagramAccount] = []
+        for index, existing in enumerate(store.instagram_accounts):
+            if existing.instagram_user_id != instagram_user_id:
+                continue
+            updated = existing.model_copy(
+                update={
+                    "status": "disconnected",
+                    "encrypted_access_token": "",
+                    "token_expires_at": None,
+                    "last_synced_at": now,
+                    "last_error": "instagram_deauthorized",
+                }
+            )
+            store.instagram_accounts[index] = updated
+            changed.append(updated)
+        return changed
+
+    return update_store(mutate)
+
+
+def delete_instagram_data_for_instagram_user(instagram_user_id: str) -> set[str]:
+    """Delete only data derived from one Instagram app-scoped user.
+
+    The returned PostBridge user ids let callers clear process-local derived
+    caches without storing the Instagram identifier after deletion.
+    """
+
+    def mutate(store: StoreData) -> set[str]:
+        matching = [item for item in store.instagram_accounts if item.instagram_user_id == instagram_user_id]
+        account_ids = {item.id for item in matching}
+        user_ids = {item.user_id for item in matching}
+        media_ids = {item.id for item in store.instagram_media if item.account_id in account_ids}
+        tracked_ids = {item.id for item in store.tracked_posts if item.media_id in media_ids}
+
+        store.instagram_accounts = [item for item in store.instagram_accounts if item.id not in account_ids]
+        store.instagram_media = [item for item in store.instagram_media if item.id not in media_ids]
+        store.tracked_posts = [item for item in store.tracked_posts if item.id not in tracked_ids]
+        store.instagram_insight_snapshots = [
+            item for item in store.instagram_insight_snapshots if item.media_id not in media_ids
+        ]
+        store.instagram_comments = [
+            item for item in store.instagram_comments if item.tracked_post_id not in tracked_ids
+        ]
+        return user_ids
+
+    return update_store(mutate)
+
+
+def upsert_instagram_data_deletion_request(
+    request: InstagramDataDeletionRequest,
+) -> InstagramDataDeletionRequest:
+    def mutate(store: StoreData) -> InstagramDataDeletionRequest:
+        for index, existing in enumerate(store.instagram_data_deletion_requests):
+            if existing.code == request.code:
+                store.instagram_data_deletion_requests[index] = request
+                return request
+        store.instagram_data_deletion_requests.append(request)
+        return request
+
+    return update_store(mutate)
+
+
+def get_instagram_data_deletion_request(code: str) -> InstagramDataDeletionRequest | None:
+    return next(
+        (item for item in load_store().instagram_data_deletion_requests if item.code == code),
+        None,
+    )
 
 
 def upsert_instagram_account(account: InstagramAccount) -> InstagramAccount:

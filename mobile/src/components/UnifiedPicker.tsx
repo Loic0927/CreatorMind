@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { FlatList, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { selectTokens as token } from "./selectTokens";
+import { colors } from "../theme/colors";
 
 export type PickerOption = { value: string; label: string; disabled?: boolean };
 
@@ -194,7 +195,7 @@ export function UnifiedPicker({
                   >
                     {multiple ? (
                       <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-                        {isSelected ? <Check color="white" /> : null}
+                        {isSelected ? <Check color={colors.white} /> : null}
                       </View>
                     ) : null}
                     <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{item.label}</Text>
@@ -257,7 +258,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: token.border,
     borderRadius: token.radius,
-    backgroundColor: "white",
+    backgroundColor: colors.field,
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
@@ -303,18 +304,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: token.border,
     borderRadius: token.radius,
-    backgroundColor: "white",
+    backgroundColor: colors.field,
     paddingHorizontal: 14,
     color: token.ink,
     fontSize: 15,
   },
   error: { marginTop: 6, color: token.error, fontSize: 13 },
-  scrim: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(15,23,42,.42)" },
+  scrim: { flex: 1, justifyContent: "flex-end", backgroundColor: colors.overlaySoft },
   sheet: {
     maxHeight: "80%",
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
     padding: 6,
     paddingBottom: 14,
     shadowColor: token.ink,
@@ -339,6 +340,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: token.border,
     borderRadius: token.radius,
+    backgroundColor: colors.field,
     paddingHorizontal: 14,
     color: token.ink,
     fontSize: 15,
@@ -396,5 +398,5 @@ const styles = StyleSheet.create({
     borderRadius: token.radius,
     backgroundColor: token.primary,
   },
-  doneText: { color: "white", fontSize: 15, fontWeight: "800" },
+  doneText: { color: colors.white, fontSize: 15, fontWeight: "800" },
 });

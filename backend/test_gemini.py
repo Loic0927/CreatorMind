@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import backend.services.gemini as gemini
 from backend.services.gemini import (
     GeminiConfigurationError,
+    GeminiGeneration,
     GeminiUpstreamError,
     generate_gemini_content,
 )
@@ -129,3 +131,55 @@ def test_model_name_comes_from_environment(monkeypatch):
     generate_gemini_content("Analyze this post", client_factory=factory)
 
     assert received["model_name"] == "environment-selected-model"
+
+
+def test_generation_options_and_token_usage_are_exposed_without_breaking_text_callers(monkeypatch):
+    response = SimpleNamespace(
+        text="Structured response",
+        usage_metadata=SimpleNamespace(prompt_token_count=11, candidates_token_count=5, total_token_count=16),
+    )
+    calls = []
+
+    class ConfigModels:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return response
+
+    client = SimpleNamespace(models=ConfigModels())
+    config = object()
+    received = {}
+
+    def configuration(**kwargs):
+        received.update(kwargs)
+        return config
+
+    monkeypatch.setattr(gemini, "_generation_config", configuration)
+    result = generate_gemini_content(
+        "Return JSON",
+        api_key="unit-test-key",
+        model_name="configured-model",
+        client_factory=lambda api_key, model_name: client,
+        system_instruction="Follow the schema.",
+        temperature=0.2,
+        max_output_tokens=80,
+        response_mime_type="application/json",
+        response_schema={"type": "object"},
+        timeout_ms=12_000,
+        return_usage=True,
+    )
+
+    assert isinstance(result, GeminiGeneration)
+    assert result.text == "Structured response"
+    assert result.token_usage == {
+        "prompt_token_count": 11,
+        "candidates_token_count": 5,
+        "total_token_count": 16,
+    }
+    assert received == {
+        "system_instruction": "Follow the schema.",
+        "temperature": 0.2,
+        "max_output_tokens": 80,
+        "response_mime_type": "application/json",
+        "response_schema": {"type": "object"},
+    }
+    assert calls == [{"model": "configured-model", "contents": "Return JSON", "config": config}]

@@ -15,6 +15,7 @@ import { connectInstagram, getConnection, getInstagramMedia, getTrackedPosts, tr
 import { InstagramConnection, InstagramMedia, TrackedPost } from "../types";
 import { TrackedPostCard } from "../components/TrackedPostCard";
 import { Button } from "../components/ui";
+import { colors } from "../theme/colors";
 
 export function HomeScreen({ accessToken, onOpen }: { accessToken: string; onOpen: (post: TrackedPost) => void }) {
   const insets = useSafeAreaInsets();
@@ -70,7 +71,7 @@ export function HomeScreen({ accessToken, onOpen }: { accessToken: string; onOpe
       >
         <Text style={styles.title}>Tracked posts</Text>
         {loading ? (
-          <ActivityIndicator color="#0284C7" />
+          <ActivityIndicator color={colors.sky} />
         ) : error ? (
           <State message={error} action="Try again" onPress={load} />
         ) : !connection?.connected ? (
@@ -99,7 +100,7 @@ export function HomeScreen({ accessToken, onOpen }: { accessToken: string; onOpe
             </Pressable>
           </View>
           {mediaLoading ? (
-            <ActivityIndicator color="#0284C7" />
+            <ActivityIndicator color={colors.sky} />
           ) : media.length === 0 ? (
             <Text style={styles.empty}>No Instagram posts found.</Text>
           ) : (
@@ -150,38 +151,43 @@ function State({ message, action, onPress }: { message: string; action: string; 
 const styles = StyleSheet.create({
   page: { flex: 1 },
   content: { padding: 20, gap: 14 },
-  title: { fontSize: 30, lineHeight: 36, fontWeight: "800", color: "#0F172A" },
+  title: { fontSize: 30, lineHeight: 36, fontWeight: "800", color: colors.ink },
   state: {
     marginTop: 32,
     padding: 22,
     borderRadius: 18,
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
     gap: 16,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: colors.line,
   },
-  empty: { color: "#64748B", textAlign: "center" },
+  empty: { color: colors.muted, textAlign: "center" },
   fab: {
     position: "absolute",
     right: 20,
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: "#0284C7",
+    backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
     elevation: 5,
     shadowOpacity: 0.2,
     shadowRadius: 6,
   },
-  plus: { color: "white", fontSize: 32, lineHeight: 36 },
-  modal: { flex: 1, backgroundColor: "#F1F5F9", paddingHorizontal: 20 },
+  plus: { color: colors.white, fontSize: 32, lineHeight: 36 },
+  modal: { flex: 1, backgroundColor: colors.canvas, paddingHorizontal: 20 },
   modalHeader: { minHeight: 52, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  modalTitle: { fontSize: 26, fontWeight: "800", color: "#0F172A" },
-  close: { color: "#0284C7", fontWeight: "700" },
+  modalTitle: { fontSize: 26, fontWeight: "800", color: colors.ink },
+  close: { color: colors.primary, fontWeight: "700" },
   mediaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6, paddingVertical: 12 },
   mediaCell: { width: "32%", aspectRatio: 1 },
-  mediaImage: { width: "100%", height: "100%", backgroundColor: "#E0F2FE" },
-  tracked: { ...StyleSheet.absoluteFill, backgroundColor: "#0F172Aaa", alignItems: "center", justifyContent: "center" },
-  trackedText: { color: "white", fontWeight: "800" },
+  mediaImage: { width: "100%", height: "100%", backgroundColor: colors.selected },
+  tracked: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: colors.overlayStrong,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trackedText: { color: colors.white, fontWeight: "800" },
 });

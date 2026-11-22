@@ -16,7 +16,7 @@ import { errorMessage, formatRate } from "@/lib/format";
 import { ErrorBanner, Metric, PageTitle, Panel } from "@/components/dashboard/ui";
 
 type InstagramMediaItem = { id: string; caption: string; media_url?: string; thumbnail_url?: string };
-const primaryButton = "mt-5 rounded-xl bg-sky-600 px-5 py-3 font-bold text-white";
+const primaryButton = "mt-5 rounded-xl bg-primary px-5 py-3 font-bold text-white hover:bg-primary-hover";
 
 export function HomeTab({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -103,14 +103,14 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
             {connection.comment_ingestion?.enabled && !connection.comment_ingestion.permission_granted && (
               <button
                 onClick={() => void onConnect()}
-                className="rounded-xl bg-sky-100 px-3 py-2 text-xs font-bold text-sky-700 sm:px-4 sm:py-3 sm:text-sm"
+                className="rounded-xl bg-selected px-3 py-2 text-xs font-bold text-selected-ink hover:bg-line-strong sm:px-4 sm:py-3 sm:text-sm"
               >
                 Reauthorize Instagram
               </button>
             )}
             <button
               onClick={() => void choosePost()}
-              className="shrink-0 rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white sm:px-5 sm:py-3 sm:text-base"
+              className="shrink-0 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-white hover:bg-primary-hover sm:px-5 sm:py-3 sm:text-base"
             >
               Add a post
             </button>
@@ -124,7 +124,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
           <Panel>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-black">Choose an Instagram post</h2>
-              <button onClick={() => setChoosing(false)} className="text-sm font-bold text-sky-700">
+              <button onClick={() => setChoosing(false)} className="text-sm font-bold text-primary-hover">
                 Close
               </button>
             </div>
@@ -135,7 +135,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                     key={item.id}
                     disabled={Boolean(addingId)}
                     onClick={() => void addPost(item.id)}
-                    className="overflow-hidden rounded-2xl bg-sky-100 text-left disabled:opacity-60"
+                    className="overflow-hidden rounded-2xl bg-selected text-left disabled:opacity-60"
                   >
                     {item.thumbnail_url || item.media_url ? (
                       <img
@@ -153,9 +153,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                 ))}
               </div>
             ) : (
-              <p className="py-8 text-center text-sm font-bold text-slate-500">
-                All Instagram posts are already tracked.
-              </p>
+              <p className="py-8 text-center text-sm font-bold text-muted">All Instagram posts are already tracked.</p>
             )}
           </Panel>
         </div>
@@ -194,7 +192,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                   aria-label="Remove tracked post"
                   disabled={Boolean(deletingId)}
                   onClick={() => void removePost(post)}
-                  className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white/95 text-xl font-bold leading-none text-sky-700 shadow-sm disabled:opacity-50"
+                  className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-surface/95 text-xl font-bold leading-none text-primary-hover shadow-float disabled:opacity-50"
                 >
                   ×
                 </button>
@@ -208,8 +206,8 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                   value={post.latest?.engagement_rate == null ? undefined : formatRate(post.latest.engagement_rate)}
                 />
               </div>
-              <div className="mt-5 flex items-center justify-between gap-3 border-t border-slate-200 pt-4">
-                <p className="text-[11px] text-slate-500">
+              <div className="mt-5 flex items-center justify-between gap-3 border-t border-line pt-4">
+                <p className="text-[11px] text-muted">
                   {post.latest?.captured_at
                     ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}`
                     : "Metrics not loaded"}
@@ -217,7 +215,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                 <button
                   disabled={Boolean(refreshingId) || Boolean(deletingId)}
                   onClick={() => void refreshPost(post.tracking.id)}
-                  className="shrink-0 rounded-lg bg-sky-100 px-3 py-2 text-xs font-bold text-sky-700 disabled:opacity-60"
+                  className="shrink-0 rounded-lg bg-selected px-3 py-2 text-xs font-bold text-selected-ink hover:bg-line-strong disabled:opacity-60"
                 >
                   {refreshingId === post.tracking.id ? "Refreshing…" : "Refresh metrics"}
                 </button>

@@ -10,6 +10,8 @@ MIN_COMPARABLE_POSTS = 6
 PERCENTILE_RANGE_AT = 15
 NEEDS_REFRESH_AFTER = timedelta(hours=24)
 METRIC_ORDER = ("views", "reach", "engagement_rate", "shares", "saves", "comments")
+SAME_AGE_TOLERANCE_FRACTION = 0.25
+SAME_AGE_MINIMUM_TOLERANCE = timedelta(hours=3)
 
 
 def _aware(value: datetime) -> datetime:
@@ -35,6 +37,15 @@ def _latest(item: dict[str, Any]) -> Any | None:
     if item.get("latest") is not None:
         values.append(item["latest"])
     return max(values, key=lambda value: _aware(value.captured_at)) if values else None
+
+
+def _snapshots(item: dict[str, Any]) -> list[Any]:
+    """Return a post's snapshots, retaining a separately supplied latest value."""
+    values = list(item.get("snapshots") or [])
+    latest = item.get("latest")
+    if latest is not None and not any(value is latest for value in values):
+        values.append(latest)
+    return values
 
 
 def _rate(snapshot: Any | None) -> float | None:
@@ -197,22 +208,48 @@ def build_post_analysis(
     media = selected["media"]
     latest = _latest(selected)
     current_metrics = _metrics(latest)
-    peer_items = []
+    selected_is_mature = _mature(media, current_time)
+    comparison_basis = "lifetime" if selected_is_mature else "same_age"
+    peer_snapshots: list[Any] = []
+    selected_age = _aware(latest.captured_at) - _aware(media.published_at) if latest is not None else None
+    same_age_tolerance = (
+        max(SAME_AGE_MINIMUM_TOLERANCE, selected_age * SAME_AGE_TOLERANCE_FRACTION)
+        if selected_age is not None
+        else None
+    )
     for item in items:
         if item.get("tracking") is None or item["tracking"].id == selected["tracking"].id or item.get("media") is None:
             continue
-        if _format_key(item["media"].media_type) != _format_key(media.media_type) or not _mature(
-            item["media"], current_time
-        ):
+        if _format_key(item["media"].media_type) != _format_key(media.media_type):
             continue
-        peer_items.append(item)
+        if selected_is_mature:
+            if not _mature(item["media"], current_time):
+                continue
+            peer_latest = _latest(item)
+            if peer_latest is not None:
+                peer_snapshots.append(peer_latest)
+            continue
+
+        if selected_age is None or same_age_tolerance is None:
+            continue
+        peer_published = _aware(item["media"].published_at)
+        candidates = [snapshot for snapshot in _snapshots(item) if _aware(snapshot.captured_at) >= peer_published]
+        if not candidates:
+            continue
+        closest = min(
+            candidates,
+            key=lambda snapshot: abs((_aware(snapshot.captured_at) - peer_published) - selected_age),
+        )
+        peer_age = _aware(closest.captured_at) - peer_published
+        if abs(peer_age - selected_age) <= same_age_tolerance:
+            peer_snapshots.append(closest)
 
     rows: list[dict[str, Any]] = []
-    if len(peer_items) >= MIN_COMPARABLE_POSTS:
+    if len(peer_snapshots) >= MIN_COMPARABLE_POSTS and latest is not None:
         for metric in METRIC_ORDER:
             current_value = current_metrics.get(metric)
             peer_values = [
-                float(value) for item in peer_items if (value := _metrics(_latest(item)).get(metric)) is not None
+                float(value) for snapshot in peer_snapshots if (value := _metrics(snapshot).get(metric)) is not None
             ]
             if current_value is None or len(peer_values) < MIN_COMPARABLE_POSTS:
                 continue
@@ -242,13 +279,17 @@ def build_post_analysis(
 
     stands_out = [row for row in rows if row["status"] == "above"]
     weaker = [row for row in rows if row["status"] == "below"]
-    if not weaker and rows:
-        weaker = [row for row in rows if row["rank"] > row["group_size"] / 2]
+    comparable = len(peer_snapshots) >= MIN_COMPARABLE_POSTS and bool(rows)
+    not_comparable_reason = None
+    if not comparable:
+        not_comparable_reason = "too_few_posts" if selected_is_mature else "too_early"
 
     published = _aware(media.published_at)
     return {
-        "comparable": len(peer_items) >= MIN_COMPARABLE_POSTS and bool(rows),
-        "comparable_count": len(peer_items),
+        "comparable": comparable,
+        "comparable_count": len(peer_snapshots),
+        "comparison_basis": comparison_basis,
+        "not_comparable_reason": not_comparable_reason,
         "summary": summary,
         "stands_out": stands_out,
         "weaker": weaker,

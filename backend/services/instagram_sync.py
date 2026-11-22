@@ -8,9 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from backend.services.account_insights import build_account_insights
-from backend.services.feedback import refresh_summary_for_user
-from backend.services.insight_texts import audience_description, next_post_suggestion
+from backend.services.insight_refresh import refresh_cached_insights
 from backend.services.instagram import (
     INSTAGRAM_SCOPES,
     InstagramServiceError,
@@ -100,11 +98,22 @@ def _same_metrics(previous, metrics: dict[str, Any]) -> bool:
     return all(getattr(previous, name) == metrics.get(name) for name in names)
 
 
-def refresh_one_post(user_id: str, tracked, media, token: str, *, refresh_comments: bool = True) -> bool:
+def refresh_one_post(
+    user_id: str,
+    tracked,
+    media,
+    token: str,
+    *,
+    refresh_comments: bool = True,
+    latest_snapshot=None,
+) -> bool:
     repository = get_content_repository()
     metrics = _retry(lambda: fetch_instagram_media_insights(token, media.instagram_media_id, media.media_type))
-    existing = repository.snapshots([media.id])
-    latest = max(existing, key=lambda item: _aware(item.captured_at)) if existing else None
+    if latest_snapshot is None:
+        existing = repository.snapshots([media.id])
+        latest = max(existing, key=lambda item: _aware(item.captured_at)) if existing else None
+    else:
+        latest = latest_snapshot
     changed = not _same_metrics(latest, metrics)
     if changed:
         repository.append_snapshot(
@@ -156,7 +165,6 @@ def refresh_one_post(user_id: str, tracked, media, token: str, *, refresh_commen
             )
         repository.upsert_comments(user_id, tracked.id, stored)
 
-    audience_description(user_id, tracked.id, repository.comments(user_id, tracked.id))
     return changed
 
 
@@ -177,17 +185,25 @@ def run_account_sync(user_id: str, *, now: datetime | None = None) -> dict[str, 
         content = get_content_repository()
         media_by_id = {item.id: item for item in content.media_for_account(account.id)}
         tracked = content.tracked(user_id, active_only=True)
+        snapshot_by_media = {}
+        for snapshot in content.snapshots(list({item.media_id for item in tracked})):
+            previous = snapshot_by_media.get(snapshot.media_id)
+            if previous is None or _aware(snapshot.captured_at) > _aware(previous.captured_at):
+                snapshot_by_media[snapshot.media_id] = snapshot
         refreshed = failed = 0
         for index, tracked_post in enumerate(tracked):
             media_item = media_by_id.get(tracked_post.media_id)
             if media_item is None:
-                stored = [item for item in content.media_for_account(account.id) if item.id == tracked_post.media_id]
-                media_item = stored[0] if stored else None
-            if media_item is None:
                 failed += 1
                 continue
             try:
-                refresh_one_post(user_id, tracked_post, media_item, token)
+                refresh_one_post(
+                    user_id,
+                    tracked_post,
+                    media_item,
+                    token,
+                    latest_snapshot=snapshot_by_media.get(media_item.id),
+                )
                 refreshed += 1
             except InstagramServiceError as exc:
                 failed += 1
@@ -199,39 +215,9 @@ def run_account_sync(user_id: str, *, now: datetime | None = None) -> dict[str, 
             if (index + 1) % SYNC_BATCH_SIZE == 0 and index + 1 < len(tracked):
                 time.sleep(1)
 
-        items = []
-        stored_media = {item.id: item for item in content.media_for_account(account.id)}
-        for tracked_post in content.tracked(user_id, active_only=False):
-            snapshots = content.snapshots([tracked_post.media_id])
-            items.append(
-                {
-                    "tracking": tracked_post,
-                    "media": stored_media.get(tracked_post.media_id),
-                    "latest": max(snapshots, key=lambda value: _aware(value.captured_at)) if snapshots else None,
-                    "snapshots": snapshots,
-                }
-            )
-        post_payload = build_account_insights(items)["performance_posts"]
-        internal_posts = []
-        for post in post_payload:
-            source = next((item for item in items if item["tracking"].id == post["tracked_post_id"]), None)
-            internal_posts.append(
-                {**post, "caption": source["media"].caption if source and source.get("media") else ""}
-            )
-        next_post_suggestion(
-            user_id,
-            internal_posts,
-            {item["tracking"].id: content.comments(user_id, item["tracking"].id) for item in items},
-        )
-        try:
-            refresh_summary_for_user(user_id)
-        except Exception as exc:
-            # Summary generation is best-effort and must never make login sync fail.
-            import logging
-
-            logging.getLogger("postbridge.instagram_sync").warning(
-                "feedback_refresh_failed user_id=%s error_type=%s", user_id, type(exc).__name__
-            )
+        # This sync is already called from a background task.  Generate all
+        # insight caches only after the metric writes have completed.
+        refresh_cached_insights(user_id)
 
         if failed:
             instagram_repository.mark_session_sync(user_id, None, "partial_failure")

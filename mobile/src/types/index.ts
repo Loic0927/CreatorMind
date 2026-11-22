@@ -49,14 +49,22 @@ export type RangeRow = {
   marker: number;
 };
 export type AudienceComments = {
-  state: "feature_off" | "reconnect_needed" | "access_denied" | "too_few" | "error" | "ready";
+  state: "feature_off" | "reconnect_needed" | "access_denied" | "too_few" | "error" | "ready" | "consent_required";
   message?: string;
   description?: string;
+  items?: AudienceComment[];
 };
+export type AudienceComment = { text: string; like_count: number; timestamp: string };
+export type ComparisonBasis = "lifetime" | "same_age";
+export type NotComparableReason = "too_early" | "too_few_posts";
+export type SummaryStatus = "ready" | "pending" | "none";
 export type PostAnalysisView = {
   comparable: boolean;
   comparable_count: number;
+  comparison_basis: ComparisonBasis;
+  not_comparable_reason: NotComparableReason | null;
   summary?: string | null;
+  summary_status?: SummaryStatus;
   stands_out: RangeRow[];
   weaker: RangeRow[];
   usual_ranges: RangeRow[];
@@ -105,9 +113,14 @@ export type Highlight = {
 export type AccountInsightsData = {
   highlights: Highlight[];
   next_post_suggestion?: string | null;
+  next_post_suggestion_status?: "ready" | "pending" | "none" | "consent_required";
   performance_posts: PerformancePost[];
   needs_refresh_after_hours: number;
   sync_status: "ok" | "failed" | "reconnect_required";
+};
+export type AIProcessingConsent = {
+  ai_processing_consented: boolean;
+  ai_processing_consented_at: string | null;
 };
 export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
 export type ImageMimeType = "image/jpeg" | "image/png" | "image/webp";

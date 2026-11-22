@@ -13,6 +13,16 @@ export type CaptionInput = {
 };
 export type CaptionResult = { caption: string; hashtags: string };
 
+export class CaptionGenerationError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CaptionGenerationError";
+  }
+}
+
 export function buildMockCaption(input: CaptionInput): CaptionResult {
   const information = input.information.trim();
   const goal = input.goal.trim();
@@ -37,7 +47,11 @@ export async function generateCaption(input: CaptionInput, accessToken?: string)
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload?.detail?.message ?? "PostBridge caption generation is unavailable.");
+    const detail = payload?.detail ?? payload;
+    throw new CaptionGenerationError(
+      String(detail?.code ?? "caption_generation_unavailable"),
+      detail?.message ?? "PostBridge caption generation is unavailable.",
+    );
   }
   return response.json() as Promise<CaptionResult>;
 }

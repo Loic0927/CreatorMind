@@ -1,7 +1,16 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const STORAGE_KEY = "postbridge.web.session";
 
-export type Session = { accessToken: string; expiresAt: string; user: { id: string; email: string } };
+export type Session = {
+  accessToken: string;
+  expiresAt: string;
+  user: {
+    id: string;
+    email: string;
+    ai_processing_consented?: boolean;
+    ai_processing_consented_at?: string | null;
+  };
+};
 export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
 export type Connection = {
   connected: boolean;
@@ -40,14 +49,22 @@ export type RangeRow = {
   marker: number;
 };
 export type AudienceComments = {
-  state: "feature_off" | "reconnect_needed" | "access_denied" | "too_few" | "error" | "ready";
+  state: "feature_off" | "reconnect_needed" | "access_denied" | "too_few" | "error" | "ready" | "consent_required";
   message?: string;
   description?: string;
+  items?: AudienceComment[];
 };
+export type AudienceComment = { text: string; like_count: number; timestamp: string };
+export type ComparisonBasis = "lifetime" | "same_age";
+export type NotComparableReason = "too_early" | "too_few_posts";
+export type SummaryStatus = "ready" | "pending" | "none";
 export type PostAnalysisView = {
   comparable: boolean;
   comparable_count: number;
+  comparison_basis: ComparisonBasis;
+  not_comparable_reason: NotComparableReason | null;
   summary?: string | null;
+  summary_status?: SummaryStatus;
   stands_out: RangeRow[];
   weaker: RangeRow[];
   usual_ranges: RangeRow[];
@@ -149,9 +166,14 @@ export type Highlight = {
 export type AccountInsights = {
   highlights: Highlight[];
   next_post_suggestion?: string | null;
+  next_post_suggestion_status?: "ready" | "pending" | "none" | "consent_required";
   performance_posts: PerformancePost[];
   needs_refresh_after_hours: number;
   sync_status: "ok" | "failed" | "reconnect_required";
+};
+export type AIProcessingConsent = {
+  ai_processing_consented: boolean;
+  ai_processing_consented_at: string | null;
 };
 
 export class ApiError extends Error {
@@ -248,6 +270,12 @@ export const deleteTrackedPost = (session: Session, trackedId: string) =>
 export const refreshTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}/refresh`, { method: "POST" });
 export const getAccountInsights = (session: Session) => authRequest<AccountInsights>(session, "/insights/account");
+export const getAIProcessingConsent = (session: Session) =>
+  authRequest<AIProcessingConsent>(session, "/auth/ai-processing-consent");
+export const grantAIProcessingConsent = (session: Session) =>
+  authRequest<AIProcessingConsent>(session, "/auth/ai-processing-consent", { method: "POST" });
+export const revokeAIProcessingConsent = (session: Session) =>
+  authRequest<AIProcessingConsent>(session, "/auth/ai-processing-consent", { method: "DELETE" });
 export type CaptionMedia = {
   mime_type: "image/jpeg" | "image/png" | "image/webp" | "video/mp4" | "video/webm" | "video/quicktime";
   data: string;

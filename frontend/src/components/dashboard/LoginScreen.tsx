@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Session, requestCode, verifyCode } from "@/lib/postbridge";
 import { errorMessage } from "@/lib/format";
 import { Brand, ErrorBanner } from "@/components/dashboard/ui";
 
-const inputClass = "w-full rounded-2xl bg-white px-4 py-4 text-slate-900";
+const inputClass = "w-full rounded-2xl bg-field px-4 py-4 text-ink outline-none focus:ring-2 focus:ring-primary/30";
 
 export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) {
   const [email, setEmail] = useState("");
@@ -33,26 +34,26 @@ export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) 
   };
 
   return (
-    <main className="grid min-h-screen bg-slate-900 p-5 md:grid-cols-2">
-      <section className="hidden flex-col justify-between rounded-[2rem] bg-gradient-to-br from-sky-600 to-sky-700 p-12 text-white md:flex">
+    <main className="grid min-h-screen bg-ink p-5 md:grid-cols-2">
+      <section className="hidden flex-col justify-between rounded-[2rem] bg-gradient-to-br from-primary to-primary-hover p-12 text-white md:flex">
         <Brand />
         <div>
-          <p className="text-sm font-bold uppercase tracking-[.25em] text-sky-200">One account. Every screen.</p>
+          <p className="text-sm font-bold uppercase tracking-[.25em] text-white/85">One account. Every screen.</p>
           <h1 className="mt-5 max-w-lg text-5xl font-black leading-tight">Bridge every post to better results.</h1>
-          <p className="mt-5 max-w-md text-sky-100">
+          <p className="mt-5 max-w-md text-white">
             Your Instagram connections, AI analyses and tracking history stay in sync across web and mobile.
           </p>
         </div>
-        <span className="text-sm text-sky-200">PostBridge</span>
+        <span className="text-sm text-white/85">PostBridge</span>
       </section>
       <section className="grid place-items-center p-4">
         <div className="w-full max-w-md">
           <div className="mb-8 md:hidden">
             <Brand />
           </div>
-          <p className="text-sm font-bold uppercase tracking-[.2em] text-sky-300">Welcome</p>
+          <p className="text-sm font-bold uppercase tracking-[.2em] text-white/85">Welcome</p>
           <h2 className="mt-3 text-4xl font-black text-white">Sign in to PostBridge</h2>
-          <p className="mt-3 text-sm leading-6 text-sky-200">
+          <p className="mt-3 text-sm leading-6 text-white/85">
             We’ll email you a secure six-digit code. No password required.
           </p>
           <ErrorBanner message={error} />
@@ -78,11 +79,20 @@ export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) 
             <button
               disabled={busy || !email || (sent && code.length !== 6)}
               onClick={() => void submit()}
-              className="w-full rounded-2xl bg-sky-600 py-4 font-black text-white disabled:opacity-50"
+              className="w-full rounded-2xl bg-primary py-4 font-black text-white hover:bg-primary-hover disabled:opacity-50"
             >
               {busy ? "Please wait…" : sent ? "Verify and sign in" : "Email me a code"}
             </button>
           </div>
+          <p className="mt-6 text-center text-sm text-white/85">
+            <Link href="/privacy" className="underline underline-offset-2 hover:text-white">
+              Privacy
+            </Link>
+            <span aria-hidden="true"> · </span>
+            <Link href="/terms" className="underline underline-offset-2 hover:text-white">
+              Terms
+            </Link>
+          </p>
         </div>
       </section>
     </main>

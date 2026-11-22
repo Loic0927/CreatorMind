@@ -1,8 +1,9 @@
+import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import event, func, select, text
 
 from backend import auth
@@ -11,8 +12,11 @@ from backend.auth_api import (
     EmailRequest,
     VerifyCodeRequest,
     account_context,
+    ai_processing_consent,
     delete_account,
+    grant_ai_processing_consent,
     request_code,
+    revoke_ai_processing_consent,
     save_account_context,
     verify_code,
 )
@@ -85,6 +89,46 @@ def test_email_code_creates_a_reusable_cross_client_session(auth_database):
     identity = auth.authenticate_token(verified["access_token"])
     assert identity.email == "owner@example.test"
     assert identity.id == verified["user"]["id"]
+    assert verified["user"]["ai_processing_consented"] is False
+    assert verified["user"]["ai_processing_consented_at"] is None
+
+
+def test_ai_processing_consent_is_explicit_and_revocation_clears_text_cache(auth_database):
+    code = request_code(EmailRequest(email="consent@example.test"))["development_code"]
+    verified = verify_code(VerifyCodeRequest(email="consent@example.test", code=code))
+    user = auth.authenticate_token(verified["access_token"])
+
+    assert ai_processing_consent(user)["ai_processing_consented"] is False
+    background_tasks = BackgroundTasks()
+    granted = grant_ai_processing_consent(user, background_tasks)
+    assert granted["ai_processing_consented"] is True
+    assert granted["ai_processing_consented_at"]
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].args == (user.id,)
+
+    now = datetime.now(UTC)
+    repository = get_content_repository()
+    repository.upsert_text_cache(
+        InsightTextCache(
+            id="consent-cache",
+            user_id=user.id,
+            tracked_post_id=None,
+            cache_key="next-post",
+            input_hash="x" * 64,
+            text="Cached text",
+            model_name="test",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    assert repository.get_text_cache(user.id, "next-post") is not None
+
+    revoke_tasks = BackgroundTasks()
+    revoked = revoke_ai_processing_consent(user, revoke_tasks)
+    assert revoked == {"ai_processing_consented": False, "ai_processing_consented_at": None}
+    assert repository.get_text_cache(user.id, "next-post") is None
+    assert len(revoke_tasks.tasks) == 1
+    assert revoke_tasks.tasks[0].args == (user.id,)
 
 
 def test_login_code_cannot_be_replayed(auth_database):
@@ -198,6 +242,52 @@ def test_login_codes_are_capped_per_email_per_day(auth_database, monkeypatch):
     with pytest.raises(HTTPException):
         verify_code(VerifyCodeRequest(email="owner@example.test", code=first))
     assert request_code(EmailRequest(email="other@example.test"))["sent"] is True
+
+
+def test_reviewer_login_is_disabled_until_both_values_are_configured(auth_database, monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_REVIEW_LOGIN_EMAIL", "reviewer@example.test")
+    monkeypatch.delenv("POSTBRIDGE_REVIEW_LOGIN_CODE_HASH", raising=False)
+
+    response = request_code(EmailRequest(email="reviewer@example.test"))
+
+    assert response["sent"] is True
+    assert "development_code" in response
+
+
+def test_reviewer_login_uses_only_the_configured_email_and_hashed_code(auth_database, monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_REVIEW_LOGIN_EMAIL", "Reviewer@Example.Test")
+    monkeypatch.setenv(
+        "POSTBRIDGE_REVIEW_LOGIN_CODE_HASH",
+        hashlib.sha256(b"246810").hexdigest(),
+    )
+
+    requested = request_code(EmailRequest(email="reviewer@example.test"))
+    assert requested["sent"] is True
+    assert "development_code" not in requested
+    verified = verify_code(VerifyCodeRequest(email="REVIEWER@example.test", code="246810"))
+    assert verified["user"]["email"] == "reviewer@example.test"
+
+    other = request_code(EmailRequest(email="other@example.test"))
+    assert "development_code" in other
+    with pytest.raises(HTTPException) as rejected:
+        verify_code(VerifyCodeRequest(email="other@example.test", code="246810"))
+    assert rejected.value.status_code == 401
+
+
+def test_reviewer_login_rejects_a_wrong_code_and_keeps_existing_rate_limits(auth_database, monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_REVIEW_LOGIN_EMAIL", "reviewer@example.test")
+    monkeypatch.setenv("POSTBRIDGE_REVIEW_LOGIN_CODE_HASH", hashlib.sha256(b"246810").hexdigest())
+    monkeypatch.setenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "0")
+    monkeypatch.setenv("POSTBRIDGE_LOGIN_CODES_PER_DAY", "2")
+
+    request_code(EmailRequest(email="reviewer@example.test"))
+    with pytest.raises(HTTPException) as rejected:
+        verify_code(VerifyCodeRequest(email="reviewer@example.test", code="000000"))
+    assert rejected.value.status_code == 401
+    request_code(EmailRequest(email="reviewer@example.test"))
+    with pytest.raises(HTTPException) as capped:
+        request_code(EmailRequest(email="reviewer@example.test"))
+    assert capped.value.status_code == 429
 
 
 def test_delete_account_removes_all_sql_records_with_foreign_keys_enabled(auth_database, monkeypatch):

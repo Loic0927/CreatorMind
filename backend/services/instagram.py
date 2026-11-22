@@ -576,7 +576,28 @@ def fetch_instagram_media_insights(
         status["likes"] = value
         status["comments"] = value
 
-    for upstream_name, local_name in (("reach", "reach"), ("saved", "saves"), ("shares", "shares"), ("views", "views")):
+    def metric_value(metric: dict[str, Any]) -> int | None:
+        value = metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
+        if value is None and isinstance(metric.get("values"), list) and metric["values"]:
+            first = metric["values"][0]
+            value = first.get("value") if isinstance(first, dict) else None
+        return int(value) if isinstance(value, (int, float)) else None
+
+    def set_batch_values(payload: dict[str, Any], expected: dict[str, str]) -> None:
+        data = payload.get("data")
+        if not isinstance(data, list):
+            return
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            upstream_name = item.get("name")
+            local_name = expected.get(str(upstream_name))
+            value = metric_value(item)
+            if local_name and value is not None:
+                metrics[local_name] = value
+                status[local_name] = "available"
+
+    def fetch_one(upstream_name: str, local_name: str) -> None:
         try:
             payload = _request_json(
                 "GET",
@@ -584,48 +605,54 @@ def fetch_instagram_media_insights(
                 query={"metric": upstream_name, "access_token": access_token},
             )
             data = payload.get("data")
-            if not isinstance(data, list) or not data:
-                continue
-            metric = data[0] if isinstance(data[0], dict) else {}
-            value = metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
-            if value is None and isinstance(metric.get("values"), list) and metric["values"]:
-                value = metric["values"][0].get("value")
-            if isinstance(value, (int, float)):
-                metrics[local_name] = int(value)
-                status[local_name] = "available"
+            if isinstance(data, list) and data:
+                metric = data[0] if isinstance(data[0], dict) else {}
+                value = metric_value(metric)
+                if value is not None:
+                    metrics[local_name] = value
+                    status[local_name] = "available"
         except InstagramServiceError as exc:
             if exc.code in retryable_codes:
                 raise
             status[local_name] = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
-    if (media_type or "").upper() in {"VIDEO", "REELS"}:
-        for upstream_name, local_name in (
-            ("ig_reels_avg_watch_time", "average_watch_time_ms"),
-            ("ig_reels_video_view_total_time", "total_watch_time_ms"),
-        ):
-            try:
-                payload = _request_json(
-                    "GET",
-                    f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/insights",
-                    query={"metric": upstream_name, "access_token": access_token},
-                )
-                data = payload.get("data")
-                if not isinstance(data, list) or not data:
-                    continue
-                metric = data[0] if isinstance(data[0], dict) else {}
-                value = (
-                    metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
-                )
-                if value is None and isinstance(metric.get("values"), list) and metric["values"]:
-                    value = metric["values"][0].get("value")
-                if isinstance(value, (int, float)):
-                    metrics[local_name] = int(value)
-                    status[local_name] = "available"
-            except InstagramServiceError as exc:
-                if exc.code in retryable_codes:
-                    raise
-                status[local_name] = (
-                    "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
-                )
+
+    media_kind = (media_type or "").upper()
+    # Instagram Login exposes lifetime media insights as one comma-separated
+    # request.  The exact set is limited to documented metrics per media type;
+    # an unknown VIDEO may be a reel, so we optimistically request reel watch
+    # metrics and retain the per-metric fallback if Meta rejects that batch.
+    if media_kind == "STORY":
+        requested = {"views": "views", "reach": "reach", "shares": "shares"}
+    else:
+        requested = {
+            "views": "views",
+            "reach": "reach",
+            "saved": "saves",
+            "shares": "shares",
+            "comments": "comments",
+        }
+        if media_kind in {"REELS", "VIDEO"}:
+            requested.update(
+                {
+                    "ig_reels_avg_watch_time": "average_watch_time_ms",
+                    "ig_reels_video_view_total_time": "total_watch_time_ms",
+                }
+            )
+    try:
+        batch = _request_json(
+            "GET",
+            f"{INSTAGRAM_GRAPH_URL}/{instagram_media_id}/insights",
+            query={"metric": ",".join(requested), "access_token": access_token},
+        )
+        set_batch_values(batch, requested)
+    except InstagramServiceError as exc:
+        if exc.code in retryable_codes:
+            raise
+        # A single unsupported metric makes Meta reject an otherwise valid
+        # batch.  Fall back to the historical per-metric requests so the
+        # availability semantics remain stable for every supported value.
+        for upstream_name, local_name in requested.items():
+            fetch_one(upstream_name, local_name)
     metrics["_metric_status"] = status
     metrics["_media_type"] = (media_type or "UNKNOWN").upper()
     if not any(isinstance(metrics.get(name), int) for name in status):

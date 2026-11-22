@@ -8,14 +8,16 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true,
+      "bundleIdentifier": "com.REPLACE_ME.postbridge",
+      "supportsTablet": false,
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "PostBridge uses your selected photo or video to create and publish an Instagram post."
+        "NSPhotoLibraryUsageDescription": "PostBridge uses your selected photo or video to create and publish an Instagram post.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#E9F2FC",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

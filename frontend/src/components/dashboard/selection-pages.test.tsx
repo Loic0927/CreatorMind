@@ -29,6 +29,12 @@ vi.mock("@/lib/postbridge", () => ({
   caption: vi.fn(),
   getConnection: vi.fn().mockResolvedValue({ connected: false, configured: true }),
   getAccountContext: vi.fn().mockResolvedValue(accountContext),
+  getAIProcessingConsent: vi.fn().mockResolvedValue({
+    ai_processing_consented: true,
+    ai_processing_consented_at: "2026-11-22T00:00:00Z",
+  }),
+  grantAIProcessingConsent: vi.fn(),
+  revokeAIProcessingConsent: vi.fn(),
   updateAccountContext: vi.fn().mockImplementation(async (_session, value) => value),
   disconnectInstagram: vi.fn(),
   logout: vi.fn(),

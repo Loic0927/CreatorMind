@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.auth import AuthenticatedUser, get_account_context, require_user
+from backend.auth import AuthenticatedUser, get_account_context, has_ai_processing_consent, require_user
 from backend.rate_limit import enforce_rate_limit
 from backend.services.account_context import context_reference_for_content
 from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamError, generate_gemini_content
@@ -104,6 +104,14 @@ def _decode_media(payload: CaptionRequest) -> tuple[bytes | None, str | None]:
 
 @router.post("/mobile/caption", response_model=CaptionResponse)
 def generate_caption(payload: CaptionRequest, user: AuthenticatedUser = Depends(require_user)) -> CaptionResponse:
+    if not has_ai_processing_consent(user.id):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "consent_required",
+                "message": "AI processing consent is required before generating captions.",
+            },
+        )
     media_bytes, media_mime_type = _decode_media(payload)
     enforce_rate_limit(f"caption:{user.id}", int(os.getenv("POSTBRIDGE_CAPTION_LIMIT_PER_HOUR", "30")))
     account_context = get_account_context(user.id) if payload.use_account_context else ""

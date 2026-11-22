@@ -3,6 +3,7 @@ import * as WebBrowser from "expo-web-browser";
 import { API_BASE_URL } from "../config/environment";
 import {
   AccountInsightsData,
+  AIProcessingConsent,
   InstagramConnection,
   InstagramMedia,
   MediaMimeType,
@@ -11,6 +12,7 @@ import {
 } from "../types";
 
 WebBrowser.maybeCompleteAuthSession();
+export type TrackedPostListResponse = { items: TrackedPost[] };
 export class ApiError extends Error {
   constructor(
     public code: string,
@@ -37,16 +39,23 @@ async function request<T>(path: string, accessToken: string, init?: RequestInit)
   return payload as T;
 }
 export const getConnection = (token: string) => request<InstagramConnection>("/api/instagram/connection", token);
-export const getTrackedPosts = (token: string) => request<{ items: TrackedPost[] }>("/tracked-posts", token);
-export const getTrackedPost = (token: string, id: string) =>
+export const getTrackedPosts = (token: string): Promise<TrackedPostListResponse> =>
+  request<TrackedPostListResponse>("/tracked-posts", token);
+export const getTrackedPost = (token: string, id: string): Promise<TrackedPost> =>
   request<TrackedPost>(`/tracked-posts/${encodeURIComponent(id)}`, token);
 export const getInstagramMedia = (token: string) =>
   request<{ status: string; items: InstagramMedia[] }>("/api/instagram/media", token);
 export const trackPost = (token: string, mediaId: string) =>
   request<{ id: string }>("/tracked-posts", token, { method: "POST", body: JSON.stringify({ media_id: mediaId }) });
-export const refreshTrackedPost = (token: string, id: string) =>
+export const refreshTrackedPost = (token: string, id: string): Promise<TrackedPost> =>
   request<TrackedPost>(`/tracked-posts/${encodeURIComponent(id)}/refresh`, token, { method: "POST" });
 export const getAccountInsights = (token: string) => request<AccountInsightsData>("/insights/account", token);
+export const getAIProcessingConsent = (token: string) =>
+  request<AIProcessingConsent>("/auth/ai-processing-consent", token);
+export const grantAIProcessingConsent = (token: string) =>
+  request<AIProcessingConsent>("/auth/ai-processing-consent", token, { method: "POST" });
+export const revokeAIProcessingConsent = (token: string) =>
+  request<AIProcessingConsent>("/auth/ai-processing-consent", token, { method: "DELETE" });
 export type PublicationResult = {
   platform: SocialPlatform;
   status: "published" | "failed" | "unavailable";

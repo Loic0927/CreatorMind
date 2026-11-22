@@ -1,5 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { TrackedPost } from "../types";
+import { colors } from "../theme/colors";
 const metric = (value?: number | null, suffix = "") => (value == null ? "—" : `${value}${suffix}`);
 export function TrackedPostCard({ post, onPress }: { post: TrackedPost; onPress: () => void }) {
   const image = post.media.thumbnail_url || post.media.media_url;
@@ -34,14 +35,20 @@ export function TrackedPostCard({ post, onPress }: { post: TrackedPost; onPress:
   );
 }
 const styles = StyleSheet.create({
-  card: { backgroundColor: "white", borderRadius: 18, borderWidth: 1, borderColor: "#E2E8F0", overflow: "hidden" },
-  image: { width: "100%", aspectRatio: 1.5, backgroundColor: "#E0F2FE" },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.line,
+    overflow: "hidden",
+  },
+  image: { width: "100%", aspectRatio: 1.5, backgroundColor: colors.selected },
   body: { padding: 14, gap: 9 },
-  date: { color: "#64748B", fontSize: 12 },
-  caption: { color: "#0F172A", lineHeight: 20, fontWeight: "600" },
+  date: { color: colors.muted, fontSize: 12 },
+  caption: { color: colors.ink, lineHeight: 20, fontWeight: "600" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   metric: { width: "30%" },
-  metricValue: { fontWeight: "800", color: "#0F172A" },
-  metricLabel: { fontSize: 11, color: "#64748B" },
-  updated: { color: "#64748B", fontSize: 11 },
+  metricValue: { fontWeight: "800", color: colors.ink },
+  metricLabel: { fontSize: 11, color: colors.muted },
+  updated: { color: colors.muted, fontSize: 11 },
 });

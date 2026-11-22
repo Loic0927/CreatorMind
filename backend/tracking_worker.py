@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from backend.services.insight_refresh import refresh_cached_insights
 from backend.services.instagram import (
     InstagramServiceError,
     engagement_rate,
@@ -141,6 +142,17 @@ def collect_due(now: datetime | None = None, worker_id: str | None = None) -> di
             )
             if queue.complete(job.id, worker, snapshot, captured):
                 counts["captured"] += 1
+                # The worker is a write-side background process, so it is a
+                # safe place to refresh derived text caches.  GET requests
+                # intentionally only read these caches.
+                try:
+                    refresh_cached_insights(job.user_id, job.tracked_post_id)
+                except Exception as exc:  # pragma: no cover - provider-specific path
+                    LOGGER.warning(
+                        "insight_cache_refresh_failed tracked_post_id=%s error_type=%s",
+                        job.tracked_post_id,
+                        type(exc).__name__,
+                    )
                 LOGGER.info(
                     "milestone_captured tracked_post_id=%s milestone=%s lateness_seconds=%s",
                     job.tracked_post_id,
@@ -194,7 +206,15 @@ def run_once(*, detect: bool = True) -> dict[str, object]:
                     account.model_copy(update={"status": "reconnect_required", "last_error": exc.code})
                 )
             LOGGER.warning("instagram_token_maintenance_failed account_id=%s code=%s", account.id, exc.code)
-    return {"tokens": token_count, "media_sync": detect_new_media() if detect else None}
+    # Capture due milestones in the same worker cycle. ``collect_due`` is the
+    # write-side path that schedules derived-text cache refreshes after a
+    # persisted snapshot, so leaving it disconnected from the loop would make
+    # that guarantee ineffective in production.
+    return {
+        "tokens": token_count,
+        "media_sync": detect_new_media() if detect else None,
+        "collection": collect_due(),
+    }
 
 
 def _write_health(path: str):

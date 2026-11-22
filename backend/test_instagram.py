@@ -5,10 +5,11 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from backend import instagram_api
-from backend.services import instagram
+from backend.auth import AuthenticatedUser
+from backend.services import feedback, insight_texts, instagram
 from backend.services.instagram import (
     InstagramServiceError,
     aggregate_seven_days,
@@ -48,6 +49,7 @@ def instagram_environment(monkeypatch, tmp_path):
     repository = LocalDevelopmentInstagramRepository()
     monkeypatch.setattr(instagram, "get_instagram_repository", lambda: repository)
     monkeypatch.setattr(instagram_api, "get_instagram_repository", lambda: repository)
+    monkeypatch.setattr(instagram_api, "has_ai_processing_consent", lambda _user_id: True)
     monkeypatch.setattr(json_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(json_store, "STORE_PATH", tmp_path / "store.json")
     from backend.storage import token_store
@@ -403,14 +405,21 @@ def test_engagement_rate_handles_zero_reach_and_partial_metrics():
 
 
 def test_media_insights_preserve_partial_metric_availability(monkeypatch):
+    requested_metrics = []
+
     def fake_request(method, url, **kwargs):
         metric = kwargs.get("query", {}).get("metric")
         if metric is None:
             return {"like_count": 4, "comments_count": 1}
+        requested_metrics.append(metric)
+        if "," in metric:
+            # A non-retryable batch error must degrade to individual metric
+            # requests, not discard all supported data.
+            raise InstagramServiceError("instagram_request_rejected", "safe", 400)
         if metric == "reach":
-            return {"data": [{"total_value": {"value": 100}}]}
+            return {"data": [{"name": "reach", "total_value": {"value": 100}}]}
         if metric == "views":
-            return {"data": [{"total_value": {"value": 120}}]}
+            return {"data": [{"name": "views", "total_value": {"value": 120}}]}
         if metric == "shares":
             raise InstagramServiceError("instagram_permission_required", "safe", 403)
         raise InstagramServiceError("instagram_request_rejected", "safe", 400)
@@ -426,6 +435,7 @@ def test_media_insights_preserve_partial_metric_availability(monkeypatch):
     assert result["_metric_status"]["saves"] == "unavailable"
     assert result["_metric_status"]["shares"] == "permission_required"
     assert engagement_rate(result) == 5.0
+    assert any("," in metric for metric in requested_metrics)
 
 
 def test_media_insights_do_not_swallow_invalid_token(monkeypatch):
@@ -441,17 +451,7 @@ def test_media_insights_do_not_swallow_invalid_token(monkeypatch):
     assert failure.value.code == "instagram_token_invalid"
 
 
-@pytest.mark.parametrize(
-    ("media_type", "views_payload", "expected_views"),
-    [
-        ("IMAGE", None, None),
-        ("VIDEO", {"data": [{"total_value": {"value": 321}}]}, 321),
-        ("CAROUSEL_ALBUM", {"data": [{"values": [{"value": 456}]}]}, 456),
-    ],
-)
-def test_media_insights_use_provider_views_support_per_media_type(
-    monkeypatch, media_type, views_payload, expected_views
-):
+def test_media_insights_fetches_a_single_comma_separated_batch(monkeypatch):
     requested_metrics = []
 
     def fake_request(method, url, **kwargs):
@@ -459,19 +459,22 @@ def test_media_insights_use_provider_views_support_per_media_type(
         if metric is None:
             return {"like_count": 4, "comments_count": 1}
         requested_metrics.append(metric)
-        if metric == "reach":
-            return {"data": [{"total_value": {"value": 100}}]}
-        if metric == "views" and views_payload is not None:
-            return views_payload
-        raise InstagramServiceError("instagram_request_rejected", "safe", 400)
+        return {
+            "data": [
+                {"name": "reach", "total_value": {"value": 100}},
+                {"name": "views", "values": [{"value": 321}]},
+                {"name": "saved", "total_value": {"value": 4}},
+            ]
+        }
 
     monkeypatch.setattr(instagram, "_request_json", fake_request)
-    result = fetch_instagram_media_insights("secret", "media-1", media_type)
+    result = fetch_instagram_media_insights("secret", "media-1", "IMAGE")
 
-    assert "views" in requested_metrics
-    assert result.get("views") == expected_views
-    assert result["_metric_status"]["views"] == ("available" if expected_views is not None else "unavailable")
-    assert result["_media_type"] == media_type
+    assert requested_metrics == ["views,reach,saved,shares,comments"]
+    assert result["views"] == 321
+    assert result["reach"] == 100
+    assert result["saves"] == 4
+    assert result["_media_type"] == "IMAGE"
 
 
 def test_media_insights_transient_views_error_retries_whole_capture(monkeypatch):
@@ -479,7 +482,7 @@ def test_media_insights_transient_views_error_retries_whole_capture(monkeypatch)
         metric = kwargs.get("query", {}).get("metric")
         if metric is None:
             return {"like_count": 4, "comments_count": 1}
-        if metric == "views":
+        if metric and "," in metric:
             raise InstagramServiceError("instagram_upstream_error", "safe", 502)
         return {"data": [{"total_value": {"value": 100}}]}
 
@@ -504,7 +507,7 @@ def test_reels_watch_time_metrics_are_requested_and_preserved(monkeypatch):
             "ig_reels_avg_watch_time": 12500,
             "ig_reels_video_view_total_time": 250000,
         }
-        return {"data": [{"total_value": {"value": values[metric]}}]}
+        return {"data": [{"name": name, "total_value": {"value": value}} for name, value in values.items()]}
 
     monkeypatch.setattr(instagram, "_request_json", fake_request)
     result = fetch_instagram_media_insights("secret", "media-1", "REELS")
@@ -573,3 +576,318 @@ def test_local_store_media_upsert_and_tracking(tmp_path, monkeypatch):
     )
     json_store.append_instagram_snapshot(snapshot)
     assert json_store.load_store().instagram_insight_snapshots == [snapshot]
+
+
+def _api_snapshot(identifier: str, media_id: str, captured_at: datetime, *, views: int = 100):
+    return SimpleNamespace(
+        id=identifier,
+        media_id=media_id,
+        captured_at=captured_at,
+        likes=5,
+        comments=3,
+        saves=2,
+        shares=1,
+        reach=100,
+        views=views,
+        engagement_rate=11.0,
+        average_watch_time_ms=None,
+        total_watch_time_ms=None,
+        raw_metrics={},
+        metric_status={},
+    )
+
+
+def _api_item(identifier: str, captured_at: datetime, *, views: int = 100):
+    media_id = f"media-{identifier}"
+    snapshot = _api_snapshot(f"snapshot-{identifier}", media_id, captured_at, views=views)
+    return {
+        "tracking": SimpleNamespace(
+            id=f"tracked-{identifier}",
+            media_id=media_id,
+            is_active=True,
+            started_at=captured_at - timedelta(days=8),
+            stopped_at=None,
+        ),
+        "media": SimpleNamespace(
+            id=media_id,
+            instagram_media_id=f"provider-{identifier}",
+            media_type="IMAGE",
+            thumbnail_url=None,
+            media_url=None,
+            caption=f"Stored caption {identifier}",
+            published_at=captured_at - timedelta(days=8),
+        ),
+        "latest": snapshot,
+        "snapshots": [snapshot],
+    }
+
+
+class _CacheContent:
+    def __init__(self, caches=None):
+        self.caches = caches or {}
+
+    def get_text_cache(self, user_id, cache_key):
+        return self.caches.get((user_id, cache_key))
+
+
+def test_tracked_detail_reads_cached_text_in_bulk_without_generation_or_downloads(monkeypatch):
+    now = datetime.now(UTC)
+    item = _api_item("one", now)
+    comments = [
+        SimpleNamespace(
+            is_owner_reply=False,
+            text=f"Viewer comment {index}",
+            like_count=index,
+            timestamp=now + timedelta(seconds=index),
+        )
+        for index in range(3)
+    ]
+    content = _CacheContent(
+        {
+            ("user-1", "summary:tracked-one"): SimpleNamespace(text="Stored summary."),
+            ("user-1", "audience:tracked-one"): SimpleNamespace(text="Stored audience summary."),
+        }
+    )
+    account = SimpleNamespace(
+        instagram_user_id="ig-1",
+        scopes=["instagram_business_manage_comments"],
+        session_sync_error=None,
+    )
+    load_calls = []
+
+    def load(user_id, **kwargs):
+        load_calls.append((user_id, kwargs))
+        return [item], {"tracked-one": comments}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GET endpoints must not generate AI text or download media")
+
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: content)
+    monkeypatch.setattr(instagram_api, "load_tracked_items", load)
+    monkeypatch.setattr(instagram_api, "instagram_comment_ingestion_enabled", lambda *args: True)
+    monkeypatch.setattr(feedback, "load_media_input", forbidden)
+    monkeypatch.setattr(feedback, "refresh_summary_for_user", forbidden)
+    monkeypatch.setattr(insight_texts, "audience_description", forbidden)
+    monkeypatch.setattr(insight_texts, "next_post_suggestion", forbidden)
+
+    result = instagram_api.tracked_detail(
+        "tracked-one", AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    )
+
+    assert len(load_calls) == 1
+    assert load_calls[0][1]["active_only"] is False
+    assert load_calls[0][1]["include_comments"] is True
+    assert result["analysis"]["summary"] == "Stored summary."
+    assert result["analysis"]["summary_status"] == "ready"
+    assert result["analysis"]["audience_comments"] == {
+        "state": "ready",
+        "description": "Stored audience summary.",
+        "items": [
+            {"text": comment.text, "like_count": comment.like_count, "timestamp": comment.timestamp}
+            for comment in reversed(comments)
+        ],
+    }
+
+
+def test_tracked_detail_distinguishes_pending_and_resolved_empty_summary(monkeypatch):
+    now = datetime.now(UTC)
+    item = _api_item("one", now)
+    content = _CacheContent()
+    account = SimpleNamespace(instagram_user_id="ig-1", scopes=[], session_sync_error=None)
+
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: content)
+    monkeypatch.setattr(
+        instagram_api,
+        "load_tracked_items",
+        lambda *args, **kwargs: ([item], {}),
+    )
+
+    user = AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    assert instagram_api.tracked_detail("tracked-one", user)["analysis"]["summary_status"] == "pending"
+
+    content.caches[("user-1", "summary:tracked-one")] = SimpleNamespace(text="")
+    result = instagram_api.tracked_detail("tracked-one", user)
+    assert result["analysis"]["summary"] is None
+    assert result["analysis"]["summary_status"] == "none"
+
+
+def test_tracked_detail_keeps_comment_items_when_comment_access_is_denied(monkeypatch):
+    now = datetime.now(UTC)
+    item = _api_item("one", now)
+    comments = [
+        SimpleNamespace(is_owner_reply=False, text="Recent", like_count=1, timestamp=now),
+        SimpleNamespace(is_owner_reply=False, text="Older", like_count=0, timestamp=now - timedelta(minutes=1)),
+    ]
+    account = SimpleNamespace(
+        instagram_user_id="ig-1",
+        scopes=["instagram_business_manage_comments"],
+        session_sync_error="comment_access_denied",
+    )
+
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: _CacheContent())
+    monkeypatch.setattr(
+        instagram_api, "load_tracked_items", lambda *args, **kwargs: ([item], {"tracked-one": comments})
+    )
+    monkeypatch.setattr(instagram_api, "instagram_comment_ingestion_enabled", lambda *args: True)
+
+    audience = instagram_api.tracked_detail(
+        "tracked-one", AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    )["analysis"]["audience_comments"]
+
+    assert audience == {
+        "state": "access_denied",
+        "message": "Instagram denied access to comments.",
+        "items": [
+            {"text": "Recent", "like_count": 1, "timestamp": now},
+            {"text": "Older", "like_count": 0, "timestamp": now - timedelta(minutes=1)},
+        ],
+    }
+
+
+def test_tracked_detail_requires_consent_for_comment_summary_but_keeps_safe_items(monkeypatch):
+    now = datetime.now(UTC)
+    item = _api_item("one", now)
+    comments = [
+        SimpleNamespace(is_owner_reply=False, text="Recent", like_count=1, timestamp=now),
+        SimpleNamespace(is_owner_reply=False, text="Another", like_count=0, timestamp=now - timedelta(minutes=1)),
+        SimpleNamespace(is_owner_reply=False, text="Older", like_count=0, timestamp=now - timedelta(minutes=2)),
+    ]
+    account = SimpleNamespace(
+        instagram_user_id="ig-1",
+        scopes=["instagram_business_manage_comments"],
+        session_sync_error=None,
+    )
+    monkeypatch.setattr(instagram_api, "has_ai_processing_consent", lambda _user_id: False)
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda _user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: _CacheContent())
+    monkeypatch.setattr(
+        instagram_api, "load_tracked_items", lambda *args, **kwargs: ([item], {"tracked-one": comments})
+    )
+    monkeypatch.setattr(instagram_api, "instagram_comment_ingestion_enabled", lambda *args: True)
+
+    audience = instagram_api.tracked_detail(
+        "tracked-one", AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    )["analysis"]["audience_comments"]
+
+    assert audience["state"] == "consent_required"
+    assert [comment["text"] for comment in audience["items"]] == ["Recent", "Another", "Older"]
+
+
+def test_account_insights_reads_cached_suggestion_once_without_generation(monkeypatch):
+    now = datetime.now(UTC)
+    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(6)]
+    content = _CacheContent({("user-1", "next-post-suggestion"): SimpleNamespace(text="Suggestion: Stored text.")})
+    account = SimpleNamespace(status="connected", session_sync_error=None)
+    build_calls = []
+    original_build = instagram_api.build_account_insights
+
+    def counted_build(*args, **kwargs):
+        build_calls.append((args, kwargs))
+        return original_build(*args, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GET /insights/account must not generate a suggestion")
+
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: content)
+    monkeypatch.setattr(instagram_api, "load_tracked_items", lambda *args, **kwargs: (items, {}))
+    monkeypatch.setattr(instagram_api, "build_account_insights", counted_build)
+    monkeypatch.setattr(insight_texts, "next_post_suggestion", forbidden)
+
+    user = AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    ready = instagram_api.account_insights(user)
+
+    assert len(build_calls) == 1
+    assert ready["next_post_suggestion"] == "Suggestion: Stored text."
+    assert ready["next_post_suggestion_status"] == "ready"
+
+    content.caches.clear()
+    pending = instagram_api.account_insights(user)
+    assert pending["next_post_suggestion"] is None
+    assert pending["next_post_suggestion_status"] == "pending"
+
+    content.caches[("user-1", "next-post-suggestion")] = SimpleNamespace(text="")
+    resolved_empty = instagram_api.account_insights(user)
+    assert resolved_empty["next_post_suggestion_status"] == "none"
+
+
+def test_account_insights_hides_cached_suggestion_when_consent_is_revoked(monkeypatch):
+    now = datetime.now(UTC)
+    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(6)]
+    content = _CacheContent({("user-1", "next-post-suggestion"): SimpleNamespace(text="Suggestion: Old cache.")})
+    account = SimpleNamespace(status="connected", session_sync_error=None)
+    monkeypatch.setattr(instagram_api, "has_ai_processing_consent", lambda _user_id: False)
+    monkeypatch.setattr(instagram_api, "stored_connection", lambda _user_id: account)
+    monkeypatch.setattr(instagram_api, "get_content_repository", lambda: content)
+    monkeypatch.setattr(instagram_api, "load_tracked_items", lambda *args, **kwargs: (items, {}))
+
+    result = instagram_api.account_insights(
+        AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash")
+    )
+
+    assert result["next_post_suggestion"] is None
+    assert result["next_post_suggestion_status"] == "consent_required"
+
+
+def test_manual_refresh_schedules_cached_insight_generation(monkeypatch):
+    tracked = SimpleNamespace(id="tracked-one", media_id="media-one")
+    media = SimpleNamespace(id="media-one", instagram_media_id="provider-one", media_type="IMAGE")
+    account = SimpleNamespace(id="account-one")
+    refreshed = []
+
+    monkeypatch.setattr(
+        instagram_api,
+        "_tracked_item",
+        lambda user_id, tracked_id: {"tracking": tracked, "media": media, "latest": None},
+    )
+    monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "usable_token", lambda value: "token")
+    monkeypatch.setattr(instagram_api, "refresh_one_post", lambda *args, **kwargs: refreshed.append(args))
+    monkeypatch.setattr(instagram_api, "tracked_detail", lambda tracked_id, user: {"id": tracked_id})
+
+    background_tasks = BackgroundTasks()
+    result = instagram_api.refresh_tracking(
+        "tracked-one",
+        AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash"),
+        background_tasks,
+    )
+
+    assert result == {"id": "tracked-one"}
+    assert len(refreshed) == 1
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is instagram_api.refresh_cached_insights
+    assert background_tasks.tasks[0].args == ("user-1", "tracked-one")
+
+
+def test_recent_manual_refresh_still_schedules_cached_insight_generation(monkeypatch):
+    tracked = SimpleNamespace(id="tracked-one", media_id="media-one")
+    media = SimpleNamespace(id="media-one", instagram_media_id="provider-one", media_type="IMAGE")
+    account = SimpleNamespace(id="account-one")
+
+    monkeypatch.setattr(
+        instagram_api,
+        "_tracked_item",
+        lambda user_id, tracked_id: {
+            "tracking": tracked,
+            "media": media,
+            "latest": SimpleNamespace(captured_at=datetime.now(UTC)),
+        },
+    )
+    monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
+    monkeypatch.setattr(instagram_api, "refresh_one_post", lambda *args, **kwargs: pytest.fail("must stay throttled"))
+    monkeypatch.setattr(instagram_api, "tracked_detail", lambda tracked_id, user: {"id": tracked_id})
+
+    background_tasks = BackgroundTasks()
+    result = instagram_api.refresh_tracking(
+        "tracked-one",
+        AuthenticatedUser(id="user-1", email="user@example.test", token_hash="hash"),
+        background_tasks,
+    )
+
+    assert result == {"id": "tracked-one"}
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is instagram_api.refresh_cached_insights
+    assert background_tasks.tasks[0].args == ("user-1", "tracked-one")

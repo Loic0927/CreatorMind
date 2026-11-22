@@ -9,8 +9,9 @@ from backend.services.account_context import AccountContextFields, serialize_acc
 
 
 @pytest.fixture(autouse=True)
-def _fresh_rate_limits():
+def _fresh_rate_limits(monkeypatch):
     reset_rate_limits()
+    monkeypatch.setattr(caption_api, "has_ai_processing_consent", lambda user_id: True)
     yield
     reset_rate_limits()
 
@@ -155,3 +156,13 @@ def test_caption_generation_is_rate_limited_per_user(monkeypatch):
 
     other = AuthenticatedUser(id="user-2", email="other@example.test", token_hash="other")
     assert caption_api.generate_caption(_request(False), other).caption == "Hi"
+
+
+def test_caption_requires_explicit_ai_processing_consent(monkeypatch):
+    monkeypatch.setattr(caption_api, "has_ai_processing_consent", lambda user_id: False)
+
+    with pytest.raises(caption_api.HTTPException) as rejected:
+        caption_api.generate_caption(_request(False), _user())
+
+    assert rejected.value.status_code == 403
+    assert rejected.value.detail["code"] == "consent_required"

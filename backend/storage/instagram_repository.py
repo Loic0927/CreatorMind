@@ -17,8 +17,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import is_production
 from backend.storage import json_store, token_store
-from backend.storage.models import InstagramAccount
-from backend.storage.sql_models import InstagramConnectionRecord, OAuthStateRecord
+from backend.storage.models import InstagramAccount, InstagramDataDeletionRequest
+from backend.storage.sql_models import (
+    AIGenerationLogRecord,
+    InsightTextCacheRecord,
+    InstagramCommentRecord,
+    InstagramConnectionRecord,
+    InstagramDataDeletionRequestRecord,
+    InstagramInsightCollectionJobRecord,
+    InstagramInsightSnapshotRecord,
+    InstagramMediaRecord,
+    OAuthStateRecord,
+    TrackedPostRecord,
+)
 
 
 class InstagramRepositoryError(RuntimeError):
@@ -44,6 +55,17 @@ class InstagramRepository(Protocol):
     def get_encrypted_token(self, connection_id: str) -> str | None: ...
 
     def delete_connection(self, user_id: str) -> bool: ...
+
+    def deauthorize_instagram_user(self, instagram_user_id: str) -> int: ...
+
+    def delete_instagram_data(
+        self,
+        instagram_user_id: str,
+        confirmation_code: str,
+        now: datetime,
+    ) -> None: ...
+
+    def get_data_deletion_request(self, code: str) -> InstagramDataDeletionRequest | None: ...
 
     def mark_session_sync(
         self, user_id: str, synced_at: datetime | None, error: str | None
@@ -216,6 +238,116 @@ class SQLAlchemyInstagramRepository:
         except Exception:
             raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
+    def deauthorize_instagram_user(self, instagram_user_id: str) -> int:
+        """Invalidate Meta-authorized connections without deleting user history."""
+        try:
+            with self._session_factory.begin() as session:
+                result = session.execute(
+                    update(InstagramConnectionRecord)
+                    .where(InstagramConnectionRecord.instagram_user_id == instagram_user_id)
+                    .values(
+                        status="disconnected",
+                        # This column is NOT NULL, so an empty value is the
+                        # safe erased-token representation.
+                        encrypted_access_token="",
+                        token_expires_at=None,
+                        session_sync_error=None,
+                        updated_at=datetime.now(UTC),
+                    )
+                )
+                return int(result.rowcount or 0)
+        except Exception:
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
+
+    def delete_instagram_data(
+        self,
+        instagram_user_id: str,
+        confirmation_code: str,
+        now: datetime,
+    ) -> None:
+        """Delete Instagram-derived records while preserving the PostBridge user.
+
+        The deletion confirmation is stored in the same transaction so an
+        acknowledged request always has a public status record, including when
+        Meta sends an app-scoped user id that is no longer known locally.
+        """
+        try:
+            with self._session_factory.begin() as session:
+                connections = list(
+                    session.scalars(
+                        select(InstagramConnectionRecord).where(
+                            InstagramConnectionRecord.instagram_user_id == instagram_user_id
+                        )
+                    )
+                )
+                connection_ids = [item.id for item in connections]
+                user_ids = list({item.user_id for item in connections})
+                media_ids: list[str] = []
+                tracked_ids: list[str] = []
+                if connection_ids:
+                    media_ids = list(
+                        session.scalars(
+                            select(InstagramMediaRecord.id).where(InstagramMediaRecord.account_id.in_(connection_ids))
+                        )
+                    )
+                if media_ids:
+                    tracked_ids = list(
+                        session.scalars(select(TrackedPostRecord.id).where(TrackedPostRecord.media_id.in_(media_ids)))
+                    )
+
+                # These references are explicit to support every configured
+                # database and to remove account-level caches that do not have
+                # a tracked-post foreign key.
+                if tracked_ids:
+                    session.execute(
+                        delete(InstagramInsightCollectionJobRecord).where(
+                            InstagramInsightCollectionJobRecord.tracked_post_id.in_(tracked_ids)
+                        )
+                    )
+                    session.execute(
+                        delete(AIGenerationLogRecord).where(AIGenerationLogRecord.tracked_post_id.in_(tracked_ids))
+                    )
+                    session.execute(
+                        delete(InstagramCommentRecord).where(InstagramCommentRecord.tracked_post_id.in_(tracked_ids))
+                    )
+                if user_ids:
+                    session.execute(delete(InsightTextCacheRecord).where(InsightTextCacheRecord.user_id.in_(user_ids)))
+                    # OAuth states are Instagram authorization artifacts, not
+                    # PostBridge account data, so remove them too.
+                    session.execute(delete(OAuthStateRecord).where(OAuthStateRecord.user_id.in_(user_ids)))
+                if media_ids:
+                    session.execute(
+                        delete(InstagramInsightSnapshotRecord).where(
+                            InstagramInsightSnapshotRecord.media_id.in_(media_ids)
+                        )
+                    )
+                    session.execute(delete(TrackedPostRecord).where(TrackedPostRecord.media_id.in_(media_ids)))
+                    session.execute(delete(InstagramMediaRecord).where(InstagramMediaRecord.id.in_(media_ids)))
+                if connection_ids:
+                    session.execute(
+                        delete(InstagramConnectionRecord).where(InstagramConnectionRecord.id.in_(connection_ids))
+                    )
+
+                session.add(
+                    InstagramDataDeletionRequestRecord(
+                        code=confirmation_code,
+                        status="completed",
+                        created_at=now,
+                        completed_at=now,
+                    )
+                )
+
+        except Exception:
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
+
+    def get_data_deletion_request(self, code: str) -> InstagramDataDeletionRequest | None:
+        try:
+            with self._session_factory() as session:
+                record = session.get(InstagramDataDeletionRequestRecord, code)
+                return self._to_data_deletion_request(record) if record else None
+        except Exception:
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
+
     @staticmethod
     def _to_account(record: InstagramConnectionRecord) -> InstagramAccount:
         return InstagramAccount(
@@ -236,6 +368,17 @@ class SQLAlchemyInstagramRepository:
             connected_at=_as_utc(record.created_at),
             last_synced_at=_as_utc(record.updated_at),
             last_error=None,
+        )
+
+    @staticmethod
+    def _to_data_deletion_request(
+        record: InstagramDataDeletionRequestRecord,
+    ) -> InstagramDataDeletionRequest:
+        return InstagramDataDeletionRequest(
+            code=record.code,
+            status=record.status,
+            created_at=_as_utc(record.created_at),
+            completed_at=_as_utc(record.completed_at),
         )
 
 
@@ -302,6 +445,45 @@ class LocalDevelopmentInstagramRepository:
         json_store.update_store(mutate)
         token_store.delete_encrypted_token(existing.id)
         return True
+
+    def deauthorize_instagram_user(self, instagram_user_id: str) -> int:
+        accounts = json_store.mark_instagram_connections_disconnected(instagram_user_id)
+        for account in accounts:
+            token_store.delete_encrypted_token(account.id)
+        return len(accounts)
+
+    def delete_instagram_data(
+        self,
+        instagram_user_id: str,
+        confirmation_code: str,
+        now: datetime,
+    ) -> None:
+        accounts = [
+            item for item in json_store.load_store().instagram_accounts if item.instagram_user_id == instagram_user_id
+        ]
+        for account in accounts:
+            token_store.delete_encrypted_token(account.id)
+        user_ids = json_store.delete_instagram_data_for_instagram_user(instagram_user_id)
+        json_store.upsert_instagram_data_deletion_request(
+            InstagramDataDeletionRequest(
+                code=confirmation_code,
+                status="completed",
+                created_at=now,
+                completed_at=now,
+            )
+        )
+
+        # Text caches are process-local in the development store. They can
+        # contain summaries derived from the deleted media/comments.
+        if user_ids:
+            from backend.storage.content_repository import get_content_repository
+
+            content_repository = get_content_repository()
+            for user_id in user_ids:
+                content_repository.clear_local_user_cache(user_id)
+
+    def get_data_deletion_request(self, code: str) -> InstagramDataDeletionRequest | None:
+        return json_store.get_instagram_data_deletion_request(code)
 
     def mark_session_sync(self, user_id: str, synced_at: datetime | None, error: str | None) -> InstagramAccount | None:
         existing = self.get_connection(user_id)

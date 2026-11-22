@@ -66,16 +66,37 @@ All routes except sign-in and health checks require `Authorization: Bearer <sess
 
 | Area | Routes |
 | --- | --- |
-| Auth | `POST /auth/request-code`, `POST /auth/verify-code`, `GET /auth/session`, `POST /auth/logout`, `DELETE /auth/account` |
+| Auth | `POST /auth/request-code`, `POST /auth/verify-code`, `GET /auth/session`, `POST /auth/logout`, `DELETE /auth/account`, `GET/POST/DELETE /auth/ai-processing-consent` |
 | Account context | `GET/PATCH /auth/account-context`, `GET /auth/account-context/suggest`, `POST /auth/account-context/preview` |
 | Instagram | `/api/instagram/connection`, `/api/instagram/connect/start`, `/api/instagram/connect/callback`, `/api/instagram/account`, `/api/instagram/media` |
 | Tracking and insights | `/tracked-posts`, `/tracked-posts/{id}`, `/tracked-posts/{id}/refresh`, `/insights/account`, `/insights/instagram` |
 | Create and publish | `POST /mobile/caption`, `POST /media-assets`, `/drafts`, `/drafts/{id}/publish`, `GET /publishing/capabilities`, `POST /publications` |
 | Health | `GET /`, `GET /health` |
 
+The public Meta callbacks are deliberately unauthenticated: `POST /api/instagram/deauthorize`,
+`POST /api/instagram/data-deletion`, and `GET /api/instagram/data-deletion/status?code=...`.
+They validate Meta's signed request before acting; never send a signed request through a client route.
+
+## App Review sign-in
+
+For an App Store or Meta reviewer, set both `POSTBRIDGE_REVIEW_LOGIN_EMAIL` and
+`POSTBRIDGE_REVIEW_LOGIN_CODE_HASH` in the backend runtime. The code hash is a SHA-256 hash of
+the six-digit reviewer code. When (and only when) the incoming email matches that mailbox
+case-insensitively, the normal rate-limited sign-in flow accepts the configured code without
+mailing it. The code is never logged. Leave either variable empty to fully disable this path.
+
+## AI-processing consent
+
+Before Gemini is used, web and mobile ask the creator to opt in to sending selected media,
+captions, audience comments, and performance facts to Google Gemini for the requested feature.
+They can decline or revoke consent in Settings. Revocation clears generated text caches;
+non-AI deterministic summaries may still be produced from stored performance facts.
+
 ## Abuse protection
 
 - Sign-in codes: 60-second cooldown, 5 attempts per code, and at most `POSTBRIDGE_LOGIN_CODES_PER_DAY`
   (default 10) codes per email per 24 hours. Nginx also limits the sign-in routes per IP.
 - Caption generation: `POSTBRIDGE_CAPTION_LIMIT_PER_HOUR` (default 30) per user per API worker.
+- Gemini features require explicit per-user AI-processing consent; caption generation returns
+  `consent_required` until the user grants it.
 - Deleting an account removes the user's database rows and their private media in OCI.

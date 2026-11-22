@@ -6,7 +6,7 @@ export function PageTitle({ children, className = "" }: { children: ReactNode; c
 
 /** Large rounded container used by Home, Create and Settings. */
 export function Panel({ children }: { children: ReactNode }) {
-  return <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">{children}</section>;
+  return <section className="rounded-3xl border border-line bg-surface p-5 shadow-soft md:p-6">{children}</section>;
 }
 
 /** Compact card used by Analyze and Insights. */
@@ -20,22 +20,20 @@ export function Card({
   className?: string;
 }) {
   return (
-    <div
-      className={`rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,.03)] ${compact ? "p-4" : "p-5"} ${className}`}
-    >
+    <div className={`rounded-2xl border border-line bg-surface shadow-soft ${compact ? "p-4" : "p-5"} ${className}`}>
       {children}
     </div>
   );
 }
 
 export function ErrorBanner({ message }: { message: string }) {
-  return message ? <div className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{message}</div> : null;
+  return message ? <div className="mb-5 rounded-2xl bg-danger-bg p-4 text-sm text-danger">{message}</div> : null;
 }
 
 export function Metric({ label, value }: { label: string; value?: number | string | null }) {
   return (
     <div>
-      <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</p>
+      <p className="text-[10px] font-black uppercase tracking-wider text-muted">{label}</p>
       <p className="mt-1 font-black">{typeof value === "number" ? value.toLocaleString() : (value ?? "–")}</p>
     </div>
   );

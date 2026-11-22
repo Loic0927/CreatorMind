@@ -38,6 +38,8 @@ def analysis(selected, peers):
 def test_not_enough_comparable_posts_hides_all_range_sections():
     result = analysis(item(0, 100), [item(i, 200 + i) for i in range(1, 6)])
     assert result["comparable"] is False
+    assert result["comparison_basis"] == "lifetime"
+    assert result["not_comparable_reason"] == "too_few_posts"
     assert result["stands_out"] == result["weaker"] == result["usual_ranges"] == []
 
 
@@ -49,11 +51,99 @@ def test_stands_out_and_weaker_use_account_range():
     assert {row["metric"] for row in low["weaker"]} >= {"views", "reach"}
 
 
-def test_weaker_falls_back_to_lower_half_when_nothing_is_below_range():
+def test_weaker_only_contains_metrics_below_the_usual_range():
     peers = [item(i, 100 + i * 10) for i in range(1, 7)]
     result = analysis(item(0, 115), peers)
-    assert result["weaker"]
-    assert all(row["rank"] > row["group_size"] / 2 for row in result["weaker"])
+    assert result["weaker"] == []
+
+
+def _history_item(index, published_at, snapshots):
+    media = SimpleNamespace(
+        id=f"history-m{index}",
+        instagram_media_id=f"history-ig{index}",
+        media_type="IMAGE",
+        thumbnail_url=None,
+        media_url=None,
+        published_at=published_at,
+    )
+    return {
+        "media": media,
+        "tracking": SimpleNamespace(id=f"history-t{index}"),
+        "latest": max(snapshots, key=lambda snapshot: snapshot.captured_at),
+        "snapshots": snapshots,
+    }
+
+
+def _history_snapshot(identifier, captured_at, views):
+    return SimpleNamespace(
+        id=identifier,
+        captured_at=captured_at,
+        views=views,
+        reach=views,
+        engagement_rate=5.0,
+        shares=10,
+        saves=12,
+        comments=8,
+        likes=30,
+    )
+
+
+def test_young_posts_compare_with_same_age_snapshots_including_young_peers():
+    selected_published = NOW - timedelta(hours=26)
+    selected = _history_item(
+        0,
+        selected_published,
+        [_history_snapshot("selected", NOW - timedelta(hours=2), 100)],
+    )
+    peers = []
+    for index in range(6):
+        published = NOW - timedelta(days=30) if index < 5 else NOW - timedelta(days=2)
+        snapshots = [_history_snapshot(f"p{index}-same-age", published + timedelta(hours=23), 90 + index * 5)]
+        if index < 5:
+            snapshots.extend(
+                [
+                    _history_snapshot(f"p{index}-early", published + timedelta(hours=2), 1),
+                    _history_snapshot(f"p{index}-lifetime", NOW, 10_000),
+                ]
+            )
+        peers.append(_history_item(index + 1, published, snapshots))
+
+    result = build_post_analysis(
+        selected, [selected, *peers], summary=None, audience_comments={"state": "too_few"}, now=NOW
+    )
+
+    views = next(row for row in result["usual_ranges"] if row["metric"] == "views")
+    assert result["comparable"] is True
+    assert result["comparison_basis"] == "same_age"
+    assert result["not_comparable_reason"] is None
+    assert result["comparable_count"] == 6
+    assert (views["usual_min"], views["usual_max"]) == (90, 115)
+
+
+def test_young_posts_report_too_early_when_too_few_same_age_peers_qualify():
+    selected_published = NOW - timedelta(hours=26)
+    selected = _history_item(
+        0,
+        selected_published,
+        [_history_snapshot("selected", NOW - timedelta(hours=2), 100)],
+    )
+    peers = [
+        _history_item(
+            index,
+            NOW - timedelta(days=2),
+            [_history_snapshot(f"p{index}", NOW - timedelta(days=2) + timedelta(hours=24), 100)],
+        )
+        for index in range(1, 6)
+    ]
+
+    result = build_post_analysis(
+        selected, [selected, *peers], summary=None, audience_comments={"state": "too_few"}, now=NOW
+    )
+
+    assert result["comparable"] is False
+    assert result["comparison_basis"] == "same_age"
+    assert result["not_comparable_reason"] == "too_early"
+    assert result["stands_out"] == result["weaker"] == result["usual_ranges"] == []
 
 
 def test_refresh_flag_uses_single_24_hour_constant_and_only_metric_posts_are_listed():

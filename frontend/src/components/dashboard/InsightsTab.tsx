@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AccountInsights,
+  ApiError,
   MetricKey,
   PerformancePost,
   Session,
   getAccountInsights,
+  grantAIProcessingConsent,
   refreshTrackedPost,
 } from "@/lib/postbridge";
+import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
 import { LoadingState } from "@/components/dashboard/LoadingState";
 import { Card, PageTitle } from "@/components/dashboard/ui";
@@ -41,12 +44,19 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
   const [showAll, setShowAll] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [cooldowns, setCooldowns] = useState<Set<string>>(new Set());
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     try {
       setData(await getAccountInsights(session));
     } catch (reason) {
+      if (reason instanceof ApiError && reason.code === "consent_required") {
+        setConsentDialogOpen(true);
+        setError("");
+        return;
+      }
       setError(errorMessage(reason, "Couldn't load insights."));
     }
   }, [session]);
@@ -89,6 +99,20 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
     }
   };
 
+  const acceptConsent = async () => {
+    setSavingConsent(true);
+    setError("");
+    try {
+      await grantAIProcessingConsent(session);
+      setConsentDialogOpen(false);
+      await load();
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save AI processing consent."));
+    } finally {
+      setSavingConsent(false);
+    }
+  };
+
   const notice =
     error ||
     (data?.sync_status === "failed"
@@ -100,7 +124,7 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
   return (
     <section className="mx-auto w-full max-w-[880px]">
       <PageTitle className="mb-5 md:mb-7">Insights</PageTitle>
-      {notice ? <p className="mb-3 text-sm text-slate-500">{notice}</p> : null}
+      {notice ? <p className="mb-3 text-sm text-muted">{notice}</p> : null}
       {!data ? (
         <LoadingState label="Preparing your insights" />
       ) : (
@@ -110,7 +134,7 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
               {data.highlights.map((item) => (
                 <button key={item.label} onClick={() => onOpen(item.tracked_post_id)} className="h-full text-left">
                   <Card compact className="h-full">
-                    <p className="min-h-8 text-[11px] font-black uppercase tracking-[.06em] text-slate-500 lg:min-h-0">
+                    <p className="min-h-8 text-[11px] font-black uppercase tracking-[.06em] text-muted lg:min-h-0">
                       {item.label}
                     </p>
                     <div className="mt-3 grid grid-cols-[40px_minmax(0,1fr)] items-center gap-2.5 sm:grid-cols-[56px_minmax(0,1fr)]">
@@ -121,13 +145,13 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
                           className="h-14 w-10 shrink-0 rounded-lg object-cover object-center sm:w-14 sm:rounded-xl"
                         />
                       ) : (
-                        <div className="h-14 w-10 shrink-0 rounded-lg bg-sky-200 sm:w-14 sm:rounded-xl" />
+                        <div className="h-14 w-10 shrink-0 rounded-lg bg-line-strong sm:w-14 sm:rounded-xl" />
                       )}
                       <div className="min-w-0">
                         <p className="text-[20px] font-black leading-none sm:text-[22px]">
                           {item.metric === "engagement_rate" ? formatRate(item.value) : formatNumber(item.value)}
                         </p>
-                        <p className="mt-2 whitespace-nowrap text-[12px] text-slate-500 sm:text-[13px]">
+                        <p className="mt-2 whitespace-nowrap text-[12px] text-muted sm:text-[13px]">
                           {shortDate(item.published_at)}
                         </p>
                       </div>
@@ -142,6 +166,25 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
             <Card>
               <h2 className="text-xl font-black">Next post suggestion</h2>
               <p className="mt-3 text-[15px] leading-5">{data.next_post_suggestion}</p>
+            </Card>
+          ) : data.next_post_suggestion_status === "pending" ? (
+            <Card>
+              <h2 className="text-xl font-black">Next post suggestion</h2>
+              <p className="mt-3 text-[15px] leading-5 text-muted">Your suggestion is being prepared.</p>
+            </Card>
+          ) : data.next_post_suggestion_status === "consent_required" ? (
+            <Card>
+              <h2 className="text-xl font-black">Next post suggestion</h2>
+              <p className="mt-3 text-[15px] leading-5 text-muted">
+                Enable optional AI processing to receive a next-post suggestion.
+              </p>
+              <button
+                type="button"
+                onClick={() => setConsentDialogOpen(true)}
+                className="mt-4 min-h-10 rounded-xl bg-primary px-4 text-sm font-black text-white hover:bg-primary-hover"
+              >
+                Review AI data use
+              </button>
             </Card>
           ) : null}
 
@@ -160,7 +203,7 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
               </div>
             </div>
             <div
-              className={`hidden ${desktopGrid} items-center gap-3 border-b border-slate-200 pb-3 text-[11px] uppercase tracking-[.06em] text-slate-500 lg:grid`}
+              className={`hidden ${desktopGrid} items-center gap-3 border-b border-line pb-3 text-[11px] uppercase tracking-[.06em] text-muted lg:grid`}
             >
               <span className="font-normal">Rank</span>
               <span className="font-normal">Post</span>
@@ -184,7 +227,7 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
             {data.performance_posts.length > collapsedCount && !showAll ? (
               <button
                 onClick={() => setShowAll(true)}
-                className="min-h-11 pt-4 text-left text-[15px] font-black text-sky-600"
+                className="min-h-11 pt-4 text-left text-[15px] font-black text-primary"
               >
                 Show all {data.performance_posts.length}
               </button>
@@ -192,6 +235,12 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
           </Card>
         </div>
       )}
+      <AiConsentDialog
+        open={consentDialogOpen}
+        busy={savingConsent}
+        onAccept={acceptConsent}
+        onNotNow={() => setConsentDialogOpen(false)}
+      />
     </section>
   );
 }
@@ -228,7 +277,7 @@ function PostRow({
         event.stopPropagation();
         onRefresh();
       }}
-      className={`min-h-8 shrink-0 text-[12px] font-semibold text-sky-600 ${refreshing || cooldown ? "opacity-50" : ""}`}
+      className={`min-h-8 shrink-0 text-[12px] font-semibold text-primary ${refreshing || cooldown ? "opacity-50" : ""}`}
     >
       {refreshing ? "Refreshing…" : cooldown ? "Refreshed" : "Refresh"}
     </button>
@@ -236,11 +285,11 @@ function PostRow({
   const cover = post.thumbnail_url ? (
     <img src={post.thumbnail_url} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover object-center" />
   ) : (
-    <span className="h-14 w-14 shrink-0 rounded-xl bg-sky-200" />
+    <span className="h-14 w-14 shrink-0 rounded-xl bg-line-strong" />
   );
 
   return (
-    <div className="border-b border-slate-200 last:border-0">
+    <div className="border-b border-line last:border-0">
       <div
         {...rowProps}
         className="grid min-h-[72px] cursor-pointer grid-cols-[32px_minmax(108px,1fr)_72px] items-center gap-3 py-2 text-left lg:hidden"

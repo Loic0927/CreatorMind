@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AccountContext,
+  AIProcessingConsent,
   Connection,
   Session,
   deleteAccount,
   disconnectInstagram,
+  getAIProcessingConsent,
   getAccountContext,
   getConnection,
+  grantAIProcessingConsent,
   logout,
+  revokeAIProcessingConsent,
   updateAccountContext,
 } from "@/lib/postbridge";
+import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage } from "@/lib/format";
 import { ErrorBanner, PageTitle, Panel } from "@/components/dashboard/ui";
 import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
@@ -89,22 +95,26 @@ const contextFields = [
 ] as const;
 const maxHashtags = 10;
 const fieldClass =
-  "w-full rounded-2xl border border-slate-200 p-4 outline-none focus:ring-2 focus:ring-sky-400 disabled:opacity-60";
+  "w-full rounded-2xl border border-line bg-field p-4 outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60";
 
 export function SettingsTab({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [context, setContext] = useState<AccountContext>(emptyContext);
+  const [aiConsent, setAiConsent] = useState<AIProcessingConsent | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
+  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const [hashtagInput, setHashtagInput] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getConnection(session), getAccountContext(session)])
-      .then(([nextConnection, nextContext]) => {
+    Promise.all([getConnection(session), getAccountContext(session), getAIProcessingConsent(session)])
+      .then(([nextConnection, nextContext, nextConsent]) => {
         setConnection(nextConnection);
         setContext(nextContext);
+        setAiConsent(nextConsent);
       })
       .catch((reason) => setError(errorMessage(reason, "Could not load settings.")))
       .finally(() => setLoading(false));
@@ -153,6 +163,32 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
     }
   };
 
+  const acceptConsent = async () => {
+    setSavingConsent(true);
+    setError("");
+    try {
+      setAiConsent(await grantAIProcessingConsent(session));
+      setConsentDialogOpen(false);
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save AI processing consent."));
+    } finally {
+      setSavingConsent(false);
+    }
+  };
+
+  const revokeConsent = async () => {
+    if (!window.confirm("Revoke AI processing consent? Existing AI text will be cleared.")) return;
+    setSavingConsent(true);
+    setError("");
+    try {
+      setAiConsent(await revokeAIProcessingConsent(session));
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not revoke AI processing consent."));
+    } finally {
+      setSavingConsent(false);
+    }
+  };
+
   const addHashtag = () => {
     const cleaned = hashtagInput
       .trim()
@@ -175,22 +211,55 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
       <ErrorBanner message={error} />
       <div className="space-y-5">
         <Panel>
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Signed in as</p>
+          <p className="text-xs font-bold uppercase tracking-wider text-muted">Signed in as</p>
           <p className="mt-2 break-all text-base font-black md:text-lg">{session.user.email}</p>
           <div className="mt-6 grid grid-cols-2 gap-3 sm:flex">
             <button
               onClick={() => void signOut()}
-              className="rounded-xl border border-slate-200 px-3 py-3 text-sm font-bold sm:px-5 sm:text-base"
+              className="rounded-xl border border-line px-3 py-3 text-sm font-bold hover:bg-subtle sm:px-5 sm:text-base"
             >
               Log out
             </button>
             <button
               onClick={() => void removeAccount()}
-              className="rounded-xl border border-red-200 px-3 py-3 text-sm font-bold text-red-700"
+              className="rounded-xl border border-danger-line px-3 py-3 text-sm font-bold text-danger hover:bg-danger-bg"
             >
               Delete account
             </button>
           </div>
+          <p className="mt-5 text-sm text-muted">
+            <Link href="/privacy" className="font-bold text-primary-hover underline underline-offset-2">
+              Privacy
+            </Link>
+            <span aria-hidden="true"> · </span>
+            <Link href="/terms" className="font-bold text-primary-hover underline underline-offset-2">
+              Terms
+            </Link>
+          </p>
+        </Panel>
+
+        <Panel>
+          <h2 className="text-lg font-black">AI processing</h2>
+          <p className="mt-2 text-sm leading-5 text-muted">
+            Allow optional Google Gemini features for captions, summaries, comment summaries, and suggestions.
+          </p>
+          <label className="mt-5 flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-subtle px-4 py-3 text-sm font-bold">
+            <span>Allow optional AI processing</span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={Boolean(aiConsent?.ai_processing_consented)}
+              disabled={loading || savingConsent || !aiConsent}
+              onChange={(event) => {
+                if (event.target.checked) setConsentDialogOpen(true);
+                else void revokeConsent();
+              }}
+              className="h-5 w-5 accent-primary"
+            />
+          </label>
+          <p className="mt-3 text-xs leading-5 text-muted">
+            Revoking consent clears your saved AI text. You can still use PostBridge without optional AI features.
+          </p>
         </Panel>
 
         <Panel>
@@ -261,9 +330,9 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
                   value={context[key]}
                   placeholder={placeholder}
                   onChange={(event) => edit({ [key]: event.target.value })}
-                  className={`mt-2 min-h-28 placeholder:text-slate-400 ${fieldClass}`}
+                  className={`mt-2 min-h-28 placeholder:text-muted ${fieldClass}`}
                 />
-                <span className="mt-1 block text-right text-[11px] text-slate-500">
+                <span className="mt-1 block text-right text-[11px] text-muted">
                   {context[key].length}/{maxLength}
                 </span>
               </label>
@@ -283,13 +352,13 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
                   addHashtag();
                 }}
                 placeholder={hashtagsFull ? "Maximum of 10 hashtags reached" : "Type a hashtag and press Enter"}
-                className={`mt-2 bg-slate-100 ${fieldClass}`}
+                className={`mt-2 ${fieldClass}`}
               />
               <div className="mt-3 flex flex-wrap gap-2">
                 {context.preferred_hashtags.map((hashtag) => (
                   <span
                     key={hashtag}
-                    className="inline-flex items-center gap-2 rounded-full bg-sky-100 py-2 pl-4 pr-2 text-sm font-bold text-sky-700"
+                    className="inline-flex items-center gap-2 rounded-full bg-selected py-2 pl-4 pr-2 text-sm font-bold text-selected-ink"
                   >
                     {hashtag}
                     <button
@@ -298,7 +367,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
                       onClick={() =>
                         edit({ preferred_hashtags: context.preferred_hashtags.filter((item) => item !== hashtag) })
                       }
-                      className="grid h-6 w-6 place-items-center rounded-full text-base hover:bg-white"
+                      className="grid h-6 w-6 place-items-center rounded-full text-base hover:bg-surface"
                     >
                       ×
                     </button>
@@ -311,7 +380,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
             <button
               disabled={loading || saving}
               onClick={() => void save()}
-              className="rounded-xl bg-sky-600 px-5 py-3 text-sm font-black text-white disabled:opacity-50"
+              className="rounded-xl bg-primary px-5 py-3 text-sm font-black text-white hover:bg-primary-hover disabled:opacity-50"
             >
               {saving ? "Saving…" : saved ? "Saved" : "Save settings"}
             </button>
@@ -321,7 +390,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
         <Panel>
           <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Instagram connection</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted">Instagram connection</p>
               <h2 className="mt-1 text-lg font-black">
                 {connection?.connected
                   ? `@${connection.username || "Instagram account"}`
@@ -333,7 +402,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
             {connection?.connected ? (
               <button
                 onClick={() => void instagramLogout()}
-                className="rounded-xl border border-red-200 px-5 py-3 text-sm font-black text-red-700"
+                className="rounded-xl border border-danger-line px-5 py-3 text-sm font-black text-danger hover:bg-danger-bg"
               >
                 Log out
               </button>
@@ -341,6 +410,12 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
           </div>
         </Panel>
       </div>
+      <AiConsentDialog
+        open={consentDialogOpen}
+        busy={savingConsent}
+        onAccept={acceptConsent}
+        onNotNow={() => setConsentDialogOpen(false)}
+      />
     </div>
   );
 }

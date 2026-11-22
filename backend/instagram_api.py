@@ -1,16 +1,22 @@
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import os
+import secrets
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from backend.auth import AuthenticatedUser, require_user
+from backend.auth import AuthenticatedUser, has_ai_processing_consent, require_user
 from backend.services.account_insights import build_account_insights, build_post_analysis
 from backend.services.comments import audience_comment_state
-from backend.services.feedback import cached_summary, refresh_summary_for_user
-from backend.services.insight_texts import audience_description, next_post_suggestion
+from backend.services.insight_refresh import refresh_cached_insights
 from backend.services.instagram import (
     InstagramServiceError,
     aggregate_seven_days,
@@ -32,13 +38,13 @@ from backend.services.instagram import (
     token_expiry,
 )
 from backend.services.instagram_sync import refresh_one_post, usable_token
-from backend.services.media_inputs import load_media_input
 from backend.services.publishing import (
     InstagramPublishingAdapter,
     PublishingAdapterRegistry,
     PublishInput,
     UnavailablePublishingAdapter,
 )
+from backend.services.tracked_items import load_tracked_items
 from backend.storage.content_repository import get_content_repository
 from backend.storage.instagram_repository import (
     InstagramRepository,
@@ -50,6 +56,7 @@ from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_
 
 router = APIRouter()
 LOGGER = logging.getLogger("postbridge.instagram_api")
+META_SIGNED_REQUEST_ALGORITHM = "HMAC-SHA256"
 
 
 def upsert_instagram_media(items: list[InstagramMedia]) -> list[InstagramMedia]:
@@ -186,10 +193,116 @@ def _handle_connected_service_error(account: InstagramAccount, exc: InstagramSer
     return service_error(exc)
 
 
+def _invalid_signed_request() -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"code": "invalid_signed_request", "message": "Instagram signed request is invalid."},
+    )
+
+
+def verify_meta_signed_request(signed_request: str) -> str:
+    """Verify a Meta signed_request and return its app-scoped user id.
+
+    Meta signs the encoded payload, rather than decoded JSON. The raw signed
+    request is deliberately never logged or persisted.
+    """
+    secret = os.getenv("POSTBRIDGE_INSTAGRAM_CLIENT_SECRET", "").strip()
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "instagram_not_configured", "message": "Instagram is not configured."},
+        )
+    try:
+        signature_encoded, payload_encoded = signed_request.split(".")
+        if not signature_encoded or not payload_encoded:
+            raise ValueError
+        supplied_signature = base64.urlsafe_b64decode(signature_encoded + "=" * (-len(signature_encoded) % 4))
+        expected_signature = hmac.new(
+            secret.encode("utf-8"),
+            payload_encoded.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(expected_signature, supplied_signature):
+            raise ValueError
+        payload = json.loads(base64.urlsafe_b64decode(payload_encoded + "=" * (-len(payload_encoded) % 4)))
+        if not isinstance(payload, dict) or payload.get("algorithm") != META_SIGNED_REQUEST_ALGORITHM:
+            raise ValueError
+        value = payload.get("user_id")
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise ValueError
+        instagram_user_id = str(value).strip()
+        if not instagram_user_id:
+            raise ValueError
+        return instagram_user_id
+    except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+        raise _invalid_signed_request() from None
+
+
+def _data_deletion_status_url(confirmation_code: str) -> str:
+    """Build the public confirmation URL without trusting a request Host header."""
+    base_url = os.getenv("POSTBRIDGE_PUBLIC_API_URL", "").strip().rstrip("/")
+    if not base_url:
+        redirect_uri = os.getenv("POSTBRIDGE_INSTAGRAM_REDIRECT_URI", "").strip()
+        parsed = urlparse(redirect_uri)
+        if parsed.scheme and parsed.netloc:
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+    if not base_url:
+        # This branch is development-only. Production deployments already use
+        # POSTBRIDGE_PUBLIC_API_URL for the browser and mobile clients.
+        base_url = "http://localhost:8000"
+    return f"{base_url}/api/instagram/data-deletion/status?{urlencode({'code': confirmation_code})}"
+
+
 @router.get("/api/instagram/connection")
 @router.get("/instagram/connection", include_in_schema=False)
 def connection(user: AuthenticatedUser = Depends(require_user)):
     return public_account(stored_connection(current_user(user)))
+
+
+@router.post("/api/instagram/deauthorize")
+def deauthorize(signed_request: str = Form(...)):
+    instagram_user_id = verify_meta_signed_request(signed_request)
+    try:
+        affected = repository().deauthorize_instagram_user(instagram_user_id)
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    return {"deauthorized": bool(affected)}
+
+
+@router.post("/api/instagram/data-deletion")
+def data_deletion(signed_request: str = Form(...)):
+    instagram_user_id = verify_meta_signed_request(signed_request)
+    confirmation_code = secrets.token_urlsafe(24)
+    try:
+        repository().delete_instagram_data(
+            instagram_user_id,
+            confirmation_code,
+            datetime.now(UTC),
+        )
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    return {
+        "url": _data_deletion_status_url(confirmation_code),
+        "confirmation_code": confirmation_code,
+    }
+
+
+@router.get("/api/instagram/data-deletion/status")
+def data_deletion_status(code: str = Query(..., min_length=1)):
+    try:
+        request = repository().get_data_deletion_request(code)
+    except InstagramRepositoryError:
+        raise repository_error() from None
+    if request is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "deletion_request_not_found", "message": "Deletion request was not found."},
+        )
+    return {
+        "status": request.status,
+        "created_at": request.created_at,
+        "completed_at": request.completed_at,
+    }
 
 
 @router.post("/api/instagram/connect/start")
@@ -411,6 +524,59 @@ def _public_tracked_item(item: dict) -> dict:
     return result
 
 
+def _cached_text_with_status(
+    content,
+    user_id: str,
+    cache_key: str,
+    *,
+    pending_when_missing: bool,
+) -> tuple[str | None, str, bool]:
+    """Read one generated-text cache without scheduling or generating it.
+
+    A persisted empty value is an intentional resolved result (for example,
+    when the available evidence cannot support a Summary), so it is distinct
+    from a missing cache while a write-side refresh is still in progress.
+    """
+
+    cached = content.get_text_cache(user_id, cache_key)
+    if cached is not None:
+        text = str(cached.text or "").strip()
+        return (text, "ready", True) if text else (None, "none", True)
+    return (None, "pending", False) if pending_when_missing else (None, "none", False)
+
+
+def _next_suggestion_can_be_generated(posts: list[dict]) -> bool:
+    """Return whether the persisted posts meet the cache generator's floor.
+
+    This is deliberately a local, deterministic availability check. It does
+    not call the generator (or duplicate its scoring): a missing cache stays
+    ``pending`` only while a background refresh could actually create one.
+    """
+
+    groups: dict[str, int] = {}
+    for post in posts:
+        if not post.get("mature"):
+            continue
+        metrics = post.get("metrics") or {}
+        reach = metrics.get("reach")
+        has_reach_signal = (
+            isinstance(reach, (int, float))
+            and reach > 0
+            and (
+                isinstance(metrics.get("views"), (int, float))
+                or isinstance(metrics.get("comments"), (int, float))
+                or (isinstance(metrics.get("saves"), (int, float)) and isinstance(metrics.get("shares"), (int, float)))
+            )
+        )
+        format_key = str(post.get("format_key") or post.get("media_type") or "unknown").lower()
+        is_video = format_key in {"video", "reel", "reels"}
+        has_watch_signal = is_video and isinstance(metrics.get("average_watch_time_ms"), (int, float))
+        if not (has_reach_signal or has_watch_signal):
+            continue
+        groups[format_key] = groups.get(format_key, 0) + 1
+    return any(count >= 6 for count in groups.values())
+
+
 class PublishImage(BaseModel):
     mime_type: str
     data: str = Field(..., min_length=4)
@@ -479,50 +645,39 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
 
 
 @router.post("/tracked-posts")
-def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)):
+def track(
+    payload: TrackRequest,
+    user: AuthenticatedUser = Depends(require_user),
+    background_tasks: BackgroundTasks = None,
+):
     user_id = current_user(user)
     account = stored_connection(user_id)
-    owned_ids = {item.id for item in get_content_repository().media_for_account(account.id)} if account else set()
-    if payload.media_id not in owned_ids:
+    content = get_content_repository()
+    media_by_id = {item.id: item for item in content.media_for_account(account.id)} if account else {}
+    media_item = media_by_id.get(payload.media_id)
+    if media_item is None:
         raise HTTPException(
             status_code=404,
             detail={"code": "media_not_found", "message": "Instagram post was not found."},
         )
-    tracked = get_content_repository().create_tracked(user_id, payload.media_id)
-    media_item = next(
-        item for item in get_content_repository().media_for_account(account.id) if item.id == payload.media_id
-    )
+    tracked = content.create_tracked(user_id, payload.media_id)
     # The existing picker is the only path for OLD posts. Fetch current lifetime
-    # metrics immediately, then schedule only still-valid early checkpoints.
+    # metrics immediately, then generate any AI caches outside the request.
     try:
         refresh_one_post(user_id, tracked, media_item, usable_token(account), refresh_comments=False)
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
+    if background_tasks is not None:
+        background_tasks.add_task(refresh_cached_insights, user_id, tracked.id)
     return _public_tracking(tracked)
 
 
 def tracked_payload(user_id: str, active_only: bool = True):
     account = stored_connection(user_id)
-    media = get_content_repository().media_for_account(account.id) if account else []
-    media_by_id = {item.id: item for item in media}
-    snapshots_by_media = {}
-    for item in get_content_repository().snapshots(list(media_by_id)):
-        if item.media_id not in snapshots_by_media or item.captured_at > snapshots_by_media[item.media_id].captured_at:
-            snapshots_by_media[item.media_id] = item
-    payload = [
-        {
-            "tracking": tracked,
-            "media": media_by_id.get(tracked.media_id),
-            "latest": snapshots_by_media.get(tracked.media_id),
-        }
-        for tracked in get_content_repository().tracked(user_id, active_only=active_only)
-    ]
-    return payload
-
-
-def _feedback_media(media) -> tuple[bytes, str] | None:
-    """Fetch only bounded media URLs previously supplied by Meta."""
-    return load_media_input(media)
+    items, _ = load_tracked_items(user_id, account=account, active_only=active_only)
+    # The list endpoint historically returns only the latest snapshot. Keep the
+    # bulk loader's history internal unless a caller explicitly needs it.
+    return [{key: item.get(key) for key in ("tracking", "media", "latest")} for item in items]
 
 
 def _tracked_item(user_id: str, tracked_id: str) -> dict:
@@ -541,6 +696,19 @@ def _tracked_item(user_id: str, tracked_id: str) -> dict:
     return item
 
 
+def _find_tracked_item(items: list[dict], tracked_id: str) -> dict:
+    item = next((candidate for candidate in items if candidate["tracking"].id == tracked_id), None)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "tracked_post_not_found",
+                "message": "Tracked post was not found.",
+            },
+        )
+    return item
+
+
 @router.get("/tracked-posts")
 def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
     return {"items": [_public_tracked_item(item) for item in tracked_payload(current_user(user))]}
@@ -548,58 +716,125 @@ def tracked_posts(user: AuthenticatedUser = Depends(require_user)):
 
 @router.get("/tracked-posts/{tracked_id}")
 def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+    """Read one tracked post and its generated-text caches without side effects."""
+
     user_id = current_user(user)
-    item = _tracked_item(user_id, tracked_id)
-    repository = get_content_repository()
-    snapshots = sorted(repository.snapshots([item["tracking"].media_id]), key=lambda value: value.captured_at)
-    item["snapshots"] = list(reversed(snapshots))
-    all_items = []
-    for candidate in tracked_payload(user_id, active_only=False):
-        candidate_snapshots = repository.snapshots([candidate["tracking"].media_id])
-        all_items.append({**candidate, "snapshots": candidate_snapshots})
     account = stored_connection(user_id)
-    comments = repository.comments(user_id, tracked_id)
+    content = get_content_repository()
+    all_items, comments_by_tracking = load_tracked_items(
+        user_id,
+        account=account,
+        active_only=False,
+        include_comments=True,
+        repository=content,
+    )
+    selected_for_analysis = _find_tracked_item(all_items, tracked_id)
+    if not selected_for_analysis["tracking"].is_active:
+        # Match the pre-existing endpoint behavior: stopped posts are retained
+        # for account-level comparisons but have no individually addressable
+        # detail route.
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "tracked_post_not_found", "message": "Tracked post was not found."},
+        )
+    if selected_for_analysis.get("media") is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "media_not_found", "message": "Instagram post was not found."},
+        )
+
+    comments = comments_by_tracking.get(tracked_id, [])
+    consented = has_ai_processing_consent(user_id)
     enabled = bool(account and instagram_comment_ingestion_enabled(user_id, account.instagram_user_id))
     permission = bool(account and "instagram_business_manage_comments" in account.scopes)
-    description = audience_description(user_id, tracked_id, comments) if enabled and permission else None
+    audience_description, _, _ = _cached_text_with_status(
+        content,
+        user_id,
+        f"audience:{tracked_id}",
+        pending_when_missing=enabled and permission and len(comments) >= 3,
+    )
     audience = audience_comment_state(
-        comments, feature_enabled=enabled, permission_granted=permission, description=description
+        comments,
+        feature_enabled=enabled,
+        permission_granted=permission,
+        description=audience_description,
+        consent_required=enabled and permission and not consented,
     )
     if account and account.session_sync_error == "comment_access_denied":
-        audience = {"state": "access_denied", "message": "Instagram denied access to comments."}
-    selected_for_analysis = next(value for value in all_items if value["tracking"].id == tracked_id)
-    try:
-        # Analyze is the user-facing entry point for Summary. Refreshing here
-        # lets media-aware feedback replace an older text-only cache.
-        refresh_summary_for_user(user_id, tracked_id)
-    except Exception as exc:
-        LOGGER.warning("summary_refresh_failed tracked_post_id=%s error_type=%s", tracked_id, type(exc).__name__)
-    analysis = build_post_analysis(
-        selected_for_analysis, all_items, summary=cached_summary(user_id, tracked_id), audience_comments=audience
+        audience = {
+            "state": "access_denied",
+            "message": "Instagram denied access to comments.",
+            **({"items": audience["items"]} if enabled and permission else {}),
+        }
+
+    summary, summary_status, _ = _cached_text_with_status(
+        content,
+        user_id,
+        f"summary:{tracked_id}",
+        pending_when_missing=bool(selected_for_analysis.get("snapshots")),
     )
-    item["analysis"] = analysis
+    if not consented:
+        # A revoked account must not receive a stale AI cache even if cache
+        # deletion races a read. Deterministic no-consent templates are safe
+        # to retain and are written with the explicit template provider.
+        summary_cache = content.get_text_cache(user_id, f"summary:{tracked_id}")
+        if summary_cache is not None and getattr(summary_cache, "provider", "template") not in {"template", "none"}:
+            summary = None
+            summary_status = "pending" if selected_for_analysis.get("snapshots") else "none"
+    analysis = build_post_analysis(
+        selected_for_analysis,
+        all_items,
+        summary=summary,
+        audience_comments=audience,
+    )
+    analysis["summary_status"] = summary_status
+    item = {
+        **selected_for_analysis,
+        "snapshots": list(reversed(selected_for_analysis.get("snapshots") or [])),
+        "analysis": analysis,
+    }
     return _public_tracked_item(item)
 
 
 @router.get("/insights/account")
 def account_insights(user: AuthenticatedUser = Depends(require_user)):
+    """Return stored metric and suggestion caches without calling providers."""
+
     user_id = current_user(user)
     account = stored_connection(user_id)
-    repository = get_content_repository()
-    items = []
-    for item in tracked_payload(user_id, active_only=False):
-        items.append({**item, "snapshots": repository.snapshots([item["tracking"].media_id])})
-    base = build_account_insights(items)
-    internal_posts = []
-    for post in base["performance_posts"]:
-        source = next((item for item in items if item["tracking"].id == post["tracked_post_id"]), None)
-        internal_posts.append({**post, "caption": source["media"].caption if source and source.get("media") else ""})
-    suggestion = next_post_suggestion(
+    content = get_content_repository()
+    items, _ = load_tracked_items(
         user_id,
-        internal_posts,
-        {item["tracking"].id: repository.comments(user_id, item["tracking"].id) for item in items},
+        account=account,
+        active_only=False,
+        repository=content,
     )
+    consented = has_ai_processing_consent(user_id)
+    suggestion, suggestion_status, suggestion_resolved = _cached_text_with_status(
+        content,
+        user_id,
+        "next-post-suggestion",
+        pending_when_missing=False,
+    )
+    # Build this once: it is pure, and includes both highlights and the
+    # performance rows used to decide whether a missing cache can be pending.
     result = build_account_insights(items, suggestion=suggestion)
+    if not consented:
+        # Revocation clears caches, but never expose a stale text if a request
+        # races that cleanup. The client can turn this state into its consent
+        # explainer instead of treating it as a failed generation.
+        result["next_post_suggestion"] = None
+        suggestion_status = (
+            "consent_required" if _next_suggestion_can_be_generated(result["performance_posts"]) else "none"
+        )
+    elif result["next_post_suggestion"] is None:
+        if suggestion_resolved:
+            suggestion_status = "none"
+        elif _next_suggestion_can_be_generated(result["performance_posts"]):
+            suggestion_status = "pending"
+        else:
+            suggestion_status = "none"
+    result["next_post_suggestion_status"] = suggestion_status
     result["sync_status"] = (
         "reconnect_required"
         if account and account.status == "reconnect_required"
@@ -624,7 +859,11 @@ def stop_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_use
 
 
 @router.post("/tracked-posts/{tracked_id}/refresh")
-def refresh_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
+def refresh_tracking(
+    tracked_id: str,
+    user: AuthenticatedUser = Depends(require_user),
+    background_tasks: BackgroundTasks = None,
+):
     user_id = current_user(user)
     tracked_item = _tracked_item(user_id, tracked_id)
     account = _active_account(user_id)
@@ -637,11 +876,19 @@ def refresh_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_
     if latest and datetime.now(UTC) - (
         latest.captured_at if latest.captured_at.tzinfo else latest.captured_at.replace(tzinfo=UTC)
     ) < timedelta(minutes=1):
+        # A manual refresh can also be used to recover a missing derived-text
+        # cache.  Keep the one-minute metrics throttle, but still enqueue the
+        # write-side cache refresh rather than making the GET-style response
+        # path responsible for generation.
+        if background_tasks is not None:
+            background_tasks.add_task(refresh_cached_insights, user_id, tracked_id)
         return tracked_detail(tracked_id, user)
     try:
         refresh_one_post(user_id, tracked_item["tracking"], media_item, usable_token(account))
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
+    if background_tasks is not None:
+        background_tasks.add_task(refresh_cached_insights, user_id, tracked_id)
     return tracked_detail(tracked_id, user)
 
 

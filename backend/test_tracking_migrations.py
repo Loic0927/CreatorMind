@@ -20,12 +20,17 @@ def test_retirement_migration_round_trips_empty_database(tmp_path, monkeypatch):
     engine = create_engine(url)
     tables = inspect(engine).get_table_names()
     assert "insight_text_cache" in tables
+    assert "instagram_data_deletion_requests" in tables
+    assert "ai_processing_consented_at" in {column["name"] for column in inspect(engine).get_columns("users")}
     assert "tracked_post_analyses" not in tables
     command.downgrade(_config(), "20261029_0010")
     tables = inspect(engine).get_table_names()
     assert {"tracked_post_analyses", "external_insight_records", "instagram_insight_collection_jobs"} <= set(tables)
     command.upgrade(_config(), "head")
-    assert "insight_text_cache" in inspect(engine).get_table_names()
+    tables = inspect(engine).get_table_names()
+    assert "insight_text_cache" in tables
+    assert "instagram_data_deletion_requests" in tables
+    assert "ai_processing_consented_at" in {column["name"] for column in inspect(engine).get_columns("users")}
 
 
 def test_retirement_migration_preserves_populated_raw_snapshot(tmp_path, monkeypatch):

@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -21,6 +23,11 @@ from backend.storage.sql_models import (
 from backend.storage.tracking_repository import MILESTONES, TrackingRepository
 
 NOW = datetime(2026, 11, 1, 12, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def ai_processing_consent(monkeypatch):
+    monkeypatch.setattr(feedback, "has_ai_processing_consent", lambda _user_id: True)
 
 
 def _factory():
@@ -230,11 +237,87 @@ def test_fact_boundaries_and_novelty_rule_do_not_invent_evidence():
     assert mix["qualifies"] is False and mix["evidence"]["novelty_dropped"] is True
 
 
+def _growth_fact(selected):
+    return next(
+        fact
+        for fact in feedback.build_feedback_facts(selected, [selected], {"usual_ranges": []}, now=NOW)
+        if fact["id"] == "growth_stage"
+    )
+
+
+def test_young_post_with_flat_snapshot_values_is_levelled_off():
+    selected = _item(
+        "young-flat",
+        "IMAGE",
+        NOW - timedelta(days=2),
+        [
+            _snapshot("old", NOW - timedelta(hours=18), 100),
+            _snapshot("previous", NOW - timedelta(hours=8), 100),
+            _snapshot("latest", NOW, 100),
+        ],
+    )
+
+    growth = _growth_fact(selected)
+
+    assert growth["value"] == "levelled_off"
+    assert growth["evidence"] == {
+        "snapshot_ids": ["previous", "latest"],
+        "metric": "views",
+        "elapsed_hours": 8.0,
+        "minimum_spacing_hours": 6,
+    }
+
+
+def test_mature_post_with_continued_growth_is_still_growing():
+    selected = _item(
+        "mature-growing",
+        "IMAGE",
+        NOW - timedelta(days=20),
+        [_snapshot("previous", NOW - timedelta(hours=8), 100), _snapshot("latest", NOW, 200)],
+    )
+
+    growth = _growth_fact(selected)
+
+    assert growth["value"] == "still_growing"
+    assert growth["evidence"]["metric"] == "views"
+
+
+def test_zero_views_use_views_rather_than_falling_through_to_reach():
+    selected = _item(
+        "zero-views",
+        "IMAGE",
+        NOW - timedelta(days=2),
+        [
+            _snapshot("previous", NOW - timedelta(hours=8), 0, reach=10),
+            _snapshot("latest", NOW, 0, reach=100),
+        ],
+    )
+
+    growth = _growth_fact(selected)
+
+    assert growth["value"] == "levelled_off"
+    assert growth["evidence"]["metric"] == "views"
+
+
 def _payload(text="Attention was still accumulating across the observed checkpoints.", kind="observation", ids=None):
     return {"sentences": [{"text": text, "kind": kind, "fact_ids": ids or ["growth_stage"]}]}
 
 
-def test_validator_rejects_digits_causation_prediction_unknown_fact_advice_and_second_suggestion():
+class _SummaryCacheRepository:
+    persistent = False
+
+    def __init__(self):
+        self.cache = {}
+
+    def get_text_cache(self, user_id, cache_key):
+        return self.cache.get((user_id, cache_key))
+
+    def upsert_text_cache(self, item):
+        self.cache[(item.user_id, item.cache_key)] = item
+        return item
+
+
+def test_validator_rejects_digits_causation_prediction_unknown_fact_imperative_advice_and_second_suggestion():
     facts = [
         {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
     ]
@@ -251,6 +334,21 @@ def test_validator_rejects_digits_causation_prediction_unknown_fact_advice_and_s
         ]
     }
     assert not feedback.validate_output(two, facts)
+
+
+def test_validator_allows_common_non_imperative_words_in_observations():
+    facts = [
+        {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
+    ]
+    for text in (
+        "This might keep attention on the topic's central focus.",
+        "The visual choices could make the topic easier to follow.",
+    ):
+        assert feedback.validate_output(_payload(text), facts)
+
+    assert feedback.validate_output(
+        _payload("The visual choices could make the topic easier to follow.", kind="suggestion"), facts
+    )
 
 
 def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
@@ -323,16 +421,69 @@ def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeyp
     assert any(item["id"] == "media_content" for item in captured["facts"])
 
 
-def test_trained_numeric_predictor_is_always_disabled_and_notes_are_deterministic(monkeypatch):
-    assert feedback.TrainedFeedbackProvider().healthy is False
+def test_summary_without_consent_uses_a_template_without_loading_media_or_calling_gemini(monkeypatch):
+    repository = _SummaryCacheRepository()
+    facts = [
+        {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
+    ]
+    monkeypatch.setattr(feedback, "get_content_repository", lambda: repository)
+    monkeypatch.setattr(feedback, "has_ai_processing_consent", lambda _user_id: False)
+    monkeypatch.setattr(
+        feedback,
+        "_selection",
+        lambda: (_ for _ in ()).throw(AssertionError("Gemini selection must not run without consent")),
+    )
+
+    result = feedback.generate_summary(
+        "no-consent-user",
+        "post",
+        facts,
+        media_identity={
+            "internal_media_id": "m",
+            "provider_media_id": "p",
+            "media_type": "REELS",
+            "provider_timestamp": "x",
+        },
+        media_loader=lambda: (_ for _ in ()).throw(AssertionError("media must not download without consent")),
+    )
+
+    assert result == "This post was still accumulating attention across the observed checkpoints."
+    assert repository.get_text_cache("no-consent-user", "summary:post").provider == "template"
+
+
+def test_summary_uses_stable_media_identity_and_loads_media_only_on_cache_miss(monkeypatch):
+    repository = _SummaryCacheRepository()
+    facts = [
+        {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
+    ]
+    calls = {"provider": 0, "loader": 0}
+
+    class Provider:
+        name = "gemini"
+        model = "unit"
+
+        def generate(self, _facts, *, media_input=None):
+            calls["provider"] += 1
+            assert media_input == (b"first-download", "video/mp4")
+            return _payload()
+
+    def load_media():
+        calls["loader"] += 1
+        return b"first-download", "video/mp4"
+
+    monkeypatch.setattr(feedback, "get_content_repository", lambda: repository)
+    monkeypatch.setattr(feedback, "_selection", lambda: ([Provider()], "gemini:unit"))
+    identity = {"internal_media_id": "m", "provider_media_id": "p", "media_type": "REELS", "provider_timestamp": "x"}
+
+    assert feedback.generate_summary("user", "post", facts, media_identity=identity, media_loader=load_media)
+    assert feedback.generate_summary("user", "post", facts, media_identity=identity, media_loader=load_media)
+    assert calls == {"provider": 1, "loader": 1}
+
+
+def test_legacy_feedback_provider_values_fall_back_to_gemini(monkeypatch):
     monkeypatch.setenv("FEEDBACK_PROVIDER", "trained")
-    monkeypatch.setenv("FEEDBACK_TRAINED_ENABLED", "true")
     providers, _ = feedback._selection()
     assert [provider.name for provider in providers] == ["gemini"]
-    assert feedback.summary_note("unavailable").startswith("Early-growth data isn't available")
-    assert feedback.summary_note("partial").startswith("Some early-growth checkpoints")
-    assert feedback.summary_note("complete") is None
-    assert feedback.summary_note("collecting") is None
 
 
 def test_no_qualifying_fact_hides_summary_and_cache_read_never_selects_provider(monkeypatch):
@@ -373,11 +524,17 @@ def test_home_picker_adds_old_post_fetches_lifetime_metrics_without_scheduling_2
     monkeypatch.setattr(instagram_api, "usable_token", lambda value: "token")
     monkeypatch.setattr(instagram_api, "refresh_one_post", lambda *args, **kwargs: refreshed.append(args))
     monkeypatch.setattr(tracking_repository_module, "get_tracking_repository", lambda: queue)
+    background_tasks = BackgroundTasks()
     result = instagram_api.track(
-        instagram_api.TrackRequest(media_id="m"), AuthenticatedUser(id="u", email="u@example.test", token_hash="h")
+        instagram_api.TrackRequest(media_id="m"),
+        AuthenticatedUser(id="u", email="u@example.test", token_hash="h"),
+        background_tasks,
     )
     assert result["id"] == "t"
     assert len(refreshed) == 1 and queue.ids == []
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].func is instagram_api.refresh_cached_insights
+    assert background_tasks.tasks[0].args == ("u", "t")
 
 
 def test_internal_first_day_fields_are_not_exposed_by_tracked_post_api():

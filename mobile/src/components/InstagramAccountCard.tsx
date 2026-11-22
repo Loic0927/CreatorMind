@@ -1,6 +1,7 @@
 import { Image, StyleSheet, Text, View } from "react-native";
 import { InstagramConnection } from "../types";
 import { Button } from "./ui";
+import { colors } from "../theme/colors";
 export function InstagramAccountCard({
   connection,
   onConnect,
@@ -43,9 +44,16 @@ export function InstagramAccountCard({
   );
 }
 const styles = StyleSheet.create({
-  card: { padding: 18, borderRadius: 18, backgroundColor: "white", borderWidth: 1, borderColor: "#E2E8F0", gap: 12 },
+  card: {
+    padding: 18,
+    borderRadius: 18,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.line,
+    gap: 12,
+  },
   row: { flexDirection: "row", alignItems: "center", gap: 10 },
   avatar: { width: 42, height: 42, borderRadius: 21 },
-  name: { fontWeight: "800", color: "#0F172A", fontSize: 17 },
-  status: { color: "#64748B" },
+  name: { fontWeight: "800", color: colors.ink, fontSize: 17 },
+  status: { color: colors.muted },
 });

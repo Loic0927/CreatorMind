@@ -3,11 +3,14 @@ import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View 
 import * as FileSystem from "expo-file-system/legacy";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { AiConsentModal } from "../components/AiConsentModal";
 import { UnifiedPicker } from "../components/UnifiedPicker";
 import { Button } from "../components/ui";
-import { publishPost } from "../services/api";
-import { generateCaption } from "../services/caption";
+import { getAIProcessingConsent, grantAIProcessingConsent, publishPost } from "../services/api";
+import { CaptionGenerationError, generateCaption } from "../services/caption";
+import { CAPTION_MODE } from "../config/environment";
 import { Draft, InstagramConnection, MediaMimeType } from "../types";
+import { colors } from "../theme/colors";
 
 const GOALS = [
   "Grow engagement",
@@ -39,6 +42,8 @@ export function CreateScreen({ draft, setDraft, connection, accessToken }: Props
   const scroll = useRef<ScrollView>(null);
   const [generating, setGenerating] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [consentModalVisible, setConsentModalVisible] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
 
   const pick = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -114,10 +119,7 @@ export function CreateScreen({ draft, setDraft, connection, accessToken }: Props
       hasResults: false,
     });
 
-  const create = async () => {
-    if (!draft.information.trim() && !draft.imageData) return Alert.alert("Add information or choose media");
-    if (!draft.goal || (draft.goal === "Other" && !draft.otherGoal.trim())) return Alert.alert("Choose a goal");
-
+  const generate = async () => {
     setGenerating(true);
     try {
       const result = await generateCaption(
@@ -142,9 +144,43 @@ export function CreateScreen({ draft, setDraft, connection, accessToken }: Props
       setDraft({ ...draft, ...result, platform: "Instagram", platforms: ["Instagram"], hasResults: true });
       setTimeout(() => scroll.current?.scrollToEnd({ animated: true }), 100);
     } catch (error) {
+      if (error instanceof CaptionGenerationError && error.code === "consent_required") {
+        setConsentModalVisible(true);
+        return;
+      }
       Alert.alert("Generation failed", error instanceof Error ? error.message : "Try again.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const create = async () => {
+    if (!draft.information.trim() && !draft.imageData) return Alert.alert("Add information or choose media");
+    if (!draft.goal || (draft.goal === "Other" && !draft.otherGoal.trim())) return Alert.alert("Choose a goal");
+    if (CAPTION_MODE === "api") {
+      try {
+        if (!(await getAIProcessingConsent(accessToken)).ai_processing_consented) {
+          setConsentModalVisible(true);
+          return;
+        }
+      } catch (error) {
+        Alert.alert("AI processing", error instanceof Error ? error.message : "Could not check AI processing consent.");
+        return;
+      }
+    }
+    await generate();
+  };
+
+  const acceptConsent = async () => {
+    setSavingConsent(true);
+    try {
+      await grantAIProcessingConsent(accessToken);
+      setConsentModalVisible(false);
+      await generate();
+    } catch (error) {
+      Alert.alert("AI processing", error instanceof Error ? error.message : "Could not save AI processing consent.");
+    } finally {
+      setSavingConsent(false);
     }
   };
 
@@ -187,147 +223,159 @@ export function CreateScreen({ draft, setDraft, connection, accessToken }: Props
         : "Image selected · converts to JPEG when published";
 
   return (
-    <ScrollView
-      ref={scroll}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="on-drag"
-    >
-      <Text style={styles.title}>Create post</Text>
+    <>
+      <ScrollView
+        ref={scroll}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
+        <Text style={styles.title}>Create post</Text>
 
-      <View style={styles.card}>
-        <View style={styles.field}>
-          <Text style={styles.label}>Social platform</Text>
-          <View style={styles.platformField}>
-            <View style={styles.platformChip}>
-              <Text style={styles.platformText}>Instagram</Text>
+        <View style={styles.card}>
+          <View style={styles.field}>
+            <Text style={styles.label}>Social platform</Text>
+            <View style={styles.platformField}>
+              <View style={styles.platformChip}>
+                <Text style={styles.platformText}>Instagram</Text>
+              </View>
             </View>
           </View>
-        </View>
 
-        <View style={styles.field}>
-          <Text style={styles.label}>Content</Text>
-          {draft.imageUri ? (
-            <View style={styles.mediaBox}>
-              {draft.mediaKind === "video" ? (
-                <View style={styles.videoPlaceholder}>
-                  <Text style={styles.playIcon}>▶</Text>
-                  <Text style={styles.videoText}>Short video ready</Text>
-                </View>
-              ) : (
-                <Image source={{ uri: draft.imageUri }} style={styles.image} />
-              )}
-            </View>
-          ) : (
-            <Pressable accessibilityRole="button" onPress={pick} style={styles.choose}>
-              <Text style={styles.uploadIcon}>+</Text>
-              <Text style={styles.chooseText}>Choose an image or short video</Text>
-              <Text style={styles.chooseHelp}>JPG, PNG, WebP, MP4 or MOV · video up to 60s · up to 7 MB</Text>
-            </Pressable>
-          )}
-          {draft.imageUri ? (
-            <View style={styles.mediaActions}>
-              <Text style={styles.mediaMeta}>{selectedMediaLabel}</Text>
-              <Pressable onPress={pick}>
-                <Text style={styles.actionText}>Change</Text>
+          <View style={styles.field}>
+            <Text style={styles.label}>Content</Text>
+            {draft.imageUri ? (
+              <View style={styles.mediaBox}>
+                {draft.mediaKind === "video" ? (
+                  <View style={styles.videoPlaceholder}>
+                    <Text style={styles.playIcon}>▶</Text>
+                    <Text style={styles.videoText}>Short video ready</Text>
+                  </View>
+                ) : (
+                  <Image source={{ uri: draft.imageUri }} style={styles.image} />
+                )}
+              </View>
+            ) : (
+              <Pressable accessibilityRole="button" onPress={pick} style={styles.choose}>
+                <Text style={styles.uploadIcon}>+</Text>
+                <Text style={styles.chooseText}>Choose an image or short video</Text>
+                <Text style={styles.chooseHelp}>JPG, PNG, WebP, MP4 or MOV · video up to 60s · up to 7 MB</Text>
               </Pressable>
-              <Pressable onPress={removeMedia}>
-                <Text style={styles.actionText}>Remove</Text>
-              </Pressable>
-            </View>
-          ) : null}
-        </View>
-
-        <Field
-          label="Information"
-          value={draft.information}
-          onChangeText={(information) => setDraft({ ...draft, information, hasResults: false })}
-          placeholder="Describe your content, audience and key message"
-          multiline
-        />
-        <UnifiedPicker
-          label="Hashtag count"
-          options={HASHTAG_OPTIONS}
-          value={String(draft.hashtagCount)}
-          onChange={(value) => setDraft({ ...draft, hashtagCount: Number(value), hasResults: false })}
-        />
-        <UnifiedPicker
-          label="Goal"
-          options={GOAL_OPTIONS}
-          value={draft.goal}
-          onChange={(goal) =>
-            setDraft({ ...draft, goal, otherGoal: goal === "Other" ? draft.otherGoal : "", hasResults: false })
-          }
-          otherOptionValue="Other"
-          otherValue={draft.otherGoal}
-          onOtherValueChange={(otherGoal) =>
-            setDraft({ ...draft, otherGoal: otherGoal.slice(0, 200), hasResults: false })
-          }
-          otherPlaceholder="Describe your goal"
-        />
-
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: draft.useAccountContext }}
-          onPress={() => setDraft({ ...draft, useAccountContext: !draft.useAccountContext, hasResults: false })}
-          style={styles.contextRow}
-        >
-          <View style={[styles.checkbox, draft.useAccountContext && styles.checkboxChecked]}>
-            {draft.useAccountContext ? <Text style={styles.check}>✓</Text> : null}
+            )}
+            {draft.imageUri ? (
+              <View style={styles.mediaActions}>
+                <Text style={styles.mediaMeta}>{selectedMediaLabel}</Text>
+                <Pressable onPress={pick}>
+                  <Text style={styles.actionText}>Change</Text>
+                </Pressable>
+                <Pressable onPress={removeMedia}>
+                  <Text style={styles.actionText}>Remove</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
-          <Text style={styles.contextText}>Use account context</Text>
-        </Pressable>
-        <Button label={generating ? "Creating…" : "Create caption"} onPress={create} disabled={generating} />
-      </View>
 
-      {draft.hasResults ? (
-        <View style={styles.resultCard}>
-          <View style={styles.brandRow}>
-            <View style={styles.brandIcon}>
-              <Text style={styles.brandLetters}>PB</Text>
-            </View>
-            <View>
-              <Text style={styles.brandName}>PostBridge</Text>
-              {connection?.username ? <Text style={styles.brandAccount}>@{connection.username}</Text> : null}
-            </View>
-          </View>
           <Field
-            label="Caption"
-            value={draft.caption}
-            onChangeText={(caption) => setDraft({ ...draft, caption })}
-            placeholder="Caption"
+            label="Information"
+            value={draft.information}
+            onChangeText={(information) => setDraft({ ...draft, information, hasResults: false })}
+            placeholder="Describe your content, audience and key message"
             multiline
-            tinted
           />
-          <Field
-            label="Hashtags"
-            value={draft.hashtags}
-            onChangeText={(hashtags) => setDraft({ ...draft, hashtags })}
-            placeholder="#postbridge"
-            multiline
-            tinted
-            hashtag
+          <UnifiedPicker
+            label="Hashtag count"
+            options={HASHTAG_OPTIONS}
+            value={String(draft.hashtagCount)}
+            onChange={(value) => setDraft({ ...draft, hashtagCount: Number(value), hasResults: false })}
           />
-          {!connection?.connected ? (
-            <Text style={styles.publishNote}>Connect Instagram in Settings before publishing.</Text>
-          ) : !draft.imageData ? (
-            <Text style={styles.publishNote}>Choose an image or short video before publishing.</Text>
-          ) : null}
-          <Button
-            label={
-              publishing ? (draft.mediaKind === "video" ? "Processing video…" : "Publishing…") : "Publish to Instagram"
+          <UnifiedPicker
+            label="Goal"
+            options={GOAL_OPTIONS}
+            value={draft.goal}
+            onChange={(goal) =>
+              setDraft({ ...draft, goal, otherGoal: goal === "Other" ? draft.otherGoal : "", hasResults: false })
             }
-            onPress={publish}
-            disabled={publishing || !canPublish}
+            otherOptionValue="Other"
+            otherValue={draft.otherGoal}
+            onOtherValueChange={(otherGoal) =>
+              setDraft({ ...draft, otherGoal: otherGoal.slice(0, 200), hasResults: false })
+            }
+            otherPlaceholder="Describe your goal"
           />
-          <Text style={styles.directNote}>
-            {draft.mediaKind === "video"
-              ? "Short videos publish as Instagram Reels. Processing can take up to about two minutes."
-              : "PNG and WebP images are converted to JPEG automatically before publishing."}
-          </Text>
+
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: draft.useAccountContext }}
+            onPress={() => setDraft({ ...draft, useAccountContext: !draft.useAccountContext, hasResults: false })}
+            style={styles.contextRow}
+          >
+            <View style={[styles.checkbox, draft.useAccountContext && styles.checkboxChecked]}>
+              {draft.useAccountContext ? <Text style={styles.check}>✓</Text> : null}
+            </View>
+            <Text style={styles.contextText}>Use account context</Text>
+          </Pressable>
+          <Button label={generating ? "Creating…" : "Create caption"} onPress={create} disabled={generating} />
         </View>
-      ) : null}
-    </ScrollView>
+
+        {draft.hasResults ? (
+          <View style={styles.resultCard}>
+            <View style={styles.brandRow}>
+              <View style={styles.brandIcon}>
+                <Text style={styles.brandLetters}>PB</Text>
+              </View>
+              <View>
+                <Text style={styles.brandName}>PostBridge</Text>
+                {connection?.username ? <Text style={styles.brandAccount}>@{connection.username}</Text> : null}
+              </View>
+            </View>
+            <Field
+              label="Caption"
+              value={draft.caption}
+              onChangeText={(caption) => setDraft({ ...draft, caption })}
+              placeholder="Caption"
+              multiline
+              tinted
+            />
+            <Field
+              label="Hashtags"
+              value={draft.hashtags}
+              onChangeText={(hashtags) => setDraft({ ...draft, hashtags })}
+              placeholder="#postbridge"
+              multiline
+              tinted
+              hashtag
+            />
+            {!connection?.connected ? (
+              <Text style={styles.publishNote}>Connect Instagram in Settings before publishing.</Text>
+            ) : !draft.imageData ? (
+              <Text style={styles.publishNote}>Choose an image or short video before publishing.</Text>
+            ) : null}
+            <Button
+              label={
+                publishing
+                  ? draft.mediaKind === "video"
+                    ? "Processing video…"
+                    : "Publishing…"
+                  : "Publish to Instagram"
+              }
+              onPress={publish}
+              disabled={publishing || !canPublish}
+            />
+            <Text style={styles.directNote}>
+              {draft.mediaKind === "video"
+                ? "Short videos publish as Instagram Reels. Processing can take up to about two minutes."
+                : "PNG and WebP images are converted to JPEG automatically before publishing."}
+            </Text>
+          </View>
+        ) : null}
+      </ScrollView>
+      <AiConsentModal
+        visible={consentModalVisible}
+        busy={savingConsent}
+        onAccept={acceptConsent}
+        onNotNow={() => setConsentModalVisible(false)}
+      />
+    </>
   );
 }
 
@@ -373,85 +421,85 @@ function Field({
 
 const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 36, gap: 16 },
-  title: { fontSize: 30, lineHeight: 36, fontWeight: "800", color: "#0F172A" },
+  title: { fontSize: 30, lineHeight: 36, fontWeight: "800", color: colors.ink },
   card: {
     gap: 16,
     padding: 18,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "white",
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.05,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+    shadowColor: colors.ink,
+    shadowOpacity: 0.08,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },
   field: { gap: 8 },
-  label: { fontSize: 15, fontWeight: "800", color: "#0F172A" },
+  label: { fontSize: 15, fontWeight: "800", color: colors.ink },
   platformField: {
     minHeight: 48,
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#E2E8F0",
+    borderColor: colors.line,
     borderRadius: 12,
     paddingHorizontal: 14,
-    backgroundColor: "white",
+    backgroundColor: colors.field,
   },
   platformChip: {
     alignSelf: "flex-start",
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    backgroundColor: "#E0F2FE",
+    backgroundColor: colors.selected,
   },
-  platformText: { color: "#0284C7", fontSize: 13, fontWeight: "700" },
+  platformText: { color: colors.selectedInk, fontSize: 13, fontWeight: "700" },
   choose: {
     minHeight: 150,
     padding: 20,
     borderRadius: 16,
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "#BAE6FD",
+    borderColor: colors.lineStrong,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F1F5F9",
+    backgroundColor: colors.field,
   },
-  uploadIcon: { color: "#0284C7", fontSize: 28, lineHeight: 32 },
-  chooseText: { marginTop: 4, color: "#0369A1", fontWeight: "800" },
-  chooseHelp: { marginTop: 5, color: "#64748B", fontSize: 11, textAlign: "center" },
+  uploadIcon: { color: colors.primary, fontSize: 28, lineHeight: 32 },
+  chooseText: { marginTop: 4, color: colors.selectedInk, fontWeight: "800" },
+  chooseHelp: { marginTop: 5, color: colors.muted, fontSize: 11, textAlign: "center" },
   mediaBox: {
     overflow: "hidden",
     borderRadius: 16,
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "#BAE6FD",
-    backgroundColor: "#F1F5F9",
+    borderColor: colors.lineStrong,
+    backgroundColor: colors.field,
     padding: 14,
   },
-  image: { width: "100%", aspectRatio: 1.35, borderRadius: 12, backgroundColor: "#E2E8F0" },
+  image: { width: "100%", aspectRatio: 1.35, borderRadius: 12, backgroundColor: colors.lineStrong },
   videoPlaceholder: {
     width: "100%",
     aspectRatio: 1.6,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0F172A",
+    backgroundColor: colors.ink,
   },
-  playIcon: { color: "white", fontSize: 30 },
-  videoText: { marginTop: 6, color: "white", fontWeight: "800" },
+  playIcon: { color: colors.white, fontSize: 30 },
+  videoText: { marginTop: 6, color: colors.white, fontWeight: "800" },
   mediaActions: { flexDirection: "row", alignItems: "center", gap: 12 },
-  mediaMeta: { flex: 1, color: "#64748B", fontSize: 12 },
-  actionText: { color: "#0284C7", fontSize: 12, fontWeight: "800" },
+  mediaMeta: { flex: 1, color: colors.muted, fontSize: 12 },
+  actionText: { color: colors.primary, fontSize: 12, fontWeight: "800" },
   input: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "white",
+    borderColor: colors.line,
+    backgroundColor: colors.field,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    color: "#0F172A",
+    color: colors.ink,
     fontSize: 15,
   },
   textarea: { minHeight: 120 },
@@ -462,7 +510,7 @@ const styles = StyleSheet.create({
     gap: 12,
     borderRadius: 14,
     paddingHorizontal: 16,
-    backgroundColor: "#F1F5F9",
+    backgroundColor: colors.subtle,
   },
   checkbox: {
     width: 20,
@@ -470,22 +518,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: "#94A3B8",
+    borderColor: colors.checkboxBorder,
     borderRadius: 4,
-    backgroundColor: "white",
+    backgroundColor: colors.surface,
   },
-  checkboxChecked: { borderColor: "#0284C7", backgroundColor: "#0284C7" },
-  check: { color: "white", fontSize: 14, fontWeight: "900" },
-  contextText: { color: "#1E293B", fontWeight: "800" },
+  checkboxChecked: { borderColor: colors.primary, backgroundColor: colors.primary },
+  check: { color: colors.white, fontSize: 14, fontWeight: "900" },
+  contextText: { color: colors.inkSoft, fontWeight: "800" },
   resultCard: {
     gap: 16,
     padding: 18,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#E2E8F0",
-    backgroundColor: "white",
-    shadowColor: "#0F172A",
-    shadowOpacity: 0.05,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+    shadowColor: colors.ink,
+    shadowOpacity: 0.08,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
@@ -497,13 +545,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 19,
-    backgroundColor: "#0284C7",
+    backgroundColor: colors.primary,
   },
-  brandLetters: { color: "white", fontSize: 12, fontWeight: "900" },
-  brandName: { color: "#0F172A", fontSize: 17, fontWeight: "900" },
-  brandAccount: { marginTop: 1, color: "#64748B", fontSize: 11 },
-  tintedInput: { borderWidth: 0, backgroundColor: "#F1F5F9" },
-  hashtagInput: { color: "#0284C7" },
+  brandLetters: { color: colors.white, fontSize: 12, fontWeight: "900" },
+  brandName: { color: colors.ink, fontSize: 17, fontWeight: "900" },
+  brandAccount: { marginTop: 1, color: colors.muted, fontSize: 11 },
+  tintedInput: { borderWidth: 0, backgroundColor: colors.field },
+  hashtagInput: { color: colors.primary },
   publishNote: { color: "#B45309", fontSize: 13, lineHeight: 19 },
-  directNote: { color: "#64748B", fontSize: 12, lineHeight: 18, textAlign: "center" },
+  directNote: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: "center" },
 });
