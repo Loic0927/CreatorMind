@@ -80,24 +80,70 @@ def auth_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     session_factory_for_url.cache_clear()
 
 
+def signup_request(email: str, code: str, **overrides) -> VerifyCodeRequest:
+    return VerifyCodeRequest(
+        email=email,
+        code=code,
+        intent="sign_up",
+        privacy_terms_accepted=True,
+        ai_processing_consent=True,
+        **overrides,
+    )
+
+
 def test_email_code_creates_a_reusable_cross_client_session(auth_database):
     requested = request_code(EmailRequest(email="Owner@Example.Test"))
     assert requested["sent"] is True
     assert len(requested["development_code"]) == 6
 
-    verified = verify_code(VerifyCodeRequest(email="owner@example.test", code=requested["development_code"]))
+    verified = verify_code(signup_request("owner@example.test", requested["development_code"]))
     identity = auth.authenticate_token(verified["access_token"])
     assert identity.email == "owner@example.test"
     assert identity.id == verified["user"]["id"]
-    assert verified["user"]["ai_processing_consented"] is False
-    assert verified["user"]["ai_processing_consented_at"] is None
+    assert verified["user"]["ai_processing_consented"] is True
+    assert verified["user"]["ai_processing_consented_at"]
+
+
+def test_signup_requires_legal_and_ai_consent_before_creating_user(auth_database):
+    code = request_code(EmailRequest(email="new@example.test"))["development_code"]
+
+    with pytest.raises(HTTPException) as rejected:
+        verify_code(VerifyCodeRequest(email="new@example.test", code=code, intent="sign_up"))
+
+    assert rejected.value.status_code == 400
+    assert rejected.value.detail["code"] == "registration_consent_required"
+    with auth_database() as session:
+        assert session.scalar(select(func.count()).select_from(UserRecord)) == 0
+
+
+def test_sign_in_and_sign_up_are_distinct_flows(auth_database, monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "0")
+    unknown_code = request_code(EmailRequest(email="unknown@example.test"))["development_code"]
+    with pytest.raises(HTTPException) as missing:
+        verify_code(VerifyCodeRequest(email="unknown@example.test", code=unknown_code, intent="sign_in"))
+    assert missing.value.status_code == 404
+    assert missing.value.detail["code"] == "account_not_found"
+
+    signup_code = request_code(EmailRequest(email="member@example.test"))["development_code"]
+    verify_code(signup_request("member@example.test", signup_code))
+    duplicate_code = request_code(EmailRequest(email="member@example.test"))["development_code"]
+    with pytest.raises(HTTPException) as duplicate:
+        verify_code(signup_request("member@example.test", duplicate_code))
+    assert duplicate.value.status_code == 409
+    assert duplicate.value.detail["code"] == "account_exists"
+
+    login_code = request_code(EmailRequest(email="member@example.test"))["development_code"]
+    signed_in = verify_code(VerifyCodeRequest(email="member@example.test", code=login_code, intent="sign_in"))
+    assert signed_in["user"]["email"] == "member@example.test"
 
 
 def test_ai_processing_consent_is_explicit_and_revocation_clears_text_cache(auth_database):
     code = request_code(EmailRequest(email="consent@example.test"))["development_code"]
-    verified = verify_code(VerifyCodeRequest(email="consent@example.test", code=code))
+    verified = verify_code(signup_request("consent@example.test", code))
     user = auth.authenticate_token(verified["access_token"])
 
+    assert ai_processing_consent(user)["ai_processing_consented"] is True
+    revoke_ai_processing_consent(user, BackgroundTasks())
     assert ai_processing_consent(user)["ai_processing_consented"] is False
     background_tasks = BackgroundTasks()
     granted = grant_ai_processing_consent(user, background_tasks)
@@ -133,7 +179,7 @@ def test_ai_processing_consent_is_explicit_and_revocation_clears_text_cache(auth
 
 def test_login_code_cannot_be_replayed(auth_database):
     requested = request_code(EmailRequest(email="owner@example.test"))
-    payload = VerifyCodeRequest(email="owner@example.test", code=requested["development_code"])
+    payload = signup_request("owner@example.test", requested["development_code"])
     verify_code(payload)
     with pytest.raises(HTTPException) as replayed:
         verify_code(payload)
@@ -145,19 +191,19 @@ def test_failed_login_attempts_are_persisted(auth_database):
     incorrect_code = "000000" if requested["development_code"] != "000000" else "999999"
     for _ in range(5):
         with pytest.raises(HTTPException):
-            verify_code(VerifyCodeRequest(email="owner@example.test", code=incorrect_code))
+            verify_code(signup_request("owner@example.test", incorrect_code))
 
     with pytest.raises(HTTPException) as locked:
-        verify_code(VerifyCodeRequest(email="owner@example.test", code=requested["development_code"]))
+        verify_code(signup_request("owner@example.test", requested["development_code"]))
     assert locked.value.status_code == 401
 
 
 def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
     first_code = request_code(EmailRequest(email="first@example.test"))["development_code"]
-    first_session = verify_code(VerifyCodeRequest(email="first@example.test", code=first_code))
+    first_session = verify_code(signup_request("first@example.test", first_code))
     first = auth.authenticate_token(first_session["access_token"])
     second_code = request_code(EmailRequest(email="second@example.test"))["development_code"]
-    second_session = verify_code(VerifyCodeRequest(email="second@example.test", code=second_code))
+    second_session = verify_code(signup_request("second@example.test", second_code))
     second = auth.authenticate_token(second_session["access_token"])
 
     saved = save_account_context(
@@ -189,7 +235,7 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
 
 def test_legacy_account_context_fields_are_ignored(auth_database):
     code = request_code(EmailRequest(email="legacy@example.test"))["development_code"]
-    verified = verify_code(VerifyCodeRequest(email="legacy@example.test", code=code))
+    verified = verify_code(signup_request("legacy@example.test", code))
     user = auth.authenticate_token(verified["access_token"])
     auth.update_account_context(
         user.id,
@@ -264,7 +310,7 @@ def test_reviewer_login_uses_only_the_configured_email_and_hashed_code(auth_data
     requested = request_code(EmailRequest(email="reviewer@example.test"))
     assert requested["sent"] is True
     assert "development_code" not in requested
-    verified = verify_code(VerifyCodeRequest(email="REVIEWER@example.test", code="246810"))
+    verified = verify_code(signup_request("REVIEWER@example.test", "246810"))
     assert verified["user"]["email"] == "reviewer@example.test"
 
     other = request_code(EmailRequest(email="other@example.test"))
@@ -282,7 +328,7 @@ def test_reviewer_login_rejects_a_wrong_code_and_keeps_existing_rate_limits(auth
 
     request_code(EmailRequest(email="reviewer@example.test"))
     with pytest.raises(HTTPException) as rejected:
-        verify_code(VerifyCodeRequest(email="reviewer@example.test", code="000000"))
+        verify_code(signup_request("reviewer@example.test", "000000"))
     assert rejected.value.status_code == 401
     request_code(EmailRequest(email="reviewer@example.test"))
     with pytest.raises(HTTPException) as capped:
@@ -293,7 +339,7 @@ def test_reviewer_login_rejects_a_wrong_code_and_keeps_existing_rate_limits(auth
 def test_delete_account_removes_all_sql_records_with_foreign_keys_enabled(auth_database, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_MEDIA_STORAGE", "local")
     requested = request_code(EmailRequest(email="delete@example.test"))
-    verified = verify_code(VerifyCodeRequest(email="delete@example.test", code=requested["development_code"]))
+    verified = verify_code(signup_request("delete@example.test", requested["development_code"]))
     user = auth.authenticate_token(verified["access_token"])
     now = datetime.now(UTC)
 

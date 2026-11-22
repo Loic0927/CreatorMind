@@ -54,7 +54,9 @@ reach.
 
 Gemini processing always requires the creator's explicit consent. The consent screen describes
 that selected media, captions, comment text, and performance facts may be sent to Google Gemini.
-The creator can revoke it in Settings; revocation clears generated-text caches.
+New users accept this together with the Privacy Policy and Terms before their account is created.
+The backend revocation endpoint clears generated-text caches; Settings does not expose a separate
+AI-processing container.
 
 - **Summary** is based on validated performance facts and, after consent, may receive bounded
   media content. Without consent it uses only a deterministic fact template.

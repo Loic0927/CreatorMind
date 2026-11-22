@@ -99,8 +99,12 @@ def verify_login_code(
     email: str,
     code: str,
     *,
+    intent: str = "sign_in",
+    ai_processing_consent: bool = False,
     reviewer_code_match: bool | None = None,
 ) -> tuple[UserRecord, str, datetime]:
+    if intent not in {"sign_in", "sign_up"}:
+        raise ValueError("intent must be sign_in or sign_up")
     now = datetime.now(UTC)
     factory = session_factory()
     with factory() as session:
@@ -129,8 +133,27 @@ def verify_login_code(
             )
         record.consumed_at = now
         user = session.scalar(select(UserRecord).where(UserRecord.email == email))
-        if user is None:
-            user = UserRecord(id=str(uuid4()), email=email, created_at=now, updated_at=now)
+        if intent == "sign_in" and user is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "account_not_found", "message": "No account exists for this email. Create one first."},
+            )
+        if intent == "sign_up" and user is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "account_exists",
+                    "message": "An account already exists for this email. Sign in instead.",
+                },
+            )
+        if intent == "sign_up":
+            user = UserRecord(
+                id=str(uuid4()),
+                email=email,
+                ai_processing_consented_at=now if ai_processing_consent else None,
+                created_at=now,
+                updated_at=now,
+            )
             session.add(user)
             session.flush()
         token = secrets.token_urlsafe(48)

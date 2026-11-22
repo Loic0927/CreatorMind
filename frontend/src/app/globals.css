@@ -23,7 +23,7 @@
 .loading-dot {
   width: 16px;
   height: 16px;
-  border: 3px solid #0A88ED;
+  border: 3px solid #0a88ed;
   border-radius: 999px;
   animation: loading-dot 1.2s ease-in-out infinite;
 }
@@ -115,6 +115,7 @@ a {
 
 .unified-select-field {
   width: 100%;
+  min-width: 0;
   color: var(--select-ink);
 }
 .unified-select-label-row {

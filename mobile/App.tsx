@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,15 +16,14 @@ import {
 import { StatusBar } from "expo-status-bar";
 import * as WebBrowser from "expo-web-browser";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
-import { Button } from "./src/components/ui";
 import { HomeScreen } from "./src/screens/HomeScreen";
 import { CreateScreen } from "./src/screens/CreateScreen";
 import { InsightsScreen } from "./src/screens/InsightsScreen";
 import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TrackingReportScreen } from "./src/screens/TrackingReportScreen";
-import { getSession, logout, requestLoginCode, verifyLoginCode, Session } from "./src/services/auth";
+import { AuthIntent, getSession, logout, requestLoginCode, verifyLoginCode, Session } from "./src/services/auth";
 import { connectInstagram, getConnection, getTrackedPost } from "./src/services/api";
-import { legalUrl } from "./src/config/environment";
+import { legalUrl, WEB_BASE_URL } from "./src/config/environment";
 import { AppScreen, Draft, InstagramConnection, TrackedPost } from "./src/types";
 import { colors } from "./src/theme/colors";
 
@@ -151,86 +153,278 @@ function AppContent() {
     </View>
   );
 }
-function Login({ onLogin }: { onLogin: (session: Session) => void }) {
+export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   const insets = useSafeAreaInsets();
+  const [intent, setIntent] = useState<AuthIntent>("sign_in");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const openLegal = (path: "/privacy" | "/terms") => {
-    void WebBrowser.openBrowserAsync(legalUrl(path)).catch(() =>
-      Alert.alert("Could not open this page", "Try again later."),
-    );
+  const [registrationVisible, setRegistrationVisible] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+  const [aiAccepted, setAiAccepted] = useState(false);
+
+  const openUrl = (url: string) => {
+    void WebBrowser.openBrowserAsync(url).catch(() => Alert.alert("Could not open this page", "Try again later."));
+  };
+  const openLegal = (path: "/privacy" | "/terms") => openUrl(legalUrl(path));
+  const changeIntent = (next: AuthIntent) => {
+    setIntent(next);
+    setSent(false);
+    setCode("");
+    setRegistrationVisible(false);
+    setLegalAccepted(false);
+    setAiAccepted(false);
   };
   const submit = async () => {
     if (!email.includes("@")) return Alert.alert("Enter a valid email");
+    if (sent && code.trim().length !== 6) return Alert.alert("Enter the six-digit verification code");
+    if (sent && intent === "sign_up") {
+      setRegistrationVisible(true);
+      return;
+    }
     setBusy(true);
     try {
       if (!sent) {
         const result = await requestLoginCode(email.trim());
         setSent(true);
         if (result.developmentCode) setCode(result.developmentCode);
-      } else onLogin(await verifyLoginCode(email.trim(), code.trim()));
+      } else {
+        onLogin(await verifyLoginCode(email.trim(), code.trim(), { intent: "sign_in" }));
+      }
     } catch (reason) {
-      Alert.alert("Sign in failed", reason instanceof Error ? reason.message : "Try again.");
+      Alert.alert(
+        intent === "sign_up" ? "Create account failed" : "Sign in failed",
+        reason instanceof Error ? reason.message : "Try again.",
+      );
     } finally {
       setBusy(false);
     }
   };
+  const completeRegistration = async () => {
+    if (!legalAccepted || !aiAccepted) return;
+    setBusy(true);
+    try {
+      onLogin(
+        await verifyLoginCode(email.trim(), code.trim(), {
+          intent: "sign_up",
+          privacyTermsAccepted: true,
+          aiProcessingConsent: true,
+        }),
+      );
+    } catch (reason) {
+      Alert.alert("Create account failed", reason instanceof Error ? reason.message : "Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title = intent === "sign_up" ? "Create account" : "Sign in";
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      style={[styles.login, { paddingTop: insets.top + 28, paddingBottom: insets.bottom + 28 }]}
-    >
-      <StatusBar style="light" />
-      <Text style={styles.logo}>PB</Text>
-      <Text style={styles.welcome}>Bridge every post to better results.</Text>
-      <TextInput
-        accessibilityLabel="Email"
-        editable={!sent}
-        style={styles.input}
-        autoCapitalize="none"
-        keyboardType="email-address"
-        placeholder="you@example.com"
-        value={email}
-        onChangeText={setEmail}
-      />
-      {sent && (
-        <TextInput
-          accessibilityLabel="Sign-in code"
-          style={styles.input}
-          keyboardType="number-pad"
-          maxLength={6}
-          placeholder="6-digit code"
-          value={code}
-          onChangeText={setCode}
-        />
-      )}
-      <View style={styles.legalLinks}>
-        <Pressable accessibilityRole="link" onPress={() => openLegal("/privacy")}>
-          <Text style={styles.legalLink}>Privacy</Text>
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.loginPage}>
+      <StatusBar style="dark" />
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.loginScroll, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 32 }]}
+      >
+        <Pressable accessibilityRole="link" onPress={() => openUrl(WEB_BASE_URL)}>
+          <Text style={styles.backLink}>← Back to homepage</Text>
         </Pressable>
-        <Text style={styles.legalSeparator}>·</Text>
-        <Pressable accessibilityRole="link" onPress={() => openLegal("/terms")}>
-          <Text style={styles.legalLink}>Terms</Text>
-        </Pressable>
-      </View>
-      <Button
-        label={busy ? "Please wait…" : sent ? "Verify and sign in" : "Email me a code"}
-        onPress={submit}
-        disabled={busy}
-      />
-      {sent && (
-        <Button
-          label="Use a different email"
-          onPress={() => {
-            setSent(false);
-            setCode("");
-          }}
-          secondary
-        />
-      )}
+        <View style={styles.loginCard}>
+          <Image
+            source={require("./assets/loginpage.png")}
+            resizeMode="contain"
+            accessibilityLabel="PostBridge fox holding a glowing idea bulb"
+            style={styles.loginMascot}
+          />
+          <Text accessibilityRole="header" style={styles.loginTitle}>
+            {title}
+          </Text>
+          <Text style={styles.loginDescription}>
+            {intent === "sign_up"
+              ? "Create your PostBridge account with a secure email verification code."
+              : "Welcome back. We’ll email you a secure six-digit code—no password needed."}
+          </Text>
+          <View style={styles.loginDividerRow}>
+            <View style={styles.loginDivider} />
+            <Text style={styles.loginDividerText}>secure email verification</Text>
+            <View style={styles.loginDivider} />
+          </View>
+          <View style={styles.loginField}>
+            <Text style={styles.loginLabel}>Email</Text>
+            <TextInput
+              accessibilityLabel="Email"
+              editable={!sent && !busy}
+              style={styles.loginInput}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              placeholder="name@company.com"
+              placeholderTextColor={colors.muted}
+              value={email}
+              onChangeText={setEmail}
+            />
+          </View>
+          {sent ? (
+            <View style={styles.loginField}>
+              <Text style={styles.loginLabel}>Verification code</Text>
+              <TextInput
+                accessibilityLabel="Verification code"
+                editable={!busy}
+                style={styles.loginInput}
+                autoComplete="one-time-code"
+                keyboardType="number-pad"
+                maxLength={6}
+                placeholder="6-digit code"
+                placeholderTextColor={colors.muted}
+                value={code}
+                onChangeText={(value) => setCode(value.replace(/\D/g, ""))}
+              />
+            </View>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy || !email.trim() || (sent && code.length !== 6)}
+            onPress={() => void submit()}
+            style={({ pressed }) => [
+              styles.loginPrimaryButton,
+              pressed && styles.loginButtonPressed,
+              (busy || !email.trim() || (sent && code.length !== 6)) && styles.loginButtonDisabled,
+            ]}
+          >
+            <Text style={styles.loginPrimaryButtonText}>
+              {busy
+                ? "Please wait…"
+                : sent
+                  ? intent === "sign_up"
+                    ? "Review and create account"
+                    : "Verify and sign in"
+                  : "Email me a code"}
+            </Text>
+          </Pressable>
+          {sent ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => {
+                setSent(false);
+                setCode("");
+              }}
+            >
+              <Text style={styles.changeEmail}>Use a different email</Text>
+            </Pressable>
+          ) : null}
+          <View style={styles.loginSwitchRow}>
+            <Text style={styles.loginSwitchText}>
+              {intent === "sign_up" ? "Already have an account?" : "Don’t have an account?"}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => changeIntent(intent === "sign_up" ? "sign_in" : "sign_up")}
+            >
+              <Text style={styles.loginSwitchLink}>{intent === "sign_up" ? "Sign in" : "Create account"}</Text>
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+
+      <Modal
+        visible={registrationVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={busy ? undefined : () => setRegistrationVisible(false)}
+      >
+        <View style={styles.registrationBackdrop}>
+          <View accessibilityViewIsModal style={styles.registrationSheet}>
+            <ScrollView contentContainerStyle={styles.registrationContent}>
+              <Text style={styles.registrationEyebrow}>BEFORE WE CREATE YOUR ACCOUNT</Text>
+              <Text accessibilityRole="header" style={styles.registrationTitle}>
+                Privacy, Terms & AI processing
+              </Text>
+              <Text style={styles.registrationBody}>
+                Review these notices here. Your account is not created until you confirm both choices below.
+              </Text>
+              <View style={styles.registrationNotice}>
+                <Text style={styles.registrationNoticeTitle}>Privacy</Text>
+                <Text style={styles.registrationBody}>
+                  PostBridge stores your account details and the Instagram data you connect for publishing, tracking,
+                  and analysis. You can request account deletion from Settings.
+                </Text>
+                <Pressable accessibilityRole="link" onPress={() => openLegal("/privacy")}>
+                  <Text style={styles.registrationLink}>Read the full Privacy Policy</Text>
+                </Pressable>
+              </View>
+              <View style={styles.registrationNotice}>
+                <Text style={styles.registrationNoticeTitle}>Terms</Text>
+                <Text style={styles.registrationBody}>
+                  Use PostBridge lawfully, protect your access, and review AI-generated content before using or
+                  publishing it. Connected services have their own terms.
+                </Text>
+                <Pressable accessibilityRole="link" onPress={() => openLegal("/terms")}>
+                  <Text style={styles.registrationLink}>Read the full Terms</Text>
+                </Pressable>
+              </View>
+              <View style={styles.registrationNotice}>
+                <Text style={styles.registrationNoticeTitle}>AI processing</Text>
+                <Text style={styles.registrationBody}>
+                  For captions, summaries, comment summaries, and suggestions, PostBridge may send relevant post media,
+                  captions, audience comments, and performance facts to Google Gemini.
+                </Text>
+              </View>
+              <ConsentRow
+                checked={legalAccepted}
+                label="I have read and agree to the Privacy Policy and Terms."
+                onPress={() => setLegalAccepted((value) => !value)}
+              />
+              <ConsentRow
+                checked={aiAccepted}
+                label="I agree to the AI processing described above, including processing by Google Gemini."
+                onPress={() => setAiAccepted((value) => !value)}
+              />
+              <View style={styles.registrationActions}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => setRegistrationVisible(false)}
+                  style={[styles.registrationButton, styles.registrationCancel, busy && styles.loginButtonDisabled]}
+                >
+                  <Text style={styles.registrationCancelText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy || !legalAccepted || !aiAccepted}
+                  onPress={() => void completeRegistration()}
+                  style={[
+                    styles.registrationButton,
+                    styles.registrationConfirm,
+                    (busy || !legalAccepted || !aiAccepted) && styles.loginButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.registrationConfirmText}>{busy ? "Creating…" : "Agree and create account"}</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
+  );
+}
+
+function ConsentRow({ checked, label, onPress }: { checked: boolean; label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      onPress={onPress}
+      style={styles.consentRow}
+    >
+      <View style={[styles.consentBox, checked && styles.consentBoxChecked]}>
+        {checked ? <Text style={styles.consentCheck}>✓</Text> : null}
+      </View>
+      <Text style={styles.consentLabel}>{label}</Text>
+    </Pressable>
   );
 }
 const styles = StyleSheet.create({
@@ -249,30 +443,128 @@ const styles = StyleSheet.create({
   navIcon: { minHeight: 22, fontSize: 21, lineHeight: 23, color: colors.muted, fontWeight: "700" },
   navText: { fontSize: 11, color: colors.muted, fontWeight: "700" },
   navActive: { color: colors.primary },
-  login: { flex: 1, backgroundColor: colors.ink, paddingHorizontal: 28, justifyContent: "center", gap: 18 },
-  logo: {
-    color: colors.white,
-    fontSize: 22,
-    fontWeight: "900",
-    backgroundColor: colors.primary,
-    width: 60,
-    height: 60,
-    textAlign: "center",
-    textAlignVertical: "center",
-    borderRadius: 18,
+  loginPage: { flex: 1, backgroundColor: "#EEF3FF" },
+  loginScroll: { flexGrow: 1, paddingHorizontal: 20 },
+  backLink: { color: colors.muted, fontSize: 15, fontWeight: "700", marginBottom: 28 },
+  loginCard: {
+    width: "100%",
+    maxWidth: 540,
+    alignSelf: "center",
+    alignItems: "stretch",
+    paddingHorizontal: 24,
+    paddingVertical: 30,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.9)",
+    backgroundColor: colors.surface,
+    shadowColor: colors.ink,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 22,
+    elevation: 5,
   },
-  welcome: { color: colors.white, fontSize: 36, fontWeight: "900" },
-  input: {
-    minHeight: 50,
+  loginMascot: { width: 180, height: 180, alignSelf: "center" },
+  loginTitle: { color: colors.ink, fontSize: 38, lineHeight: 44, fontWeight: "900", textAlign: "center" },
+  loginDescription: {
+    marginTop: 10,
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: "center",
+  },
+  loginDividerRow: { flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 24 },
+  loginDivider: { flex: 1, height: 1, backgroundColor: colors.line },
+  loginDividerText: { color: colors.muted, fontSize: 12, fontWeight: "700" },
+  loginField: { marginBottom: 18 },
+  loginLabel: { marginBottom: 8, color: colors.ink, fontSize: 14, fontWeight: "800" },
+  loginInput: {
+    width: "100%",
+    minHeight: 58,
     borderWidth: 1,
     borderColor: colors.line,
-    backgroundColor: colors.field,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    backgroundColor: "#EAF2FF",
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
     color: colors.ink,
+    fontSize: 16,
   },
-  legalLinks: { flexDirection: "row", justifyContent: "center", gap: 9 },
-  legalLink: { color: colors.white85, fontSize: 13, fontWeight: "800", textDecorationLine: "underline" },
-  legalSeparator: { color: colors.white85, fontSize: 13 },
+  loginPrimaryButton: {
+    minHeight: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    backgroundColor: "#655CFF",
+    shadowColor: "#5669FF",
+    shadowOffset: { width: 0, height: 9 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  loginPrimaryButtonText: { color: colors.white, fontSize: 16, fontWeight: "900", textAlign: "center" },
+  loginButtonPressed: { opacity: 0.88 },
+  loginButtonDisabled: { opacity: 0.5 },
+  changeEmail: { marginTop: 20, color: colors.primary, fontSize: 14, fontWeight: "800" },
+  loginSwitchRow: {
+    marginTop: 28,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 5,
+  },
+  loginSwitchText: { color: colors.muted, fontSize: 14 },
+  loginSwitchLink: { color: colors.primary, fontSize: 14, fontWeight: "800" },
+  registrationBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 18,
+    backgroundColor: colors.overlay,
+  },
+  registrationSheet: {
+    width: "100%",
+    maxWidth: 640,
+    maxHeight: "92%",
+    alignSelf: "center",
+    overflow: "hidden",
+    borderRadius: 24,
+    backgroundColor: colors.surface,
+  },
+  registrationContent: { padding: 22, gap: 14 },
+  registrationEyebrow: { color: colors.primaryHover, fontSize: 10, fontWeight: "900", letterSpacing: 1 },
+  registrationTitle: { color: colors.ink, fontSize: 25, lineHeight: 31, fontWeight: "900" },
+  registrationBody: { color: colors.inkSoft, fontSize: 13, lineHeight: 20 },
+  registrationNotice: { gap: 8, borderRadius: 16, backgroundColor: colors.subtle, padding: 14 },
+  registrationNoticeTitle: { color: colors.ink, fontSize: 15, fontWeight: "900" },
+  registrationLink: { color: colors.primary, fontSize: 13, fontWeight: "800", textDecorationLine: "underline" },
+  consentRow: {
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 11,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 14,
+    padding: 14,
+  },
+  consentBox: {
+    width: 22,
+    height: 22,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.checkboxBorder,
+    borderRadius: 6,
+    backgroundColor: colors.surface,
+  },
+  consentBoxChecked: { borderColor: colors.primary, backgroundColor: colors.primary },
+  consentCheck: { color: colors.white, fontSize: 14, lineHeight: 17, fontWeight: "900" },
+  consentLabel: { minWidth: 0, flex: 1, color: colors.ink, fontSize: 13, lineHeight: 19, fontWeight: "700" },
+  registrationActions: { flexDirection: "column-reverse", gap: 10, marginTop: 4 },
+  registrationButton: { minHeight: 50, alignItems: "center", justifyContent: "center", borderRadius: 14, padding: 12 },
+  registrationCancel: { borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface },
+  registrationConfirm: { backgroundColor: "#655CFF" },
+  registrationCancelText: { color: colors.inkSoft, fontWeight: "800" },
+  registrationConfirmText: { color: colors.white, fontWeight: "900", textAlign: "center" },
 });

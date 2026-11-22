@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -66,6 +67,9 @@ class EmailRequest(BaseModel):
 class VerifyCodeRequest(BaseModel):
     email: str
     code: str = Field(pattern=r"^\d{6}$")
+    intent: Literal["sign_in", "sign_up"] = "sign_in"
+    privacy_terms_accepted: bool = False
+    ai_processing_consent: bool = False
 
 
 class AccountContextRequest(BaseModel):
@@ -111,12 +115,22 @@ def request_code(payload: EmailRequest) -> dict:
 @router.post("/verify-code")
 def verify_code(payload: VerifyCodeRequest, background_tasks: BackgroundTasks = None) -> dict:
     email = normalize_email(payload.email)
+    if payload.intent == "sign_up" and not (payload.privacy_terms_accepted and payload.ai_processing_consent):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "registration_consent_required",
+                "message": "Accept the Privacy Policy, Terms, and AI processing notice to create an account.",
+            },
+        )
     reviewer_login = reviewer_login_enabled_for(email)
     if reviewer_login:
         logger.info("review_login_verification_attempted email=%s", email)
     user, token, expires_at = verify_login_code(
         email,
         payload.code,
+        intent=payload.intent,
+        ai_processing_consent=payload.ai_processing_consent,
         reviewer_code_match=reviewer_login_code_matches(payload.code) if reviewer_login else None,
     )
     if reviewer_login:

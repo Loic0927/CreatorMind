@@ -4,20 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AccountContext,
-  AIProcessingConsent,
   Connection,
   Session,
   deleteAccount,
   disconnectInstagram,
-  getAIProcessingConsent,
   getAccountContext,
   getConnection,
-  grantAIProcessingConsent,
   logout,
-  revokeAIProcessingConsent,
   updateAccountContext,
 } from "@/lib/postbridge";
-import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage } from "@/lib/format";
 import { ErrorBanner, PageTitle, Panel } from "@/components/dashboard/ui";
 import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
@@ -100,21 +95,17 @@ const fieldClass =
 export function SettingsTab({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [context, setContext] = useState<AccountContext>(emptyContext);
-  const [aiConsent, setAiConsent] = useState<AIProcessingConsent | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savingConsent, setSavingConsent] = useState(false);
-  const [consentDialogOpen, setConsentDialogOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const [hashtagInput, setHashtagInput] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getConnection(session), getAccountContext(session), getAIProcessingConsent(session)])
-      .then(([nextConnection, nextContext, nextConsent]) => {
+    Promise.all([getConnection(session), getAccountContext(session)])
+      .then(([nextConnection, nextContext]) => {
         setConnection(nextConnection);
         setContext(nextContext);
-        setAiConsent(nextConsent);
       })
       .catch((reason) => setError(errorMessage(reason, "Could not load settings.")))
       .finally(() => setLoading(false));
@@ -163,32 +154,6 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
     }
   };
 
-  const acceptConsent = async () => {
-    setSavingConsent(true);
-    setError("");
-    try {
-      setAiConsent(await grantAIProcessingConsent(session));
-      setConsentDialogOpen(false);
-    } catch (reason) {
-      setError(errorMessage(reason, "Could not save AI processing consent."));
-    } finally {
-      setSavingConsent(false);
-    }
-  };
-
-  const revokeConsent = async () => {
-    if (!window.confirm("Revoke AI processing consent? Existing AI text will be cleared.")) return;
-    setSavingConsent(true);
-    setError("");
-    try {
-      setAiConsent(await revokeAIProcessingConsent(session));
-    } catch (reason) {
-      setError(errorMessage(reason, "Could not revoke AI processing consent."));
-    } finally {
-      setSavingConsent(false);
-    }
-  };
-
   const addHashtag = () => {
     const cleaned = hashtagInput
       .trim()
@@ -227,44 +192,11 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
               Delete account
             </button>
           </div>
-          <p className="mt-5 text-sm text-muted">
-            <Link href="/privacy" className="font-bold text-primary-hover underline underline-offset-2">
-              Privacy
-            </Link>
-            <span aria-hidden="true"> · </span>
-            <Link href="/terms" className="font-bold text-primary-hover underline underline-offset-2">
-              Terms
-            </Link>
-          </p>
-        </Panel>
-
-        <Panel>
-          <h2 className="text-lg font-black">AI processing</h2>
-          <p className="mt-2 text-sm leading-5 text-muted">
-            Allow optional Google Gemini features for captions, summaries, comment summaries, and suggestions.
-          </p>
-          <label className="mt-5 flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-subtle px-4 py-3 text-sm font-bold">
-            <span>Allow optional AI processing</span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={Boolean(aiConsent?.ai_processing_consented)}
-              disabled={loading || savingConsent || !aiConsent}
-              onChange={(event) => {
-                if (event.target.checked) setConsentDialogOpen(true);
-                else void revokeConsent();
-              }}
-              className="h-5 w-5 accent-primary"
-            />
-          </label>
-          <p className="mt-3 text-xs leading-5 text-muted">
-            Revoking consent clears your saved AI text. You can still use PostBridge without optional AI features.
-          </p>
         </Panel>
 
         <Panel>
           <h2 className="text-lg font-black">Quick setup</h2>
-          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+          <div className="mt-5 grid min-w-0 gap-5 sm:grid-cols-2">
             <UnifiedSelect
               label="Tone"
               helper="(choose up to 3)"
@@ -305,7 +237,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
               onOtherValueChange={(primary_category_other) => setContext({ ...context, primary_category_other })}
               otherPlaceholder="Write your category"
             />
-            <div className="sm:col-span-2">
+            <div className="min-w-0 sm:col-span-2">
               <UnifiedSelect
                 label="Audience age range"
                 options={ageOptions}
@@ -410,12 +342,15 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
           </div>
         </Panel>
       </div>
-      <AiConsentDialog
-        open={consentDialogOpen}
-        busy={savingConsent}
-        onAccept={acceptConsent}
-        onNotNow={() => setConsentDialogOpen(false)}
-      />
+      <p className="pb-3 pt-7 text-center text-sm text-muted">
+        <Link href="/privacy" className="font-bold text-primary-hover underline underline-offset-2">
+          Privacy
+        </Link>
+        <span aria-hidden="true"> · </span>
+        <Link href="/terms" className="font-bold text-primary-hover underline underline-offset-2">
+          Terms
+        </Link>
+      </p>
     </div>
   );
 }

@@ -34,7 +34,9 @@ export function AiConsentModal({
           <Text style={styles.body}>
             • post media and captions;{"\n"}• audience comment text; and{"\n"}• performance facts about your posts.
           </Text>
-          <Text style={styles.body}>AI processing is optional. You can revoke consent at any time in Settings.</Text>
+          <Text style={styles.body}>
+            AI processing runs only after you accept this notice and request an AI-powered feature.
+          </Text>
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"

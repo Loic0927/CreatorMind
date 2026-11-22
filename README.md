@@ -84,13 +84,18 @@ For an App Store or Meta reviewer, set both `POSTBRIDGE_REVIEW_LOGIN_EMAIL` and
 the six-digit reviewer code. When (and only when) the incoming email matches that mailbox
 case-insensitively, the normal rate-limited sign-in flow accepts the configured code without
 mailing it. The code is never logged. Leave either variable empty to fully disable this path.
+Before handing the credentials to a reviewer, use the configured email and code once through
+**Create account** and accept the registration notices; subsequent review sessions use **Sign in**.
 
 ## AI-processing consent
 
-Before Gemini is used, web and mobile ask the creator to opt in to sending selected media,
-captions, audience comments, and performance facts to Google Gemini for the requested feature.
-They can decline or revoke consent in Settings. Revocation clears generated text caches;
-non-AI deterministic summaries may still be produced from stored performance facts.
+New accounts are created only after the creator reviews the Privacy Policy, Terms, and AI-processing
+notice and explicitly accepts sending selected media, captions, audience comments, and performance
+facts to Google Gemini for requested AI features. Web and mobile send that acceptance with the
+sign-up verification request, so no user record is created before consent. Legacy accounts without
+consent continue to receive the feature-level consent prompt. The backend revocation endpoint remains
+available and clears generated-text caches; non-AI deterministic summaries may still be produced from
+stored performance facts. Settings intentionally does not show a separate AI-processing container.
 
 ## Abuse protection
 

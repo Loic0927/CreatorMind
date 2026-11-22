@@ -232,12 +232,25 @@ export async function requestCode(email: string) {
     }),
   );
 }
-export async function verifyCode(email: string, code: string): Promise<Session> {
+export type AuthIntent = "sign_in" | "sign_up";
+export type VerifyCodeOptions = {
+  intent?: AuthIntent;
+  privacyTermsAccepted?: boolean;
+  aiProcessingConsent?: boolean;
+};
+
+export async function verifyCode(email: string, code: string, options: VerifyCodeOptions = {}): Promise<Session> {
   const result = await responseJson<{ access_token: string; expires_at: string; user: Session["user"] }>(
     await fetch(`${API_BASE_URL}/auth/verify-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({
+        email,
+        code,
+        intent: options.intent ?? "sign_in",
+        privacy_terms_accepted: options.privacyTermsAccepted ?? false,
+        ai_processing_consent: options.aiProcessingConsent ?? false,
+      }),
     }),
   );
   return { accessToken: result.access_token, expiresAt: result.expires_at, user: result.user };

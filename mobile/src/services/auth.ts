@@ -51,10 +51,26 @@ export async function requestLoginCode(email: string): Promise<{ developmentCode
   return { developmentCode: result.development_code };
 }
 
-export async function verifyLoginCode(email: string, code: string): Promise<Session> {
+export type AuthIntent = "sign_in" | "sign_up";
+
+export async function verifyLoginCode(
+  email: string,
+  code: string,
+  options: {
+    intent?: AuthIntent;
+    privacyTermsAccepted?: boolean;
+    aiProcessingConsent?: boolean;
+  } = {},
+): Promise<Session> {
   const result = await json<{ access_token: string; expires_at: string; user: Session["user"] }>("/auth/verify-code", {
     method: "POST",
-    body: JSON.stringify({ email, code }),
+    body: JSON.stringify({
+      email,
+      code,
+      intent: options.intent ?? "sign_in",
+      privacy_terms_accepted: options.privacyTermsAccepted ?? false,
+      ai_processing_consent: options.aiProcessingConsent ?? false,
+    }),
   });
   const session: Session = { accessToken: result.access_token, expiresAt: result.expires_at, user: result.user };
   await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session), {

@@ -44,7 +44,7 @@ export function AiConsentDialog({
           <li>performance facts about your posts.</li>
         </ul>
         <p className="mt-4 text-sm leading-6 text-ink-soft">
-          AI processing is optional. You can revoke consent at any time in Settings.
+          AI processing runs only after you accept this notice and request an AI-powered feature.
         </p>
         <p className="mt-3 text-sm text-ink-soft">
           <Link href="/privacy" className="font-bold text-primary-hover underline underline-offset-2">

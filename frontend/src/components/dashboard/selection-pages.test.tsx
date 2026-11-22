@@ -79,6 +79,15 @@ describe("selection controls on active pages", () => {
     );
   });
 
+  it("keeps legal links at the bottom of Settings without an AI processing panel", async () => {
+    render(<SettingsTab session={session} onLogout={() => {}} />);
+    await screen.findByRole("button", { name: "Save settings" });
+
+    expect(screen.queryByRole("heading", { name: "AI processing" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
+    expect(screen.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+  });
+
   it("keeps the surrounding page layout containers unchanged", async () => {
     const create = render(<CreateTab session={session} />);
     const createLayout = create.container.querySelector(".grid.items-start.gap-6.lg\\:grid-cols-2")?.className;

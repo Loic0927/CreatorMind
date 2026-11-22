@@ -15,7 +15,7 @@ def test_web_summary_source_snapshot_has_only_text_and_muted_note_contract():
     source = _compact("frontend/src/components/dashboard/AnalyzeTab.tsx")
     assert "{analysis?.summary?(" in source
     assert '<h2className="text-xlfont-black">Summary</h2>' in source
-    assert '<pclassName="mt-3text-[15px]leading-5text-slate-900">{analysis.summary}</p>' in source
+    assert '<pclassName="mt-3text-[15px]leading-5text-ink">{analysis.summary}</p>' in source
     assert 'analysis?.summary_status==="pending"' in source
     assert "Yoursummaryisbeingprepared." in source
     assert "first_24h_status" not in source and "milestone_hours" not in source
