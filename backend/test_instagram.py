@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -52,9 +52,7 @@ def instagram_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(json_store, "STORE_PATH", tmp_path / "store.json")
     from backend.storage import token_store
 
-    monkeypatch.setattr(
-        token_store, "TOKEN_STORE_PATH", tmp_path / "postbridge_tokens.local.json"
-    )
+    monkeypatch.setattr(token_store, "TOKEN_STORE_PATH", tmp_path / "postbridge_tokens.local.json")
     return repository
 
 
@@ -91,9 +89,7 @@ def test_authorization_url_has_required_scopes():
 def test_authorization_url_uses_configured_redirect_uri():
     url = instagram.build_authorization_url(create_oauth_state("user-a"))
     query = parse_qs(urlparse(url).query)
-    assert query["redirect_uri"] == [
-        "https://example.test/api/instagram/connect/callback"
-    ]
+    assert query["redirect_uri"] == ["https://example.test/api/instagram/connect/callback"]
 
 
 def test_token_exchange_success(monkeypatch):
@@ -141,8 +137,12 @@ def test_publish_instagram_reel_waits_for_processing_then_publishes(monkeypatch)
     monkeypatch.setattr(instagram.time, "sleep", lambda seconds: None)
 
     result = instagram.publish_instagram_reel(
-        "token", "ig-user", "https://objects.test/video.mp4", "Caption",
-        status_attempts=3, status_interval_seconds=0,
+        "token",
+        "ig-user",
+        "https://objects.test/video.mp4",
+        "Caption",
+        status_attempts=3,
+        status_interval_seconds=0,
     )
 
     assert result["id"] == "media-1"
@@ -161,18 +161,19 @@ def _account(encrypted_token: str = "encrypted") -> InstagramAccount:
         account_type="BUSINESS",
         media_count=2,
         encrypted_access_token=encrypted_token,
-        connected_at=datetime.now(timezone.utc),
+        connected_at=datetime.now(UTC),
     )
 
 
-def test_callback_success_encrypts_before_storage_and_hides_tokens(
-    monkeypatch, caplog, instagram_environment
-):
+def test_callback_success_encrypts_before_storage_and_hides_tokens(monkeypatch, caplog, instagram_environment):
     state = create_oauth_state("owner@example.test")
     monkeypatch.setattr(
         instagram_api,
         "exchange_authorization_code",
-        lambda code: {"access_token": "short-sensitive", "permissions": "instagram_business_basic,instagram_business_manage_comments"},
+        lambda code: {
+            "access_token": "short-sensitive",
+            "permissions": "instagram_business_basic,instagram_business_manage_comments",
+        },
     )
     monkeypatch.setattr(
         instagram_api,
@@ -222,12 +223,9 @@ def test_callback_rejects_invalid_or_denied_requests(kwargs, expected_code):
 
 def test_web_callback_denial_returns_to_web_app():
     state = create_oauth_state("owner@example.test", client="web")
-    response = instagram_api.connect_callback(
-        state=state, error="access_denied"
-    )
+    response = instagram_api.connect_callback(state=state, error="access_denied")
     assert response.headers["location"] == (
-        "https://app.example.test/dashboard?"
-        "instagram=error&code=instagram_authorization_denied"
+        "https://app.example.test/dashboard?instagram=error&code=instagram_authorization_denied"
     )
 
 
@@ -241,9 +239,7 @@ def test_callback_exchange_error_is_sanitized(monkeypatch):
         ),
     )
     response = instagram_api.connect_callback(code="private-code", state=state)
-    assert response.headers["location"].endswith(
-        "?status=error&code=instagram_upstream_error"
-    )
+    assert response.headers["location"].endswith("?status=error&code=instagram_upstream_error")
     assert "private-code" not in response.headers["location"]
 
 
@@ -254,14 +250,10 @@ def test_callback_profile_failure_redirects_with_safe_code(monkeypatch):
     monkeypatch.setattr(
         instagram_api,
         "fetch_instagram_profile",
-        lambda token: (_ for _ in ()).throw(
-            InstagramServiceError("instagram_profile_failed", "safe failure")
-        ),
+        lambda token: (_ for _ in ()).throw(InstagramServiceError("instagram_profile_failed", "safe failure")),
     )
     response = instagram_api.connect_callback(code="private-code", state=state)
-    assert response.headers["location"].endswith(
-        "?status=error&code=instagram_profile_failed"
-    )
+    assert response.headers["location"].endswith("?status=error&code=instagram_profile_failed")
     assert "secret" not in response.headers["location"]
 
 
@@ -269,15 +261,20 @@ def test_callback_requires_professional_account(monkeypatch):
     state = create_oauth_state("owner@example.test")
     monkeypatch.setattr(instagram_api, "exchange_authorization_code", lambda code: {"access_token": "short-secret"})
     monkeypatch.setattr(instagram_api, "exchange_long_lived_token", lambda token: {"access_token": "long-secret"})
-    monkeypatch.setattr(instagram_api, "fetch_instagram_profile", lambda token: {
-        "id": "ig-personal", "username": "personal", "account_type": "PERSONAL", "media_count": 1,
-    })
+    monkeypatch.setattr(
+        instagram_api,
+        "fetch_instagram_profile",
+        lambda token: {
+            "id": "ig-personal",
+            "username": "personal",
+            "account_type": "PERSONAL",
+            "media_count": 1,
+        },
+    )
 
     response = instagram_api.connect_callback(code="private-code", state=state)
 
-    assert response.headers["location"].endswith(
-        "?status=error&code=instagram_professional_account_required"
-    )
+    assert response.headers["location"].endswith("?status=error&code=instagram_professional_account_required")
 
 
 def test_invalid_and_replayed_state_redirect_with_safe_code():
@@ -301,17 +298,16 @@ def test_refresh_long_lived_token_interface(monkeypatch):
     monkeypatch.setattr(
         instagram,
         "_request_json",
-        lambda method, url, **kwargs: calls.append((method, url, kwargs))
-        or {"access_token": "refreshed-secret", "expires_in": 3600},
+        lambda method, url, **kwargs: (
+            calls.append((method, url, kwargs)) or {"access_token": "refreshed-secret", "expires_in": 3600}
+        ),
     )
     result = refresh_long_lived_token("existing-secret")
     assert result["expires_in"] == 3600
     assert calls[0][2]["query"]["grant_type"] == "ig_refresh_token"
 
 
-def test_revoked_token_marks_connection_reconnect_required(
-    monkeypatch, instagram_environment
-):
+def test_revoked_token_marks_connection_reconnect_required(monkeypatch, instagram_environment):
     encrypted = instagram.encrypt_access_token("private-token")
     instagram_environment.upsert_connection(_account(), encrypted_token=encrypted)
     monkeypatch.setattr(
@@ -366,9 +362,7 @@ def test_account_upstream_success_and_error(monkeypatch, instagram_environment):
 
 def test_media_upstream_success_and_error(monkeypatch, instagram_environment):
     existing = _account(instagram.encrypt_access_token("private-token"))
-    instagram_environment.upsert_connection(
-        existing, encrypted_token=existing.encrypted_access_token
-    )
+    instagram_environment.upsert_connection(existing, encrypted_token=existing.encrypted_access_token)
     monkeypatch.setattr(instagram_api, "upsert_instagram_media", lambda items: items)
     monkeypatch.setattr(
         instagram_api,
@@ -401,9 +395,7 @@ def test_media_upstream_success_and_error(monkeypatch, instagram_environment):
 def test_engagement_rate_handles_zero_reach_and_partial_metrics():
     assert engagement_rate({"reach": 0, "likes": 4}) is None
     assert engagement_rate({"reach": 100}) is None
-    assert engagement_rate(
-        {"reach": 100, "likes": 4, "comments": 1, "saves": None, "shares": 2}
-    ) == 7
+    assert engagement_rate({"reach": 100, "likes": 4, "comments": 1, "saves": None, "shares": 2}) == 7
     assert safe_raw_metrics({"reach": 4, "views": 9, "access_token": "secret"}) == {
         "reach": 4,
         "views": 9,
@@ -437,9 +429,11 @@ def test_media_insights_preserve_partial_metric_availability(monkeypatch):
 
 
 def test_media_insights_do_not_swallow_invalid_token(monkeypatch):
-    monkeypatch.setattr(instagram, "_request_json", lambda *args, **kwargs: (_ for _ in ()).throw(
-        InstagramServiceError("instagram_token_invalid", "safe", 401)
-    ))
+    monkeypatch.setattr(
+        instagram,
+        "_request_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(InstagramServiceError("instagram_token_invalid", "safe", 401)),
+    )
 
     with pytest.raises(InstagramServiceError) as failure:
         fetch_instagram_media_insights("secret", "media-1", "VIDEO")
@@ -476,9 +470,7 @@ def test_media_insights_use_provider_views_support_per_media_type(
 
     assert "views" in requested_metrics
     assert result.get("views") == expected_views
-    assert result["_metric_status"]["views"] == (
-        "available" if expected_views is not None else "unavailable"
-    )
+    assert result["_metric_status"]["views"] == ("available" if expected_views is not None else "unavailable")
     assert result["_media_type"] == media_type
 
 
@@ -524,11 +516,29 @@ def test_reels_watch_time_metrics_are_requested_and_preserved(monkeypatch):
 
 
 def test_seven_day_aggregation_uses_latest_snapshot_and_unavailable_metrics():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     media = [SimpleNamespace(id="media-1", published_at=now - timedelta(days=1))]
     snapshots = [
-        SimpleNamespace(media_id="media-1", captured_at=now - timedelta(hours=2), reach=10, views=None, likes=1, comments=0, saves=None, shares=None),
-        SimpleNamespace(media_id="media-1", captured_at=now - timedelta(hours=1), reach=20, views=None, likes=2, comments=1, saves=None, shares=None),
+        SimpleNamespace(
+            media_id="media-1",
+            captured_at=now - timedelta(hours=2),
+            reach=10,
+            views=None,
+            likes=1,
+            comments=0,
+            saves=None,
+            shares=None,
+        ),
+        SimpleNamespace(
+            media_id="media-1",
+            captured_at=now - timedelta(hours=1),
+            reach=20,
+            views=None,
+            likes=2,
+            comments=1,
+            saves=None,
+            shares=None,
+        ),
     ]
     result = aggregate_seven_days(media, snapshots, now)
     assert result["posts"] == 1
@@ -540,16 +550,26 @@ def test_seven_day_aggregation_uses_latest_snapshot_and_unavailable_metrics():
 def test_local_store_media_upsert_and_tracking(tmp_path, monkeypatch):
     monkeypatch.setattr(json_store, "DATA_DIR", tmp_path)
     monkeypatch.setattr(json_store, "STORE_PATH", tmp_path / "store.json")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     account = _account()
     json_store.upsert_instagram_account(account)
-    first = InstagramMedia(id="media-1", account_id=account.id, instagram_media_id="external-1", media_type="IMAGE", caption="First", published_at=now, last_synced_at=now)
+    first = InstagramMedia(
+        id="media-1",
+        account_id=account.id,
+        instagram_media_id="external-1",
+        media_type="IMAGE",
+        caption="First",
+        published_at=now,
+        last_synced_at=now,
+    )
     json_store.upsert_instagram_media([first])
     json_store.upsert_instagram_media([first.model_copy(update={"caption": "Updated"})])
     assert len(json_store.get_instagram_media(account.id)) == 1
     tracked_a = json_store.create_tracked_post("owner@example.test", first.id)
     tracked_b = json_store.create_tracked_post("owner@example.test", first.id)
     assert tracked_a.id == tracked_b.id
-    snapshot = InstagramInsightSnapshot(id=str(uuid4()), media_id=first.id, captured_at=now, reach=10, engagement_rate=0)
+    snapshot = InstagramInsightSnapshot(
+        id=str(uuid4()), media_id=first.id, captured_at=now, reach=10, engagement_rate=0
+    )
     json_store.append_instagram_snapshot(snapshot)
     assert json_store.load_store().instagram_insight_snapshots == [snapshot]

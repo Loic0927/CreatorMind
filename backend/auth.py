@@ -4,16 +4,15 @@ import os
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import Header, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from backend.config import is_production
 from backend.storage.database import session_factory
 from backend.storage.sql_models import AuthSessionRecord, LoginCodeRecord, UserRecord
-
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
@@ -28,7 +27,9 @@ class AuthenticatedUser:
 def normalize_email(value: str) -> str:
     email = value.strip().lower()
     if len(email) > 320 or not EMAIL_PATTERN.match(email):
-        raise HTTPException(status_code=422, detail={"code": "invalid_email", "message": "Enter a valid email address."})
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_email", "message": "Enter a valid email address."}
+        )
     return email
 
 
@@ -49,41 +50,53 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=value.tzinfo or UTC)
+
+
+def _too_many(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=429, detail={"code": code, "message": message})
+
+
 def create_login_code(email: str) -> str:
+    """Issue a new code. Older codes are invalidated but kept for 24h to enforce the daily cap,
+    which bounds guesses to (daily cap x 5 attempts) per email per day."""
     code = f"{secrets.randbelow(1_000_000):06d}"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
+    window_start = now - timedelta(hours=24)
+    cooldown = max(0, int(os.getenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "60")))
+    daily_cap = max(1, int(os.getenv("POSTBRIDGE_LOGIN_CODES_PER_DAY", "10")))
     factory = session_factory()
     with factory.begin() as session:
-        latest = session.scalar(
-            select(LoginCodeRecord)
-            .where(LoginCodeRecord.email == email)
-            .order_by(LoginCodeRecord.created_at.desc())
+        session.execute(
+            delete(LoginCodeRecord).where(LoginCodeRecord.email == email, LoginCodeRecord.created_at < window_start)
         )
-        if latest is not None:
-            created_at = latest.created_at.replace(
-                tzinfo=latest.created_at.tzinfo or timezone.utc
+        recent = session.scalars(select(LoginCodeRecord.created_at).where(LoginCodeRecord.email == email)).all()
+        if recent and _utc(max(recent)) + timedelta(seconds=cooldown) > now:
+            raise _too_many("code_requested_too_soon", "Wait a moment before requesting another sign-in code.")
+        if len(recent) >= daily_cap:
+            raise _too_many("too_many_codes", "Too many sign-in codes were requested. Try again tomorrow.")
+        session.execute(
+            update(LoginCodeRecord)
+            .where(LoginCodeRecord.email == email, LoginCodeRecord.consumed_at.is_(None))
+            .values(consumed_at=now)
+        )
+        session.add(
+            LoginCodeRecord(
+                id=str(uuid4()),
+                email=email,
+                code_hash=_code_hash(email, code),
+                expires_at=now + timedelta(minutes=10),
+                consumed_at=None,
+                attempts=0,
+                created_at=now,
             )
-            cooldown = max(
-                0, int(os.getenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "60"))
-            )
-            if created_at + timedelta(seconds=cooldown) > now:
-                raise HTTPException(
-                    status_code=429,
-                    detail={
-                        "code": "code_requested_too_soon",
-                        "message": "Wait a moment before requesting another sign-in code.",
-                    },
-                )
-        session.execute(delete(LoginCodeRecord).where(LoginCodeRecord.email == email))
-        session.add(LoginCodeRecord(
-            id=str(uuid4()), email=email, code_hash=_code_hash(email, code),
-            expires_at=now + timedelta(minutes=10), consumed_at=None, attempts=0, created_at=now,
-        ))
+        )
     return code
 
 
 def verify_login_code(email: str, code: str) -> tuple[UserRecord, str, datetime]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     factory = session_factory()
     with factory() as session:
         record = session.scalar(
@@ -92,14 +105,18 @@ def verify_login_code(email: str, code: str) -> tuple[UserRecord, str, datetime]
             .order_by(LoginCodeRecord.created_at.desc())
             .with_for_update()
         )
-        if record is None or record.consumed_at is not None or record.expires_at.replace(tzinfo=record.expires_at.tzinfo or timezone.utc) < now or record.attempts >= 5:
-            raise HTTPException(status_code=401, detail={"code": "invalid_code", "message": "The sign-in code is invalid or expired."})
+        if record is None or record.consumed_at is not None or _utc(record.expires_at) < now or record.attempts >= 5:
+            raise HTTPException(
+                status_code=401, detail={"code": "invalid_code", "message": "The sign-in code is invalid or expired."}
+            )
         record.attempts += 1
         if not hmac.compare_digest(record.code_hash, _code_hash(email, code.strip())):
             # Persist failed attempts before returning the error; otherwise a
             # transaction rollback would let an attacker retry indefinitely.
             session.commit()
-            raise HTTPException(status_code=401, detail={"code": "invalid_code", "message": "The sign-in code is invalid or expired."})
+            raise HTTPException(
+                status_code=401, detail={"code": "invalid_code", "message": "The sign-in code is invalid or expired."}
+            )
         record.consumed_at = now
         user = session.scalar(select(UserRecord).where(UserRecord.email == email))
         if user is None:
@@ -108,20 +125,28 @@ def verify_login_code(email: str, code: str) -> tuple[UserRecord, str, datetime]
             session.flush()
         token = secrets.token_urlsafe(48)
         expires_at = now + timedelta(days=30)
-        session.add(AuthSessionRecord(token_hash=_token_hash(token), user_id=user.id, expires_at=expires_at, created_at=now, revoked_at=None))
+        session.add(
+            AuthSessionRecord(
+                token_hash=_token_hash(token), user_id=user.id, expires_at=expires_at, created_at=now, revoked_at=None
+            )
+        )
         session.commit()
         return user, token, expires_at
 
 
 def authenticate_token(token: str) -> AuthenticatedUser:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     token_hash = _token_hash(token)
     factory = session_factory()
     with factory() as session:
         row = session.execute(
             select(AuthSessionRecord, UserRecord)
             .join(UserRecord, UserRecord.id == AuthSessionRecord.user_id)
-            .where(AuthSessionRecord.token_hash == token_hash, AuthSessionRecord.revoked_at.is_(None), AuthSessionRecord.expires_at >= now)
+            .where(
+                AuthSessionRecord.token_hash == token_hash,
+                AuthSessionRecord.revoked_at.is_(None),
+                AuthSessionRecord.expires_at >= now,
+            )
         ).one_or_none()
         if row is None:
             raise HTTPException(status_code=401, detail={"code": "invalid_session", "message": "Please sign in again."})
@@ -143,7 +168,7 @@ def revoke_session(token_hash: str) -> None:
     with factory.begin() as session:
         record = session.get(AuthSessionRecord, token_hash)
         if record:
-            record.revoked_at = datetime.now(timezone.utc)
+            record.revoked_at = datetime.now(UTC)
 
 
 def get_account_context(user_id: str) -> str:
@@ -161,5 +186,5 @@ def update_account_context(user_id: str, value: str) -> str:
         if user is None:
             raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "Account was not found."})
         user.account_context = normalized
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(UTC)
     return normalized

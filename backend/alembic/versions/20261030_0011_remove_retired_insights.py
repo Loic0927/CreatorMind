@@ -4,9 +4,8 @@ Revision ID: 20261030_0011
 Revises: 20261029_0010
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "20261030_0011"
 down_revision = "20261029_0010"
@@ -84,7 +83,9 @@ def downgrade() -> None:
         batch.add_column(sa.Column("insight_themes_updated_at", sa.DateTime(timezone=True), nullable=True))
 
     with op.batch_alter_table("instagram_insight_snapshots") as batch:
-        batch.add_column(sa.Column("collection_type", sa.String(length=32), nullable=False, server_default="manual_current"))
+        batch.add_column(
+            sa.Column("collection_type", sa.String(length=32), nullable=False, server_default="manual_current")
+        )
         batch.add_column(sa.Column("target_hour", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=True))
         batch.create_unique_constraint("uq_instagram_snapshot_milestone", ["media_id", "target_hour"])
@@ -162,7 +163,11 @@ def downgrade() -> None:
         sa.UniqueConstraint("tracked_post_id", "target_hour", name="uq_instagram_insight_job_milestone"),
     )
     op.create_index("ix_instagram_insight_collection_jobs_user_id", "instagram_insight_collection_jobs", ["user_id"])
-    op.create_index("ix_instagram_insight_collection_jobs_tracked_post_id", "instagram_insight_collection_jobs", ["tracked_post_id"])
+    op.create_index(
+        "ix_instagram_insight_collection_jobs_tracked_post_id", "instagram_insight_collection_jobs", ["tracked_post_id"]
+    )
     op.create_index("ix_instagram_insight_collection_jobs_media_id", "instagram_insight_collection_jobs", ["media_id"])
-    op.create_index("ix_instagram_insight_collection_jobs_next_attempt_at", "instagram_insight_collection_jobs", ["next_attempt_at"])
+    op.create_index(
+        "ix_instagram_insight_collection_jobs_next_attempt_at", "instagram_insight_collection_jobs", ["next_attempt_at"]
+    )
     op.create_index("ix_instagram_insight_collection_jobs_status", "instagram_insight_collection_jobs", ["status"])

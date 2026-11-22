@@ -1,49 +1,7 @@
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-
-PlatformName = Literal["Instagram", "YouTube", "TikTok"]
-
-
-class SocialConnection(BaseModel):
-    id: str
-    user_id: str
-    platform: PlatformName
-    account_name: str
-    status: Literal["connected", "not_connected", "sync_pending"] = "not_connected"
-    connected_at: Optional[datetime] = None
-    last_sync_at: Optional[datetime] = None
-    external_account_id: Optional[str] = None
-    access_token: Optional[str] = None
-    refresh_token: Optional[str] = None
-    token_scope: Optional[str] = None
-    token_expires_at: Optional[datetime] = None
-
-
-class Post(BaseModel):
-    id: str
-    platform: PlatformName
-    external_id: str
-    title: str
-    created_at: datetime
-
-
-class AnalyticsSnapshot(BaseModel):
-    id: str
-    post_id: str
-    captured_at: datetime
-    views: Optional[int] = None
-    engagement_rate: Optional[float] = None
-
-
-class PredictionHistory(BaseModel):
-    id: str
-    created_at: datetime
-    input_payload: dict
-    output_payload: dict
-
 
 DraftPlatform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
 
@@ -65,7 +23,7 @@ class MediaAsset(BaseModel):
 class PostDraft(BaseModel):
     id: str
     user_id: str
-    media_asset_id: Optional[str] = None
+    media_asset_id: str | None = None
     target_platforms: list[DraftPlatform] = Field(default_factory=list)
     content_brief: str = ""
     goal: str = ""
@@ -81,23 +39,19 @@ class PostPublication(BaseModel):
     user_id: str
     draft_id: str
     platform: DraftPlatform
-    provider_media_id: Optional[str] = None
-    provider_post_id: Optional[str] = None
+    provider_media_id: str | None = None
+    provider_post_id: str | None = None
     idempotency_key: str
     status: Literal["pending", "validating", "publishing", "published", "failed"] = "pending"
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
     created_at: datetime
     updated_at: datetime
-    published_at: Optional[datetime] = None
+    published_at: datetime | None = None
 
 
 class StoreData(BaseModel):
     schema_version: int = 1
-    social_connections: list[SocialConnection] = Field(default_factory=list)
-    posts: list[Post] = Field(default_factory=list)
-    analytics_snapshots: list[AnalyticsSnapshot] = Field(default_factory=list)
-    prediction_history: list[PredictionHistory] = Field(default_factory=list)
     instagram_accounts: list["InstagramAccount"] = Field(default_factory=list)
     instagram_media: list["InstagramMedia"] = Field(default_factory=list)
     tracked_posts: list["TrackedPost"] = Field(default_factory=list)
@@ -110,21 +64,19 @@ class InstagramAccount(BaseModel):
     user_id: str
     instagram_user_id: str
     username: str
-    profile_picture_url: Optional[str] = None
-    account_type: Optional[str] = None
-    media_count: Optional[int] = None
+    profile_picture_url: str | None = None
+    account_type: str | None = None
+    media_count: int | None = None
     encrypted_access_token: str
-    token_expires_at: Optional[datetime] = None
+    token_expires_at: datetime | None = None
     scopes: list[str] = Field(default_factory=list)
-    session_synced_at: Optional[datetime] = None
-    session_sync_error: Optional[str] = None
-    tracking_start_at: Optional[datetime] = None
-    status: Literal[
-        "connected", "expired", "reconnect_required", "disconnected", "error"
-    ] = "connected"
+    session_synced_at: datetime | None = None
+    session_sync_error: str | None = None
+    tracking_start_at: datetime | None = None
+    status: Literal["connected", "expired", "reconnect_required", "disconnected", "error"] = "connected"
     connected_at: datetime
-    last_synced_at: Optional[datetime] = None
-    last_error: Optional[str] = None
+    last_synced_at: datetime | None = None
+    last_error: str | None = None
 
 
 class InstagramMedia(BaseModel):
@@ -132,9 +84,9 @@ class InstagramMedia(BaseModel):
     account_id: str
     instagram_media_id: str
     media_type: str
-    media_url: Optional[str] = None
-    thumbnail_url: Optional[str] = None
-    permalink: Optional[str] = None
+    media_url: str | None = None
+    thumbnail_url: str | None = None
+    permalink: str | None = None
     caption: str = ""
     published_at: datetime
     last_synced_at: datetime
@@ -146,30 +98,30 @@ class TrackedPost(BaseModel):
     media_id: str
     is_active: bool = True
     started_at: datetime
-    stopped_at: Optional[datetime] = None
+    stopped_at: datetime | None = None
     first_24h_status: Literal["collecting", "complete", "partial", "unavailable"] = "collecting"
-    first_24h_reason: Optional[str] = None
+    first_24h_reason: str | None = None
 
 
 class InstagramInsightSnapshot(BaseModel):
     id: str
     media_id: str
     captured_at: datetime
-    likes: Optional[int] = None
-    comments: Optional[int] = None
-    saves: Optional[int] = None
-    shares: Optional[int] = None
-    reach: Optional[int] = None
-    views: Optional[int] = None
-    engagement_rate: Optional[float] = None
-    average_watch_time_ms: Optional[int] = None
-    total_watch_time_ms: Optional[int] = None
+    likes: int | None = None
+    comments: int | None = None
+    saves: int | None = None
+    shares: int | None = None
+    reach: int | None = None
+    views: int | None = None
+    engagement_rate: float | None = None
+    average_watch_time_ms: int | None = None
+    total_watch_time_ms: int | None = None
     raw_metrics: dict[str, Any] = Field(default_factory=dict)
     metric_status: dict[str, str] = Field(default_factory=dict)
-    scheduled_for: Optional[datetime] = None
-    milestone_hours: Optional[int] = None
+    scheduled_for: datetime | None = None
+    milestone_hours: int | None = None
     source: str = "api"
-    lateness_seconds: Optional[int] = None
+    lateness_seconds: int | None = None
 
 
 class InstagramComment(BaseModel):
@@ -187,7 +139,7 @@ class InstagramComment(BaseModel):
 class InsightTextCache(BaseModel):
     id: str
     user_id: str
-    tracked_post_id: Optional[str] = None
+    tracked_post_id: str | None = None
     cache_key: str
     input_hash: str
     text: str

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -25,11 +25,15 @@ def test_private_upload_and_temporary_object_url_are_separate(monkeypatch):
     monkeypatch.setenv("OCI_NAMESPACE", "ns")
     monkeypatch.setenv("OCI_BUCKET_NAME", "private-bucket")
     monkeypatch.setattr(oci_object_storage, "_client", lambda: client)
-    monkeypatch.setattr(oci_object_storage, "_oci_module", lambda: SimpleNamespace(
-        object_storage=SimpleNamespace(models=SimpleNamespace(
-            CreatePreauthenticatedRequestDetails=lambda **values: SimpleNamespace(**values)
-        ))
-    ))
+    monkeypatch.setattr(
+        oci_object_storage,
+        "_oci_module",
+        lambda: SimpleNamespace(
+            object_storage=SimpleNamespace(
+                models=SimpleNamespace(CreatePreauthenticatedRequestDetails=lambda **values: SimpleNamespace(**values))
+            )
+        ),
+    )
 
     oci_object_storage.upload_private_bytes(b"image", "draft-assets/user/image.jpg", "image/jpeg")
     url = oci_object_storage.create_temporary_read_url("draft-assets/user/image.jpg", lifetime_minutes=60)
@@ -39,7 +43,7 @@ def test_private_upload_and_temporary_object_url_are_separate(monkeypatch):
     details = client.requests[0]["create_preauthenticated_request_details"]
     assert details.access_type == "ObjectRead"
     assert details.object_name == "draft-assets/user/image.jpg"
-    lifetime = details.time_expires - datetime.now(timezone.utc)
+    lifetime = details.time_expires - datetime.now(UTC)
     assert 59 * 60 < lifetime.total_seconds() <= 60 * 60
     assert url == "https://objectstorage.example/p/token/n/ns/b/bucket/o/image.jpg"
 
@@ -47,11 +51,40 @@ def test_private_upload_and_temporary_object_url_are_separate(monkeypatch):
 def test_upload_with_temporary_url_uploads_once(monkeypatch):
     uploaded = []
     monkeypatch.setattr(oci_object_storage, "upload_private_bytes", lambda *args: uploaded.append(args))
-    monkeypatch.setattr(oci_object_storage, "create_temporary_read_url", lambda name, lifetime_minutes: f"https://temporary/{name}?minutes={lifetime_minutes}")
+    monkeypatch.setattr(
+        oci_object_storage,
+        "create_temporary_read_url",
+        lambda name, lifetime_minutes: f"https://temporary/{name}?minutes={lifetime_minutes}",
+    )
 
     url = oci_object_storage.upload_bytes_with_temporary_read_url(
-        b"jpeg", "publication-assets/user/image.jpg", "image/jpeg", lifetime_minutes=15,
+        b"jpeg",
+        "publication-assets/user/image.jpg",
+        "image/jpeg",
+        lifetime_minutes=15,
     )
 
     assert len(uploaded) == 1
     assert url.endswith("?minutes=15")
+
+
+def test_delete_private_prefix_pages_through_every_object(monkeypatch):
+    pages = {
+        None: SimpleNamespace(
+            objects=[SimpleNamespace(name="draft-assets/u1/a.jpg")], next_start_with="draft-assets/u1/b.jpg"
+        ),
+        "draft-assets/u1/b.jpg": SimpleNamespace(
+            objects=[SimpleNamespace(name="draft-assets/u1/b.jpg")], next_start_with=None
+        ),
+    }
+    deleted = []
+    client = SimpleNamespace(
+        list_objects=lambda **kwargs: SimpleNamespace(data=pages[kwargs["start"]]),
+        delete_object=lambda **kwargs: deleted.append(kwargs["object_name"]),
+    )
+    monkeypatch.setenv("OCI_NAMESPACE", "ns")
+    monkeypatch.setenv("OCI_BUCKET_NAME", "private-bucket")
+    monkeypatch.setattr(oci_object_storage, "_client", lambda: client)
+
+    assert oci_object_storage.delete_private_prefix("draft-assets/u1/") == 2
+    assert deleted == ["draft-assets/u1/a.jpg", "draft-assets/u1/b.jpg"]

@@ -57,9 +57,7 @@ def test_prompt_and_configuration_are_passed_to_client():
         "api_key": "unit-test-key",
         "model_name": "configured-model",
     }
-    assert client.models.calls == [
-        {"model": "configured-model", "contents": prompt}
-    ]
+    assert client.models.calls == [{"model": "configured-model", "contents": prompt}]
 
 
 def test_image_and_prompt_are_passed_as_multimodal_content():

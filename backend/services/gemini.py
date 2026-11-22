@@ -24,9 +24,7 @@ def _client_factory(api_key: str, model_name: str) -> Any:
     try:
         from google import genai
     except ImportError as exc:
-        raise GeminiConfigurationError(
-            "The Gemini SDK is not installed on the backend."
-        ) from exc
+        raise GeminiConfigurationError("The Gemini SDK is not installed on the backend.") from exc
 
     return genai.Client(api_key=api_key)
 
@@ -35,9 +33,7 @@ def _media_part_factory(media_bytes: bytes, mime_type: str) -> Any:
     try:
         from google.genai import types
     except ImportError as exc:
-        raise GeminiConfigurationError(
-            "The Gemini SDK is not installed on the backend."
-        ) from exc
+        raise GeminiConfigurationError("The Gemini SDK is not installed on the backend.") from exc
 
     return types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
 
@@ -63,9 +59,7 @@ def generate_gemini_content(
         raise GeminiConfigurationError("GEMINI_MODEL is not configured.")
 
     if (image_bytes is None) != (image_mime_type is None):
-        raise GeminiConfigurationError(
-            "Image bytes and MIME type must be provided together."
-        )
+        raise GeminiConfigurationError("Image bytes and MIME type must be provided together.")
 
     factory = client_factory or _client_factory
     try:
@@ -85,9 +79,7 @@ def generate_gemini_content(
     except GeminiConfigurationError:
         raise
     except Exception:
-        raise GeminiUpstreamError(
-            "Gemini could not complete the request."
-        ) from None
+        raise GeminiUpstreamError("Gemini could not complete the request.") from None
 
     if not isinstance(text, str) or not text.strip():
         raise GeminiUpstreamError("Gemini returned an empty response.")

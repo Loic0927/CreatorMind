@@ -57,7 +57,7 @@ Required production variables:
 
 - Domains/runtime: `POSTBRIDGE_WEB_DOMAIN`, `POSTBRIDGE_WWW_DOMAIN`, `POSTBRIDGE_API_DOMAIN`, `POSTBRIDGE_PUBLIC_API_URL`, `POSTBRIDGE_ENV`, `FRONTEND_BASE_URL`.
 - API security: `POSTBRIDGE_ALLOWED_HOSTS`, `POSTBRIDGE_CORS_ALLOWED_ORIGINS`, `POSTBRIDGE_DATABASE_URL`, `POSTBRIDGE_MAX_UPLOAD_BYTES`, `POSTBRIDGE_AUTH_SECRET`.
-- Email login: `POSTBRIDGE_SMTP_HOST`, `POSTBRIDGE_SMTP_PORT`, `POSTBRIDGE_SMTP_USERNAME`, `POSTBRIDGE_SMTP_PASSWORD`, `POSTBRIDGE_SMTP_SSL`, `POSTBRIDGE_EMAIL_FROM`. `POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS` defaults to 60.
+- Email login: `POSTBRIDGE_SMTP_HOST`, `POSTBRIDGE_SMTP_PORT`, `POSTBRIDGE_SMTP_USERNAME`, `POSTBRIDGE_SMTP_PASSWORD`, `POSTBRIDGE_SMTP_SSL`, `POSTBRIDGE_EMAIL_FROM`. `POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS` defaults to 60 and `POSTBRIDGE_LOGIN_CODES_PER_DAY` (codes per email per 24 hours) defaults to 10.
 - PostgreSQL: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
 - Instagram: `POSTBRIDGE_INSTAGRAM_CLIENT_ID`, `POSTBRIDGE_INSTAGRAM_CLIENT_SECRET`, `POSTBRIDGE_INSTAGRAM_REDIRECT_URI`, `POSTBRIDGE_INSTAGRAM_APP_RETURN_URI`, `POSTBRIDGE_TOKEN_ENCRYPTION_KEY`, `POSTBRIDGE_OAUTH_STATE_SECRET`. Keep `POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED=false` until Meta grants general comment access. Owner/app-role accounts may be listed in `POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST`; they must reconnect to grant `instagram_business_manage_comments`, and the allow-list does not bypass App Review for other users.
 - OCI media: `POSTBRIDGE_MEDIA_STORAGE`, `OCI_REGION`, `OCI_NAMESPACE`, `OCI_BUCKET_NAME`, plus either `OCI_CONFIG_FILE`/`OCI_CONFIG_PROFILE` or `OCI_USER_OCID`, `OCI_TENANCY_OCID`, `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY_PATH`; Compose also needs `OCI_PRIVATE_KEY_HOST_PATH`.
@@ -65,7 +65,7 @@ Required production variables:
 - Summary feedback: `FEEDBACK_PROVIDER` is `auto`, `trained`, or `gemini`; `auto` uses an accepted healthy trained provider when one exists, otherwise Gemini, then deterministic templates. `FEEDBACK_REQUEST_TIMEOUT_SECONDS` controls Gemini timeout. `FEEDBACK_TRAINED_ENABLED`, `FEEDBACK_TRAINED_MODEL_ID`, and `FEEDBACK_TRAINED_ENDPOINT` are reserved configuration names; the current numeric predictor is ineligible and must remain disabled.
 - TLS: `CERTBOT_EMAIL`.
 
-Feature-dependent variables are `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `YOUTUBE_OAUTH_REDIRECT_URI`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `POSTBRIDGE_TRACKING_POLL_SECONDS`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
+Feature-dependent variables are `GEMINI_API_KEY` and `GEMINI_MODEL` (YouTube is archived; see `archive/youtube/README.md`). `POSTBRIDGE_CAPTION_LIMIT_PER_HOUR` (default 30) caps caption generations per user per Gunicorn worker. Tuning variables are `POSTBRIDGE_RUN_MIGRATIONS`, `POSTBRIDGE_GUNICORN_WORKERS`, `POSTBRIDGE_GUNICORN_TIMEOUT`, `POSTBRIDGE_TRACKING_POLL_SECONDS`, `NGINX_CLIENT_MAX_BODY_SIZE`, `OCI_BACKUP_PREFIX`, and `BACKUP_RETENTION_DAYS`.
 
 ## 6. Build, migrate, and start
 
@@ -109,7 +109,7 @@ sh scripts/oci/init-https.sh
 sh scripts/oci/validate.sh
 ```
 
-Schedule `scripts/oci/renew-certificates.sh` (for example twice daily using systemd timer or cron). Only Nginx publishes 80/443. Nginx sets TLS, upload limits, proxy headers, HSTS and baseline security headers.
+Schedule `scripts/oci/renew-certificates.sh` (for example twice daily using systemd timer or cron). Only Nginx publishes 80/443. Nginx sets TLS, upload limits, proxy headers, HSTS, a Content-Security-Policy on the web host, and a per-IP limit of 10 requests/minute (burst 5) on `/auth/request-code` and `/auth/verify-code`.
 
 ## 8. Verification
 
@@ -124,7 +124,7 @@ docker compose --env-file .env.oci -f docker-compose.oci.yml exec tracking-worke
 
 The worker should be `healthy`; its status command reports token-maintenance counts. Follow its logs with `docker compose --env-file .env.oci -f docker-compose.oci.yml logs -f --tail=200 tracking-worker`. Alert on repeated unhealthy restarts or persistent reconnect-required results. It performs only Instagram long-lived-token maintenance; login-triggered account sync performs post discovery, lifetime-metric refresh, comment reads, and AI-cache refresh. No other scheduled refresh remains. Restart `db` and verify application data remains to test the named PostgreSQL volume. For OCI media, run a non-sensitive test upload through the publishing adapter and verify the object in the private bucket.
 
-In Meta and Google consoles, register the exact HTTPS Instagram and YouTube callback URLs. Verify connect, denial, invalid state, reconnect, and mobile deep-link/user experience. Also verify any Instagram/X webhook URL and signing secret actually implemented by the product; this repository currently has Instagram OAuth/API routes but no X integration or inbound webhook route, so those cannot be validated here. Do not assume provider-side configuration from a healthy API.
+In the Meta console, register the exact HTTPS Instagram callback URL. Verify connect, denial, invalid state, reconnect, and mobile deep-link/user experience. Also verify any Instagram/X webhook URL and signing secret actually implemented by the product; this repository currently has Instagram OAuth/API routes but no X integration or inbound webhook route, so those cannot be validated here. Do not assume provider-side configuration from a healthy API.
 
 ## 9. Operations, updates, and rollback
 

@@ -1,22 +1,53 @@
+import logging
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
-from backend.auth import AuthenticatedUser, create_login_code, get_account_context, normalize_email, require_user, revoke_session, update_account_context, verify_login_code
+from backend.auth import (
+    AuthenticatedUser,
+    create_login_code,
+    get_account_context,
+    normalize_email,
+    require_user,
+    revoke_session,
+    update_account_context,
+    verify_login_code,
+)
 from backend.config import is_production
-from backend.services.account_context import AccountContextFields, context_as_dict, preview_context, serialize_account_context, suggest_context_from_posts
+from backend.services.account_context import (
+    AccountContextFields,
+    context_as_dict,
+    preview_context,
+    serialize_account_context,
+    suggest_context_from_posts,
+)
 from backend.services.email_login import EmailDeliveryError, send_login_code
 from backend.services.instagram_sync import request_account_sync
 from backend.storage.database import session_factory
+from backend.storage.instagram_repository import delete_local_user_data
+from backend.storage.oci_object_storage import delete_private_prefix, oci_storage_enabled
 from backend.storage.sql_models import (
-    AuthSessionRecord, InstagramConnectionRecord, InstagramInsightSnapshotRecord,
-    InstagramMediaRecord, LoginCodeRecord, OAuthStateRecord, PredictionHistoryRecord,
-    TrackedPostRecord, UserRecord,
+    AIGenerationLogRecord,
+    AuthSessionRecord,
+    InsightTextCacheRecord,
+    InstagramCommentRecord,
+    InstagramConnectionRecord,
+    InstagramInsightCollectionJobRecord,
+    InstagramInsightSnapshotRecord,
+    InstagramMediaRecord,
+    LoginCodeRecord,
+    MediaAssetRecord,
+    OAuthStateRecord,
+    PostDraftRecord,
+    PostPublicationRecord,
+    PredictionHistoryRecord,
+    TrackedPostRecord,
+    UserRecord,
 )
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -63,7 +94,12 @@ def verify_code(payload: VerifyCodeRequest, background_tasks: BackgroundTasks = 
     user, token, expires_at = verify_login_code(email, payload.code)
     if background_tasks is not None:
         background_tasks.add_task(request_account_sync, user.id)
-    return {"access_token": token, "token_type": "bearer", "expires_at": expires_at.isoformat(), "user": {"id": user.id, "email": user.email}}
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at.isoformat(),
+        "user": {"id": user.id, "email": user.email},
+    }
 
 
 @router.get("/session")
@@ -95,9 +131,12 @@ def suggest_account_context(user: AuthenticatedUser = Depends(require_user)) -> 
             .join(InstagramConnectionRecord, InstagramConnectionRecord.id == InstagramMediaRecord.account_id)
             .join(TrackedPostRecord, TrackedPostRecord.media_id == InstagramMediaRecord.id)
             .where(InstagramConnectionRecord.user_id == user.id)
-            .order_by(InstagramMediaRecord.published_at.desc()).limit(10)
+            .order_by(InstagramMediaRecord.published_at.desc())
+            .limit(10)
         ).all()
-    return suggest_context_from_posts([{"caption": row.caption, "media_type": row.media_type, "thumbnail_url": row.thumbnail_url} for row in records])
+    return suggest_context_from_posts(
+        [{"caption": row.caption, "media_type": row.media_type, "thumbnail_url": row.thumbnail_url} for row in records]
+    )
 
 
 @router.post("/account-context/preview")
@@ -114,17 +153,57 @@ def logout(user: AuthenticatedUser = Depends(require_user)) -> dict:
 
 @router.delete("/account")
 def delete_account(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    delete_local_user_data(user.id)
+
     factory = session_factory()
     with factory.begin() as session:
-        media_ids = list(session.scalars(select(InstagramMediaRecord.id).join(InstagramConnectionRecord, InstagramConnectionRecord.id == InstagramMediaRecord.account_id).where(InstagramConnectionRecord.user_id == user.id)))
+        tracked_ids = list(session.scalars(select(TrackedPostRecord.id).where(TrackedPostRecord.user_id == user.id)))
+        media_ids = set(session.scalars(select(TrackedPostRecord.media_id).where(TrackedPostRecord.user_id == user.id)))
+        connection_ids = list(
+            session.scalars(select(InstagramConnectionRecord.id).where(InstagramConnectionRecord.user_id == user.id))
+        )
+        if connection_ids:
+            media_ids.update(
+                session.scalars(
+                    select(InstagramMediaRecord.id).where(InstagramMediaRecord.account_id.in_(connection_ids))
+                )
+            )
+
+        # RESTRICT relationships require this order regardless of database
+        # cascade timing: publications -> drafts -> media assets.
+        session.execute(delete(PostPublicationRecord).where(PostPublicationRecord.user_id == user.id))
+        session.execute(delete(PostDraftRecord).where(PostDraftRecord.user_id == user.id))
+        session.execute(delete(MediaAssetRecord).where(MediaAssetRecord.user_id == user.id))
+
+        # Delete every record that references tracked posts before deleting the
+        # tracked posts themselves. AI logs do not carry a user_id, so they are
+        # selected through the owned tracked-post IDs.
+        session.execute(
+            delete(InstagramInsightCollectionJobRecord).where(InstagramInsightCollectionJobRecord.user_id == user.id)
+        )
+        if tracked_ids:
+            session.execute(delete(AIGenerationLogRecord).where(AIGenerationLogRecord.tracked_post_id.in_(tracked_ids)))
+        session.execute(delete(InstagramCommentRecord).where(InstagramCommentRecord.user_id == user.id))
+        session.execute(delete(InsightTextCacheRecord).where(InsightTextCacheRecord.user_id == user.id))
+
         if media_ids:
-            session.execute(delete(InstagramInsightSnapshotRecord).where(InstagramInsightSnapshotRecord.media_id.in_(media_ids)))
-            session.execute(delete(TrackedPostRecord).where(TrackedPostRecord.media_id.in_(media_ids)))
+            session.execute(
+                delete(InstagramInsightSnapshotRecord).where(InstagramInsightSnapshotRecord.media_id.in_(media_ids))
+            )
+        session.execute(delete(TrackedPostRecord).where(TrackedPostRecord.user_id == user.id))
+        if media_ids:
             session.execute(delete(InstagramMediaRecord).where(InstagramMediaRecord.id.in_(media_ids)))
+
         session.execute(delete(PredictionHistoryRecord).where(PredictionHistoryRecord.user_id == user.id))
         session.execute(delete(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user.id))
         session.execute(delete(AuthSessionRecord).where(AuthSessionRecord.user_id == user.id))
         session.execute(delete(OAuthStateRecord).where(OAuthStateRecord.user_id == user.id))
         session.execute(delete(LoginCodeRecord).where(LoginCodeRecord.email == user.email))
         session.execute(delete(UserRecord).where(UserRecord.id == user.id))
+    if oci_storage_enabled():
+        for prefix in (f"draft-assets/{user.id}/", f"publication-assets/{user.id}/"):
+            try:
+                delete_private_prefix(prefix)
+            except Exception:
+                logger.exception("account_media_cleanup_failed prefix=%s", prefix)
     return {"deleted": True}

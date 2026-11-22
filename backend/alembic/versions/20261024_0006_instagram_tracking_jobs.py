@@ -2,9 +2,8 @@
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "20261024_0006"
 down_revision: str | None = "20261024_0005"
@@ -20,7 +19,9 @@ def upgrade() -> None:
             nullable=True,
         )
         batch.add_column(sa.Column("metric_status", sa.JSON(), nullable=False, server_default=sa.text("'{}'")))
-        batch.add_column(sa.Column("collection_type", sa.String(length=32), nullable=False, server_default="manual_current"))
+        batch.add_column(
+            sa.Column("collection_type", sa.String(length=32), nullable=False, server_default="manual_current")
+        )
         batch.add_column(sa.Column("target_hour", sa.Integer(), nullable=True))
         batch.add_column(sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=True))
         batch.create_unique_constraint(
@@ -56,9 +57,13 @@ def upgrade() -> None:
         sa.UniqueConstraint("tracked_post_id", "target_hour", name="uq_instagram_insight_job_milestone"),
     )
     op.create_index("ix_instagram_insight_collection_jobs_user_id", "instagram_insight_collection_jobs", ["user_id"])
-    op.create_index("ix_instagram_insight_collection_jobs_tracked_post_id", "instagram_insight_collection_jobs", ["tracked_post_id"])
+    op.create_index(
+        "ix_instagram_insight_collection_jobs_tracked_post_id", "instagram_insight_collection_jobs", ["tracked_post_id"]
+    )
     op.create_index("ix_instagram_insight_collection_jobs_media_id", "instagram_insight_collection_jobs", ["media_id"])
-    op.create_index("ix_instagram_insight_collection_jobs_next_attempt_at", "instagram_insight_collection_jobs", ["next_attempt_at"])
+    op.create_index(
+        "ix_instagram_insight_collection_jobs_next_attempt_at", "instagram_insight_collection_jobs", ["next_attempt_at"]
+    )
     op.create_index("ix_instagram_insight_collection_jobs_status", "instagram_insight_collection_jobs", ["status"])
 
 

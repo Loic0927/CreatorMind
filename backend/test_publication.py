@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -23,7 +23,11 @@ class FakeContentRepository:
 
 def _image_data(format_name: str) -> str:
     output = BytesIO()
-    Image.new("RGBA" if format_name == "PNG" else "RGB", (8, 8), (80, 120, 240, 128) if format_name == "PNG" else (80, 120, 240)).save(output, format=format_name)
+    Image.new(
+        "RGBA" if format_name == "PNG" else "RGB",
+        (8, 8),
+        (80, 120, 240, 128) if format_name == "PNG" else (80, 120, 240),
+    ).save(output, format=format_name)
     return base64.b64encode(output.getvalue()).decode()
 
 
@@ -34,17 +38,33 @@ def test_instagram_publication_uploads_private_asset_without_auto_tracking(monke
     monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
     monkeypatch.setattr(instagram_api, "_access_token", lambda value: "token")
     monkeypatch.setattr(instagram_api, "get_content_repository", lambda: repository)
-    monkeypatch.setattr(instagram_api, "upload_bytes_with_temporary_read_url", lambda *args, **kwargs: "https://objectstorage.example/p/object.jpg")
-    monkeypatch.setattr(instagram_api, "publish_instagram_image", lambda *args, **kwargs: {
-        "id": "published-1", "media_type": "IMAGE", "media_url": "https://cdn.example/post.jpg",
-        "permalink": "https://instagram.com/p/example", "caption": "Caption\n\n#tag",
-        "timestamp": datetime(2026, 10, 22, tzinfo=timezone.utc).isoformat(),
-    })
+    monkeypatch.setattr(
+        instagram_api,
+        "upload_bytes_with_temporary_read_url",
+        lambda *args, **kwargs: "https://objectstorage.example/p/object.jpg",
+    )
+    monkeypatch.setattr(
+        instagram_api,
+        "publish_instagram_image",
+        lambda *args, **kwargs: {
+            "id": "published-1",
+            "media_type": "IMAGE",
+            "media_url": "https://cdn.example/post.jpg",
+            "permalink": "https://instagram.com/p/example",
+            "caption": "Caption\n\n#tag",
+            "timestamp": datetime(2026, 10, 22, tzinfo=UTC).isoformat(),
+        },
+    )
 
-    result = instagram_api.publish(instagram_api.PublishRequest(
-        platforms=["Instagram", "Threads"], caption="Caption", hashtags="#tag",
-        image=instagram_api.PublishImage(mime_type="image/jpeg", data=_image_data("JPEG")),
-    ), user)
+    result = instagram_api.publish(
+        instagram_api.PublishRequest(
+            platforms=["Instagram", "Threads"],
+            caption="Caption",
+            hashtags="#tag",
+            image=instagram_api.PublishImage(mime_type="image/jpeg", data=_image_data("JPEG")),
+        ),
+        user,
+    )
 
     assert result["results"][0]["status"] == "published"
     assert "tracked_post_id" not in result["results"][0]
@@ -55,24 +75,37 @@ def test_instagram_publication_uploads_private_asset_without_auto_tracking(monke
 
 def test_instagram_publication_converts_png_before_external_publish(monkeypatch):
     uploads = []
+
     def upload(*args, **kwargs):
         uploads.append(args)
         return "https://objectstorage.example/p/converted.jpg"
+
     monkeypatch.setattr(instagram_api, "upload_bytes_with_temporary_read_url", upload)
     account = SimpleNamespace(id="account-1", instagram_user_id="ig-user-1", status="connected")
     monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
     monkeypatch.setattr(instagram_api, "_access_token", lambda value: "token")
     monkeypatch.setattr(instagram_api, "get_content_repository", lambda: FakeContentRepository())
-    monkeypatch.setattr(instagram_api, "publish_instagram_image", lambda *args, **kwargs: {
-        "id": "published-png", "media_type": "IMAGE", "media_url": "https://cdn.example/post.jpg",
-        "permalink": "https://instagram.com/p/png", "caption": "Caption",
-        "timestamp": datetime(2026, 10, 22, tzinfo=timezone.utc).isoformat(),
-    })
+    monkeypatch.setattr(
+        instagram_api,
+        "publish_instagram_image",
+        lambda *args, **kwargs: {
+            "id": "published-png",
+            "media_type": "IMAGE",
+            "media_url": "https://cdn.example/post.jpg",
+            "permalink": "https://instagram.com/p/png",
+            "caption": "Caption",
+            "timestamp": datetime(2026, 10, 22, tzinfo=UTC).isoformat(),
+        },
+    )
     user = AuthenticatedUser(id="user-1", email="creator@example.test", token_hash="hash")
-    result = instagram_api.publish(instagram_api.PublishRequest(
-        platforms=["Instagram"], caption="Caption", image=instagram_api.PublishImage(
-            mime_type="image/png", data=_image_data("PNG")),
-    ), user)
+    result = instagram_api.publish(
+        instagram_api.PublishRequest(
+            platforms=["Instagram"],
+            caption="Caption",
+            image=instagram_api.PublishImage(mime_type="image/png", data=_image_data("PNG")),
+        ),
+        user,
+    )
     assert result["results"][0]["status"] == "published"
     assert uploads[0][0].startswith(b"\xff\xd8\xff")
     assert uploads[0][2] == "image/jpeg"
@@ -84,19 +117,36 @@ def test_instagram_publication_accepts_short_video(monkeypatch):
     monkeypatch.setattr(instagram_api, "_active_account", lambda user_id: account)
     monkeypatch.setattr(instagram_api, "_access_token", lambda value: "token")
     monkeypatch.setattr(instagram_api, "get_content_repository", lambda: FakeContentRepository())
-    monkeypatch.setattr(instagram_api, "upload_bytes_with_temporary_read_url", lambda *args: uploads.append(args) or "https://objectstorage.example/video.mp4")
-    monkeypatch.setattr(instagram_api, "publish_instagram_reel", lambda *args, **kwargs: {
-        "id": "published-reel", "media_type": "VIDEO", "media_url": "https://cdn.example/reel.mp4",
-        "thumbnail_url": "https://cdn.example/thumb.jpg", "permalink": "https://instagram.com/reel/example",
-        "caption": "Caption\n\n#tag", "timestamp": datetime(2026, 11, 17, tzinfo=timezone.utc).isoformat(),
-    })
+    monkeypatch.setattr(
+        instagram_api,
+        "upload_bytes_with_temporary_read_url",
+        lambda *args: uploads.append(args) or "https://objectstorage.example/video.mp4",
+    )
+    monkeypatch.setattr(
+        instagram_api,
+        "publish_instagram_reel",
+        lambda *args, **kwargs: {
+            "id": "published-reel",
+            "media_type": "VIDEO",
+            "media_url": "https://cdn.example/reel.mp4",
+            "thumbnail_url": "https://cdn.example/thumb.jpg",
+            "permalink": "https://instagram.com/reel/example",
+            "caption": "Caption\n\n#tag",
+            "timestamp": datetime(2026, 11, 17, tzinfo=UTC).isoformat(),
+        },
+    )
     user = AuthenticatedUser(id="user-1", email="creator@example.test", token_hash="hash")
     video = base64.b64encode(b"\x00\x00\x00\x18ftypmp42short-video").decode()
 
-    result = instagram_api.publish(instagram_api.PublishRequest(
-        platforms=["Instagram"], caption="Caption", hashtags="#tag",
-        media=instagram_api.PublishImage(mime_type="video/mp4", data=video, duration_seconds=45),
-    ), user)
+    result = instagram_api.publish(
+        instagram_api.PublishRequest(
+            platforms=["Instagram"],
+            caption="Caption",
+            hashtags="#tag",
+            media=instagram_api.PublishImage(mime_type="video/mp4", data=video, duration_seconds=45),
+        ),
+        user,
+    )
 
     assert result["results"][0]["status"] == "published"
     assert uploads[0][2] == "video/mp4"

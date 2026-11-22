@@ -6,7 +6,7 @@ a configured database error.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from threading import Lock
 from typing import Protocol
@@ -15,10 +15,10 @@ from sqlalchemy import Engine, create_engine, delete, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.config import is_production
 from backend.storage import json_store, token_store
 from backend.storage.models import InstagramAccount
 from backend.storage.sql_models import InstagramConnectionRecord, OAuthStateRecord
-from backend.config import is_production
 
 
 class InstagramRepositoryError(RuntimeError):
@@ -26,9 +26,7 @@ class InstagramRepositoryError(RuntimeError):
 
 
 class InstagramRepository(Protocol):
-    def create_oauth_state(
-        self, nonce: str, user_id: str, expires_at: datetime
-    ) -> None: ...
+    def create_oauth_state(self, nonce: str, user_id: str, expires_at: datetime) -> None: ...
 
     def consume_oauth_state(self, nonce: str, now: datetime) -> str | None: ...
 
@@ -47,13 +45,15 @@ class InstagramRepository(Protocol):
 
     def delete_connection(self, user_id: str) -> bool: ...
 
-    def mark_session_sync(self, user_id: str, synced_at: datetime | None, error: str | None) -> InstagramAccount | None: ...
+    def mark_session_sync(
+        self, user_id: str, synced_at: datetime | None, error: str | None
+    ) -> InstagramAccount | None: ...
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
         return value
-    return value.replace(tzinfo=timezone.utc)
+    return value.replace(tzinfo=UTC)
 
 
 class SQLAlchemyInstagramRepository:
@@ -72,14 +72,10 @@ class SQLAlchemyInstagramRepository:
                 raise ValueError
             engine = create_engine(database_url, pool_pre_ping=True)
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database configuration is invalid."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database configuration is invalid.") from None
         return cls.from_engine(engine)
 
-    def create_oauth_state(
-        self, nonce: str, user_id: str, expires_at: datetime
-    ) -> None:
+    def create_oauth_state(self, nonce: str, user_id: str, expires_at: datetime) -> None:
         try:
             with self._session_factory.begin() as session:
                 session.add(
@@ -88,13 +84,11 @@ class SQLAlchemyInstagramRepository:
                         user_id=user_id,
                         expires_at=expires_at,
                         consumed_at=None,
-                        created_at=datetime.now(timezone.utc),
+                        created_at=datetime.now(UTC),
                     )
                 )
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def consume_oauth_state(self, nonce: str, now: datetime) -> str | None:
         try:
@@ -111,23 +105,17 @@ class SQLAlchemyInstagramRepository:
                 )
                 return session.execute(statement).scalar_one_or_none()
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def get_connection(self, user_id: str) -> InstagramAccount | None:
         try:
             with self._session_factory() as session:
                 record = session.scalar(
-                    select(InstagramConnectionRecord).where(
-                        InstagramConnectionRecord.user_id == user_id
-                    )
+                    select(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user_id)
                 )
                 return self._to_account(record) if record else None
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def upsert_connection(
         self,
@@ -138,16 +126,12 @@ class SQLAlchemyInstagramRepository:
         try:
             with self._session_factory.begin() as session:
                 record = session.scalar(
-                    select(InstagramConnectionRecord).where(
-                        InstagramConnectionRecord.user_id == account.user_id
-                    )
+                    select(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == account.user_id)
                 )
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 if record is None:
                     if not encrypted_token:
-                        raise InstagramRepositoryError(
-                            "An encrypted Instagram token is required."
-                        )
+                        raise InstagramRepositoryError("An encrypted Instagram token is required.")
                     record = InstagramConnectionRecord(
                         id=account.id,
                         user_id=account.user_id,
@@ -186,19 +170,19 @@ class SQLAlchemyInstagramRepository:
         except InstagramRepositoryError:
             raise
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def mark_session_sync(self, user_id: str, synced_at: datetime | None, error: str | None) -> InstagramAccount | None:
         try:
             with self._session_factory.begin() as session:
-                record = session.scalar(select(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user_id))
+                record = session.scalar(
+                    select(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user_id)
+                )
                 if record is None:
                     return None
                 record.session_synced_at = synced_at
                 record.session_sync_error = error
-                record.updated_at = datetime.now(timezone.utc)
+                record.updated_at = datetime.now(UTC)
                 session.flush()
                 return self._to_account(record)
         except Exception:
@@ -220,23 +204,17 @@ class SQLAlchemyInstagramRepository:
                     )
                 )
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     def delete_connection(self, user_id: str) -> bool:
         try:
             with self._session_factory.begin() as session:
                 result = session.execute(
-                    delete(InstagramConnectionRecord).where(
-                        InstagramConnectionRecord.user_id == user_id
-                    )
+                    delete(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user_id)
                 )
                 return bool(result.rowcount)
         except Exception:
-            raise InstagramRepositoryError(
-                "PostBridge database operation failed."
-            ) from None
+            raise InstagramRepositoryError("PostBridge database operation failed.") from None
 
     @staticmethod
     def _to_account(record: InstagramConnectionRecord) -> InstagramAccount:
@@ -268,9 +246,7 @@ class LocalDevelopmentInstagramRepository:
         self._states: dict[str, tuple[str, datetime, datetime | None]] = {}
         self._state_lock = Lock()
 
-    def create_oauth_state(
-        self, nonce: str, user_id: str, expires_at: datetime
-    ) -> None:
+    def create_oauth_state(self, nonce: str, user_id: str, expires_at: datetime) -> None:
         with self._state_lock:
             self._states[nonce] = (user_id, expires_at, None)
 
@@ -321,9 +297,7 @@ class LocalDevelopmentInstagramRepository:
             return False
 
         def mutate(store):
-            store.instagram_accounts = [
-                item for item in store.instagram_accounts if item.user_id != user_id
-            ]
+            store.instagram_accounts = [item for item in store.instagram_accounts if item.user_id != user_id]
 
         json_store.update_store(mutate)
         token_store.delete_encrypted_token(existing.id)
@@ -333,10 +307,12 @@ class LocalDevelopmentInstagramRepository:
         existing = self.get_connection(user_id)
         if existing is None:
             return None
-        updated = existing.model_copy(update={
-            "session_synced_at": synced_at,
-            "session_sync_error": error,
-        })
+        updated = existing.model_copy(
+            update={
+                "session_synced_at": synced_at,
+                "session_sync_error": error,
+            }
+        )
         return json_store.upsert_instagram_account(updated)
 
 
@@ -353,7 +329,23 @@ def get_instagram_repository() -> InstagramRepository:
     if database_url:
         return _postgres_repository(database_url)
     if is_production():
-        raise InstagramRepositoryError(
-            "PostBridge database configuration is required in production."
-        )
+        raise InstagramRepositoryError("PostBridge database configuration is required in production.")
     return _local_repository
+
+
+def delete_local_user_data(user_id: str) -> None:
+    """Clear the JSON store, token sidecar, and process cache used by local development."""
+    if os.getenv("POSTBRIDGE_DATABASE_URL") or is_production():
+        return
+
+    account = json_store.get_instagram_account(user_id)
+    if account is not None:
+        # Delete the token first so a failed JSON write can be retried while the
+        # account-to-token identifier is still present in the local store.
+        token_store.delete_encrypted_token(account.id)
+    json_store.delete_user_data(user_id)
+
+    # Imported lazily to avoid coupling the repository modules at import time.
+    from backend.storage.content_repository import get_content_repository
+
+    get_content_repository().clear_local_user_cache(user_id)

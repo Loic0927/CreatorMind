@@ -1,19 +1,34 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+
 from backend.services.insight_texts import post_feedback, post_summary
 
-NOW = datetime(2026, 10, 30, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 30, tzinfo=UTC)
+
+
 def snapshot(hours, views):
-    return SimpleNamespace(captured_at=NOW + timedelta(hours=hours), views=views, reach=views, engagement_rate=5.0, shares=1, saves=1, comments=1)
+    return SimpleNamespace(
+        captured_at=NOW + timedelta(hours=hours),
+        views=views,
+        reach=views,
+        engagement_rate=5.0,
+        shares=1,
+        saves=1,
+        comments=1,
+    )
+
 
 def test_summary_is_hidden_for_one_snapshot_without_calling_model():
     called = False
+
     def generator(_):
         nonlocal called
         called = True
         return "filler"
+
     assert post_summary("u", "t", [snapshot(0, 10)], generator=generator) is None
     assert called is False
+
 
 def test_summary_is_hidden_when_history_has_no_non_obvious_movement():
     assert post_summary("u", "t", [snapshot(0, 10), snapshot(1, 10)], generator=lambda _: "filler") is None
@@ -37,7 +52,9 @@ def test_post_feedback_is_capped_at_three_sentences_and_uses_no_comment_content(
         media,
         latest,
         analysis,
-        generator=lambda prompt: prompts.append(prompt) or "Strong opening. Clear payoff. Worth adapting. Extra sentence.",
+        generator=lambda prompt: (
+            prompts.append(prompt) or "Strong opening. Clear payoff. Worth adapting. Extra sentence."
+        ),
     )
 
     assert result == "Strong opening. Clear payoff. Worth adapting."

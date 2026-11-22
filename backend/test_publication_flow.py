@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
@@ -19,19 +19,29 @@ def test_draft_publish_to_track_vertical_slice_is_idempotent(tmp_path, monkeypat
     session_factory_for_url.cache_clear()
     engine = engine_for_url(url)
     factory = session_factory_for_url(url)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with factory.begin() as session:
         session.add(UserRecord(id="user-1", email="creator@example.test", created_at=now, updated_at=now))
 
     draft_repository = DraftRepository.from_engine(engine)
     asset = draft_repository.create_media_asset(
-        "user-1", storage_provider="oci", object_name="draft-assets/user-1/image.jpg",
-        original_filename="image.jpg", mime_type="image/jpeg", byte_size=100,
-        checksum_sha256="a" * 64, status="ready",
+        "user-1",
+        storage_provider="oci",
+        object_name="draft-assets/user-1/image.jpg",
+        original_filename="image.jpg",
+        mime_type="image/jpeg",
+        byte_size=100,
+        checksum_sha256="a" * 64,
+        status="ready",
     )
     draft = draft_repository.create_draft(
-        "user-1", media_asset_id=asset.id, target_platforms=["Instagram"],
-        content_brief="Launch", goal="Engagement", caption="Caption", hashtags=["#launch"],
+        "user-1",
+        media_asset_id=asset.id,
+        target_platforms=["Instagram"],
+        content_brief="Launch",
+        goal="Engagement",
+        caption="Caption",
+        hashtags=["#launch"],
     )
     provider_calls = []
     account = SimpleNamespace(id="account-1", instagram_user_id="ig-user", status="connected")
@@ -40,12 +50,17 @@ def test_draft_publish_to_track_vertical_slice_is_idempotent(tmp_path, monkeypat
         token_loader=lambda value: "server-token",
         repository_loader=ContentRepository,
         temporary_url_factory=lambda name, lifetime_minutes: "https://temporary.example/image.jpg",
-        provider_publisher=lambda *args: provider_calls.append(args) or {
-            "id": "provider-post-1", "media_type": "IMAGE",
-            "media_url": "https://cdn.example/image.jpg",
-            "permalink": "https://instagram.example/p/1", "caption": "Caption\n\n#launch",
-            "timestamp": now.isoformat(),
-        },
+        provider_publisher=lambda *args: (
+            provider_calls.append(args)
+            or {
+                "id": "provider-post-1",
+                "media_type": "IMAGE",
+                "media_url": "https://cdn.example/image.jpg",
+                "permalink": "https://instagram.example/p/1",
+                "caption": "Caption\n\n#launch",
+                "timestamp": now.isoformat(),
+            }
+        ),
     )
     registry = PublishingAdapterRegistry([adapter])
     monkeypatch.setattr(draft_api, "get_draft_repository", lambda: draft_repository)

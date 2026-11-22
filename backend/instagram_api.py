@@ -1,11 +1,16 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from backend.auth import AuthenticatedUser, require_user
+from backend.services.account_insights import build_account_insights, build_post_analysis
+from backend.services.comments import audience_comment_state
+from backend.services.feedback import cached_summary, refresh_summary_for_user
+from backend.services.insight_texts import audience_description, next_post_suggestion
 from backend.services.instagram import (
     InstagramServiceError,
     aggregate_seven_days,
@@ -20,35 +25,28 @@ from backend.services.instagram import (
     fetch_instagram_media,
     fetch_instagram_profile,
     granted_instagram_scopes,
-    instagram_configured,
     instagram_comment_ingestion_enabled,
-    instagram_scopes,
+    instagram_configured,
     publish_instagram_image,
     publish_instagram_reel,
     token_expiry,
 )
+from backend.services.instagram_sync import refresh_one_post, usable_token
+from backend.services.media_inputs import load_media_input
 from backend.services.publishing import (
     InstagramPublishingAdapter,
-    PublishInput,
     PublishingAdapterRegistry,
+    PublishInput,
     UnavailablePublishingAdapter,
 )
-from backend.services.comments import audience_comment_state
-from backend.services.account_insights import build_account_insights, build_post_analysis
-from backend.services.insight_texts import audience_description, next_post_suggestion
-from backend.services.media_inputs import load_media_input
-from backend.services.feedback import cached_summary, refresh_summary_for_user
-from backend.services.instagram_sync import refresh_one_post, usable_token
-from backend.auth import AuthenticatedUser, require_user
 from backend.storage.content_repository import get_content_repository
-from backend.storage.models import InstagramAccount, InstagramMedia
-from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
 from backend.storage.instagram_repository import (
     InstagramRepository,
     InstagramRepositoryError,
     get_instagram_repository,
 )
-
+from backend.storage.models import InstagramAccount, InstagramMedia
+from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
 
 router = APIRouter()
 LOGGER = logging.getLogger("postbridge.instagram_api")
@@ -169,7 +167,7 @@ def _mark_reconnect_required(account: InstagramAccount) -> None:
         update={
             "status": "reconnect_required",
             "last_error": "instagram_token_invalid",
-            "last_synced_at": datetime.now(timezone.utc),
+            "last_synced_at": datetime.now(UTC),
         }
     )
     try:
@@ -178,9 +176,7 @@ def _mark_reconnect_required(account: InstagramAccount) -> None:
         raise repository_error() from None
 
 
-def _handle_connected_service_error(
-    account: InstagramAccount, exc: InstagramServiceError
-) -> HTTPException:
+def _handle_connected_service_error(account: InstagramAccount, exc: InstagramServiceError) -> HTTPException:
     if exc.code in {"instagram_token_invalid", "connection_expired"}:
         _mark_reconnect_required(account)
         return HTTPException(
@@ -222,9 +218,7 @@ def connect_callback(
                 except InstagramServiceError:
                     pass
             return RedirectResponse(
-                build_app_return_url(
-                    "error", "instagram_authorization_denied", client
-                ),
+                build_app_return_url("error", "instagram_authorization_denied", client),
                 status_code=302,
             )
         if not code or not state:
@@ -249,7 +243,7 @@ def connect_callback(
             existing = repo.get_connection(user_id)
         except InstagramRepositoryError:
             raise repository_error() from None
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         encrypted_token = encrypt_access_token(access_token)
         account = InstagramAccount(
             id=existing.id if existing else str(uuid4()),
@@ -299,7 +293,7 @@ def account(user: AuthenticatedUser = Depends(require_user)):
                 "username": str(profile["username"]),
                 "account_type": profile.get("account_type"),
                 "media_count": profile.get("media_count"),
-                "last_synced_at": datetime.now(timezone.utc),
+                "last_synced_at": datetime.now(UTC),
                 "last_error": None,
             }
         )
@@ -314,11 +308,11 @@ def account(user: AuthenticatedUser = Depends(require_user)):
 
 def _parse_timestamp(value: object) -> datetime:
     if not isinstance(value, str):
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 @router.get("/api/instagram/media")
@@ -327,7 +321,7 @@ def media(user: AuthenticatedUser = Depends(require_user)):
     account = _active_account(current_user(user))
     try:
         upstream = fetch_instagram_media(_access_token(account))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         items = [
             InstagramMedia(
                 id=f"instagram:{item['id']}",
@@ -376,19 +370,36 @@ class TrackRequest(BaseModel):
 
 def _public_tracking(value) -> dict:
     return {
-        "id": value.id, "media_id": value.media_id, "is_active": value.is_active,
-        "started_at": value.started_at, "stopped_at": value.stopped_at,
+        "id": value.id,
+        "media_id": value.media_id,
+        "is_active": value.is_active,
+        "started_at": value.started_at,
+        "stopped_at": value.stopped_at,
     }
 
 
 def _public_snapshot(value) -> dict | None:
     if value is None:
         return None
-    return {name: getattr(value, name) for name in (
-        "id", "media_id", "captured_at", "likes", "comments", "saves", "shares",
-        "reach", "views", "engagement_rate", "average_watch_time_ms", "total_watch_time_ms",
-        "raw_metrics", "metric_status",
-    )}
+    return {
+        name: getattr(value, name)
+        for name in (
+            "id",
+            "media_id",
+            "captured_at",
+            "likes",
+            "comments",
+            "saves",
+            "shares",
+            "reach",
+            "views",
+            "engagement_rate",
+            "average_watch_time_ms",
+            "total_watch_time_ms",
+            "raw_metrics",
+            "metric_status",
+        )
+    }
 
 
 def _public_tracked_item(item: dict) -> dict:
@@ -415,20 +426,19 @@ class PublishRequest(BaseModel):
 
 
 def publishing_registry() -> PublishingAdapterRegistry:
-    return PublishingAdapterRegistry([
-        InstagramPublishingAdapter(
-            account_loader=_active_account,
-            token_loader=_access_token,
-            repository_loader=get_content_repository,
-            uploader=upload_bytes_with_temporary_read_url,
-            provider_publisher=publish_instagram_image,
-            video_publisher=publish_instagram_reel,
-        ),
-        *[
-            UnavailablePublishingAdapter(platform)
-            for platform in ("Twitter", "Facebook", "Threads", "YouTube")
-        ],
-    ])
+    return PublishingAdapterRegistry(
+        [
+            InstagramPublishingAdapter(
+                account_loader=_active_account,
+                token_loader=_access_token,
+                repository_loader=get_content_repository,
+                uploader=upload_bytes_with_temporary_read_url,
+                provider_publisher=publish_instagram_image,
+                video_publisher=publish_instagram_reel,
+            ),
+            *[UnavailablePublishingAdapter(platform) for platform in ("Twitter", "Facebook", "Threads", "YouTube")],
+        ]
+    )
 
 
 @router.get("/publishing/capabilities")
@@ -445,15 +455,23 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
     registry = publishing_registry()
     unknown = [item for item in platforms if registry.get(item) is None]
     if unknown:
-        raise HTTPException(status_code=422, detail={"code": "unsupported_platform", "message": f"Unsupported platform: {unknown[0]}"})
+        raise HTTPException(
+            status_code=422, detail={"code": "unsupported_platform", "message": f"Unsupported platform: {unknown[0]}"}
+        )
     if payload.image is not None and payload.media is not None:
-        raise HTTPException(status_code=422, detail={"code": "invalid_media", "message": "Provide either image or media, not both."})
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_media", "message": "Provide either image or media, not both."}
+        )
     supplied_media = payload.media or payload.image
     if supplied_media is None:
-        raise HTTPException(status_code=422, detail={"code": "media_required", "message": "Publishable media is required."})
+        raise HTTPException(
+            status_code=422, detail={"code": "media_required", "message": "Publishable media is required."}
+        )
     request = PublishInput(
-        caption=payload.caption, hashtags=payload.hashtags,
-        mime_type=supplied_media.mime_type, encoded_media=supplied_media.data,
+        caption=payload.caption,
+        hashtags=payload.hashtags,
+        mime_type=supplied_media.mime_type,
+        encoded_media=supplied_media.data,
         duration_seconds=supplied_media.duration_seconds,
     )
     results = [registry.get(platform).publish(user_id, request).as_dict() for platform in platforms]
@@ -464,16 +482,16 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
 def track(payload: TrackRequest, user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
     account = stored_connection(user_id)
-    owned_ids = (
-        {item.id for item in get_content_repository().media_for_account(account.id)} if account else set()
-    )
+    owned_ids = {item.id for item in get_content_repository().media_for_account(account.id)} if account else set()
     if payload.media_id not in owned_ids:
         raise HTTPException(
             status_code=404,
             detail={"code": "media_not_found", "message": "Instagram post was not found."},
         )
     tracked = get_content_repository().create_tracked(user_id, payload.media_id)
-    media_item = next(item for item in get_content_repository().media_for_account(account.id) if item.id == payload.media_id)
+    media_item = next(
+        item for item in get_content_repository().media_for_account(account.id) if item.id == payload.media_id
+    )
     # The existing picker is the only path for OLD posts. Fetch current lifetime
     # metrics immediately, then schedule only still-valid early checkpoints.
     try:
@@ -489,10 +507,7 @@ def tracked_payload(user_id: str, active_only: bool = True):
     media_by_id = {item.id: item for item in media}
     snapshots_by_media = {}
     for item in get_content_repository().snapshots(list(media_by_id)):
-        if (
-            item.media_id not in snapshots_by_media
-            or item.captured_at > snapshots_by_media[item.media_id].captured_at
-        ):
+        if item.media_id not in snapshots_by_media or item.captured_at > snapshots_by_media[item.media_id].captured_at:
             snapshots_by_media[item.media_id] = item
     payload = [
         {
@@ -512,11 +527,7 @@ def _feedback_media(media) -> tuple[bytes, str] | None:
 
 def _tracked_item(user_id: str, tracked_id: str) -> dict:
     item = next(
-        (
-            candidate
-            for candidate in tracked_payload(user_id)
-            if candidate["tracking"].id == tracked_id
-        ),
+        (candidate for candidate in tracked_payload(user_id) if candidate["tracking"].id == tracked_id),
         None,
     )
     if not item:
@@ -551,7 +562,9 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
     enabled = bool(account and instagram_comment_ingestion_enabled(user_id, account.instagram_user_id))
     permission = bool(account and "instagram_business_manage_comments" in account.scopes)
     description = audience_description(user_id, tracked_id, comments) if enabled and permission else None
-    audience = audience_comment_state(comments, feature_enabled=enabled, permission_granted=permission, description=description)
+    audience = audience_comment_state(
+        comments, feature_enabled=enabled, permission_granted=permission, description=description
+    )
     if account and account.session_sync_error == "comment_access_denied":
         audience = {"state": "access_denied", "message": "Instagram denied access to comments."}
     selected_for_analysis = next(value for value in all_items if value["tracking"].id == tracked_id)
@@ -561,7 +574,9 @@ def tracked_detail(tracked_id: str, user: AuthenticatedUser = Depends(require_us
         refresh_summary_for_user(user_id, tracked_id)
     except Exception as exc:
         LOGGER.warning("summary_refresh_failed tracked_post_id=%s error_type=%s", tracked_id, type(exc).__name__)
-    analysis = build_post_analysis(selected_for_analysis, all_items, summary=cached_summary(user_id, tracked_id), audience_comments=audience)
+    analysis = build_post_analysis(
+        selected_for_analysis, all_items, summary=cached_summary(user_id, tracked_id), audience_comments=audience
+    )
     item["analysis"] = analysis
     return _public_tracked_item(item)
 
@@ -586,8 +601,10 @@ def account_insights(user: AuthenticatedUser = Depends(require_user)):
     )
     result = build_account_insights(items, suggestion=suggestion)
     result["sync_status"] = (
-        "reconnect_required" if account and account.status == "reconnect_required"
-        else "failed" if account and account.session_sync_error
+        "reconnect_required"
+        if account and account.status == "reconnect_required"
+        else "failed"
+        if account and account.session_sync_error
         else "ok"
     )
     return result
@@ -607,17 +624,19 @@ def stop_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_use
 
 
 @router.post("/tracked-posts/{tracked_id}/refresh")
-def refresh_tracking(
-    tracked_id: str, user: AuthenticatedUser = Depends(require_user)
-):
+def refresh_tracking(tracked_id: str, user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
     tracked_item = _tracked_item(user_id, tracked_id)
     account = _active_account(user_id)
     media_item = tracked_item.get("media")
     if media_item is None:
-        raise HTTPException(status_code=404, detail={"code": "media_not_found", "message": "Instagram post was not found."})
+        raise HTTPException(
+            status_code=404, detail={"code": "media_not_found", "message": "Instagram post was not found."}
+        )
     latest = tracked_item.get("latest")
-    if latest and datetime.now(timezone.utc) - (latest.captured_at if latest.captured_at.tzinfo else latest.captured_at.replace(tzinfo=timezone.utc)) < timedelta(minutes=1):
+    if latest and datetime.now(UTC) - (
+        latest.captured_at if latest.captured_at.tzinfo else latest.captured_at.replace(tzinfo=UTC)
+    ) < timedelta(minutes=1):
         return tracked_detail(tracked_id, user)
     try:
         refresh_one_post(user_id, tracked_item["tracking"], media_item, usable_token(account))
@@ -627,9 +646,7 @@ def refresh_tracking(
 
 
 @router.get("/insights/instagram")
-def insights(
-    period: str = Query("7d"), user: AuthenticatedUser = Depends(require_user)
-):
+def insights(period: str = Query("7d"), user: AuthenticatedUser = Depends(require_user)):
     user_id = current_user(user)
     if period != "7d":
         raise HTTPException(

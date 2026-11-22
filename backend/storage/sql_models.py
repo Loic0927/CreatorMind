@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -71,7 +71,9 @@ class AuthSessionRecord(Base):
     __tablename__ = "auth_sessions"
 
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -81,7 +83,9 @@ class PredictionHistoryRecord(Base):
     __tablename__ = "prediction_history"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     input_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     output_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -91,7 +95,9 @@ class InstagramMediaRecord(Base):
     __tablename__ = "instagram_media"
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    account_id: Mapped[str] = mapped_column(String(36), ForeignKey("instagram_connections.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("instagram_connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     instagram_media_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     media_type: Mapped[str] = mapped_column(String(64), nullable=False)
     media_url: Mapped[str | None] = mapped_column(Text)
@@ -106,8 +112,12 @@ class TrackedPostRecord(Base):
     __tablename__ = "tracked_posts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    media_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -119,7 +129,9 @@ class InstagramInsightSnapshotRecord(Base):
     __tablename__ = "instagram_insight_snapshots"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
+    media_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     likes: Mapped[int | None] = mapped_column(Integer)
     comments: Mapped[int | None] = mapped_column(Integer)
@@ -140,14 +152,16 @@ class InstagramInsightSnapshotRecord(Base):
 
 class InstagramCommentRecord(Base):
     __tablename__ = "instagram_comments"
-    __table_args__ = (
-        UniqueConstraint("user_id", "provider_id", name="uq_instagram_comments_user_provider"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", name="uq_instagram_comments_user_provider"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     provider_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tracked_post_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     text: Mapped[str] = mapped_column(Text, nullable=False)
     like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -160,8 +174,12 @@ class InsightTextCacheRecord(Base):
     __table_args__ = (UniqueConstraint("user_id", "cache_key", name="uq_insight_text_cache_user_key"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    tracked_post_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tracked_post_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), index=True
+    )
     cache_key: Mapped[str] = mapped_column(String(255), nullable=False)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -180,16 +198,24 @@ class InstagramInsightCollectionJobRecord(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
-    media_id: Mapped[str] = mapped_column(String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tracked_post_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    media_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     milestone_hours: Mapped[int] = mapped_column(Integer, nullable=False)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    snapshot_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="SET NULL"), unique=True)
+    snapshot_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="SET NULL"), unique=True
+    )
     reason: Mapped[str | None] = mapped_column(String(128))
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(128))
@@ -203,7 +229,9 @@ class AIGenerationLogRecord(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     generator: Mapped[str] = mapped_column(String(64), nullable=False)
-    tracked_post_id: Mapped[str] = mapped_column(String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    tracked_post_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -217,12 +245,12 @@ class AIGenerationLogRecord(Base):
 
 class MediaAssetRecord(Base):
     __tablename__ = "media_assets"
-    __table_args__ = (
-        UniqueConstraint("user_id", "object_name", name="uq_media_assets_user_object"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "object_name", name="uq_media_assets_user_object"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     object_name: Mapped[str] = mapped_column(Text, nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -238,8 +266,12 @@ class PostDraftRecord(Base):
     __tablename__ = "post_drafts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    media_asset_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("media_assets.id", ondelete="RESTRICT"), index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    media_asset_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("media_assets.id", ondelete="RESTRICT"), index=True
+    )
     target_platforms: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     content_brief: Mapped[str] = mapped_column(Text, nullable=False, default="")
     goal: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -257,8 +289,12 @@ class PostPublicationRecord(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    draft_id: Mapped[str] = mapped_column(String(36), ForeignKey("post_drafts.id", ondelete="RESTRICT"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    draft_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("post_drafts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     platform: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_media_id: Mapped[str | None] = mapped_column(String(255))
     provider_post_id: Mapped[str | None] = mapped_column(String(255))

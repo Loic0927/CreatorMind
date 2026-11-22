@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.config import is_production
 from backend.storage.sql_models import Base
 
-
 LOCAL_DATABASE_PATH = Path(__file__).resolve().parent.parent / "data" / "postbridge.local.db"
 
 

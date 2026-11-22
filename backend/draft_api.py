@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
 from backend.auth import AuthenticatedUser, require_user
+from backend.services.publishing import PublishInput
 from backend.storage.draft_repository import (
     DraftConflictError,
     DraftNotFoundError,
@@ -20,10 +21,8 @@ from backend.storage.draft_repository import (
     MediaAssetNotFoundError,
     get_draft_repository,
 )
-from backend.services.publishing import PublishInput
 from backend.storage.models import MediaAsset, PostDraft, PostPublication
 from backend.storage.oci_object_storage import OCIStorageConfigurationError, upload_private_bytes
-
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 media_router = APIRouter(prefix="/media-assets", tags=["media-assets"])
@@ -137,7 +136,9 @@ def _repository_error(exc: DraftRepositoryError) -> HTTPException:
         return HTTPException(status_code=404, detail={"code": "draft_resource_not_found", "message": str(exc)})
     if isinstance(exc, DraftConflictError):
         return HTTPException(status_code=409, detail={"code": "invalid_draft_state", "message": str(exc)})
-    return HTTPException(status_code=503, detail={"code": "draft_storage_unavailable", "message": "Draft storage is unavailable."})
+    return HTTPException(
+        status_code=503, detail={"code": "draft_storage_unavailable", "message": "Draft storage is unavailable."}
+    )
 
 
 @media_router.post("", response_model=MediaAsset, status_code=201)
@@ -145,12 +146,19 @@ def upload_media_asset(payload: MediaAssetUpload, user: AuthenticatedUser = Depe
     try:
         body = base64.b64decode(payload.data, validate=True)
     except (binascii.Error, ValueError):
-        raise HTTPException(status_code=422, detail={"code": "invalid_media", "message": "Uploaded media is not valid base64 data."}) from None
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_media", "message": "Uploaded media is not valid base64 data."}
+        ) from None
     max_bytes = min(int(os.getenv("POSTBRIDGE_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))), 5 * 1024 * 1024)
     if not body or len(body) > max_bytes:
-        raise HTTPException(status_code=413, detail={"code": "media_too_large", "message": "The image is empty or exceeds 5 MB."})
+        raise HTTPException(
+            status_code=413, detail={"code": "media_too_large", "message": "The image is empty or exceeds 5 MB."}
+        )
     if not MEDIA_SIGNATURES[payload.mime_type](body):
-        raise HTTPException(status_code=422, detail={"code": "invalid_media_signature", "message": "The image contents do not match its MIME type."})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_media_signature", "message": "The image contents do not match its MIME type."},
+        )
     safe_name = Path(payload.filename.replace("\\", "/")).name[:180] or f"image{MEDIA_EXTENSIONS[payload.mime_type]}"
     object_name = f"draft-assets/{user.id}/{uuid4()}{MEDIA_EXTENSIONS[payload.mime_type]}"
     try:
@@ -166,7 +174,10 @@ def upload_media_asset(payload: MediaAssetUpload, user: AuthenticatedUser = Depe
             status="ready",
         )
     except OCIStorageConfigurationError:
-        raise HTTPException(status_code=503, detail={"code": "media_storage_unavailable", "message": "Private media storage is not configured."}) from None
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "media_storage_unavailable", "message": "Private media storage is not configured."},
+        ) from None
     except DraftRepositoryError as exc:
         raise _repository_error(exc) from None
 
@@ -203,7 +214,9 @@ def get_draft(draft_id: str, user: AuthenticatedUser = Depends(require_user)) ->
 def update_draft(payload: DraftUpdate, draft_id: str, user: AuthenticatedUser = Depends(require_user)) -> PostDraft:
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
-        raise HTTPException(status_code=422, detail={"code": "empty_draft_update", "message": "Provide at least one field to update."})
+        raise HTTPException(
+            status_code=422, detail={"code": "empty_draft_update", "message": "Provide at least one field to update."}
+        )
     try:
         existing = get_draft_repository().get_draft(user.id, draft_id)
         if existing is None:
@@ -249,8 +262,7 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
             raise DraftConflictError("Every publication platform must be selected on the draft.")
         if draft.status in {"published", "publishing"}:
             existing = {
-                (item.platform, item.idempotency_key): item
-                for item in repository.list_publications(user.id, draft.id)
+                (item.platform, item.idempotency_key): item for item in repository.list_publications(user.id, draft.id)
             }
             repeated = [existing.get((platform, payload.idempotency_key)) for platform in payload.platforms]
             if all(item is not None for item in repeated):
@@ -292,10 +304,14 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
                 raise DraftConflictError(f"Unsupported platform: {platform}.")
             capability = adapter.capability(user.id)
             if not capability.available:
-                results.append({
-                    "platform": platform, "status": "unavailable",
-                    "code": "platform_unavailable", "message": capability.reason or "Publishing is unavailable.",
-                })
+                results.append(
+                    {
+                        "platform": platform,
+                        "status": "unavailable",
+                        "code": "platform_unavailable",
+                        "message": capability.reason or "Publishing is unavailable.",
+                    }
+                )
                 continue
             invalid = adapter.validate(request)
             if invalid:
@@ -309,23 +325,27 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
         repository.transition_draft_status(user.id, draft.id, "publishing")
         all_published = True
         for platform, adapter in preflight.items():
-            publication, created = repository.create_publication(
-                user.id, draft.id, platform, payload.idempotency_key
-            )
+            publication, created = repository.create_publication(user.id, draft.id, platform, payload.idempotency_key)
             if not created and publication.status == "published":
-                results.append({
-                    "platform": platform, "status": "published",
-                    "provider_post_id": publication.provider_post_id,
-                    "publication_id": publication.id,
-                    "message": "This request was already published.",
-                })
+                results.append(
+                    {
+                        "platform": platform,
+                        "status": "published",
+                        "provider_post_id": publication.provider_post_id,
+                        "publication_id": publication.id,
+                        "message": "This request was already published.",
+                    }
+                )
                 continue
             if not created and publication.status in {"validating", "publishing"}:
-                results.append({
-                    "platform": platform, "status": "publishing",
-                    "publication_id": publication.id,
-                    "message": "This publication request is already in progress.",
-                })
+                results.append(
+                    {
+                        "platform": platform,
+                        "status": "publishing",
+                        "publication_id": publication.id,
+                        "message": "This publication request is already in progress.",
+                    }
+                )
                 all_published = False
                 continue
             if not created and publication.status == "failed":
@@ -335,15 +355,20 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
             result = adapter.publish(user.id, request)
             if result.status == "published" and result.provider_post_id:
                 repository.transition_publication(
-                    user.id, publication.id, "published",
+                    user.id,
+                    publication.id,
+                    "published",
                     provider_media_id=result.provider_post_id,
                     provider_post_id=result.provider_post_id,
                 )
             else:
                 all_published = False
                 repository.transition_publication(
-                    user.id, publication.id, "failed",
-                    error_code=result.code or "publish_failed", error_message=result.message,
+                    user.id,
+                    publication.id,
+                    "failed",
+                    error_code=result.code or "publish_failed",
+                    error_message=result.message,
                 )
             item = result.as_dict()
             item["publication_id"] = publication.id

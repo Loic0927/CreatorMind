@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from typing import Any
-
 
 MediaInput = tuple[bytes, str]
 
@@ -31,9 +30,8 @@ def load_media_input(media: Any) -> MediaInput | None:
 
     parsed = urlparse(str(url))
     hostname = (parsed.hostname or "").lower()
-    allowed_host = (
-        hostname == "instagram.com"
-        or hostname.endswith((".instagram.com", ".cdninstagram.com", ".fbcdn.net"))
+    allowed_host = hostname == "instagram.com" or hostname.endswith(
+        (".instagram.com", ".cdninstagram.com", ".fbcdn.net")
     )
     if parsed.scheme != "https" or not allowed_host:
         return None
@@ -45,8 +43,12 @@ def load_media_input(media: Any) -> MediaInput | None:
         with urlopen(request, timeout=timeout) as response:
             content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
             allowed_types = {
-                "image/jpeg", "image/png", "image/webp",
-                "video/mp4", "video/webm", "video/quicktime",
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+                "video/mp4",
+                "video/webm",
+                "video/quicktime",
             }
             if content_type not in allowed_types:
                 return None

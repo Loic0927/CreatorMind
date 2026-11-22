@@ -1,0 +1,274 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AccountInsights,
+  MetricKey,
+  PerformancePost,
+  Session,
+  getAccountInsights,
+  refreshTrackedPost,
+} from "@/lib/postbridge";
+import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
+import { LoadingState } from "@/components/dashboard/LoadingState";
+import { Card, PageTitle } from "@/components/dashboard/ui";
+import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
+
+type SortKey = MetricKey | "newest";
+const sortKeys: SortKey[] = ["newest", "views", "reach", "engagement_rate", "shares", "saves", "comments"];
+const sortLabel: Record<SortKey, string> = { ...metricLabel, newest: "Newest" } as Record<SortKey, string>;
+const sortOptions = sortKeys.map((value) => ({ value, label: sortLabel[value] }));
+const columns: Array<{ key: SortKey; label: string }> = [
+  { key: "views", label: "Views" },
+  { key: "reach", label: "Reach" },
+  { key: "engagement_rate", label: "Eng." },
+  { key: "shares", label: "Shares" },
+  { key: "saves", label: "Saves" },
+  { key: "comments", label: "Comments" },
+  { key: "newest", label: "Date" },
+];
+const desktopGrid = "grid-cols-[44px_150px_repeat(6,minmax(52px,1fr))_72px]";
+const collapsedCount = 5;
+const staleMessage = "Couldn't update, showing earlier data";
+const reconnectMessage = "Reconnect Instagram to update.";
+const shortDate = (value: string) => new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+const cellValue = (post: PerformancePost, key: SortKey) =>
+  key === "newest" ? shortDate(post.published_at) : formatMetric(key, post.metrics[key]);
+
+export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (trackedId: string) => void }) {
+  const [data, setData] = useState<AccountInsights | null>(null);
+  const [sort, setSort] = useState<SortKey>("newest");
+  const [showAll, setShowAll] = useState(false);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [cooldowns, setCooldowns] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      setData(await getAccountInsights(session));
+    } catch (reason) {
+      setError(errorMessage(reason, "Couldn't load insights."));
+    }
+  }, [session]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const posts = useMemo(() => {
+    const sorted = [...(data?.performance_posts ?? [])].sort((a, b) =>
+      sort === "newest"
+        ? new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+        : (b.metrics[sort] ?? -1) - (a.metrics[sort] ?? -1),
+    );
+    return showAll ? sorted : sorted.slice(0, collapsedCount);
+  }, [data, showAll, sort]);
+
+  const refresh = async (post: PerformancePost) => {
+    const id = post.tracked_post_id;
+    if (!post.needs_refresh || refreshing || cooldowns.has(id)) return;
+    setRefreshing(id);
+    setError("");
+    try {
+      await refreshTrackedPost(session, id);
+      setCooldowns((current) => new Set(current).add(id));
+      window.setTimeout(
+        () =>
+          setCooldowns((current) => {
+            const next = new Set(current);
+            next.delete(id);
+            return next;
+          }),
+        60_000,
+      );
+      await load();
+    } catch (reason) {
+      setError(errorMessage(reason, "").toLowerCase().includes("reconnect") ? reconnectMessage : staleMessage);
+    } finally {
+      setRefreshing(null);
+    }
+  };
+
+  const notice =
+    error ||
+    (data?.sync_status === "failed"
+      ? staleMessage
+      : data?.sync_status === "reconnect_required"
+        ? reconnectMessage
+        : "");
+
+  return (
+    <section className="mx-auto w-full max-w-[880px]">
+      <PageTitle className="mb-5 md:mb-7">Insights</PageTitle>
+      {notice ? <p className="mb-3 text-sm text-slate-500">{notice}</p> : null}
+      {!data ? (
+        <LoadingState label="Preparing your insights" />
+      ) : (
+        <div className="space-y-4">
+          {data.highlights.length === 4 ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {data.highlights.map((item) => (
+                <button key={item.label} onClick={() => onOpen(item.tracked_post_id)} className="h-full text-left">
+                  <Card compact className="h-full">
+                    <p className="min-h-8 text-[11px] font-black uppercase tracking-[.06em] text-slate-500 lg:min-h-0">
+                      {item.label}
+                    </p>
+                    <div className="mt-3 grid grid-cols-[40px_minmax(0,1fr)] items-center gap-2.5 sm:grid-cols-[56px_minmax(0,1fr)]">
+                      {item.thumbnail_url ? (
+                        <img
+                          src={item.thumbnail_url}
+                          alt=""
+                          className="h-14 w-10 shrink-0 rounded-lg object-cover object-center sm:w-14 sm:rounded-xl"
+                        />
+                      ) : (
+                        <div className="h-14 w-10 shrink-0 rounded-lg bg-sky-200 sm:w-14 sm:rounded-xl" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-[20px] font-black leading-none sm:text-[22px]">
+                          {item.metric === "engagement_rate" ? formatRate(item.value) : formatNumber(item.value)}
+                        </p>
+                        <p className="mt-2 whitespace-nowrap text-[12px] text-slate-500 sm:text-[13px]">
+                          {shortDate(item.published_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {data.next_post_suggestion ? (
+            <Card>
+              <h2 className="text-xl font-black">Next post suggestion</h2>
+              <p className="mt-3 text-[15px] leading-5">{data.next_post_suggestion}</p>
+            </Card>
+          ) : null}
+
+          <Card>
+            <div className="mb-3 flex items-center gap-3">
+              <h2 className="text-xl font-black">Posts</h2>
+              <div className="ml-auto w-[150px]">
+                <UnifiedSelect
+                  label="Sort"
+                  title="Sort posts"
+                  options={sortOptions}
+                  value={sort}
+                  onChange={(next) => setSort(next as SortKey)}
+                  compact
+                />
+              </div>
+            </div>
+            <div
+              className={`hidden ${desktopGrid} items-center gap-3 border-b border-slate-200 pb-3 text-[11px] uppercase tracking-[.06em] text-slate-500 lg:grid`}
+            >
+              <span className="font-normal">Rank</span>
+              <span className="font-normal">Post</span>
+              {columns.map((column) => (
+                <span key={column.key} className={sort === column.key ? "font-black" : "font-normal"}>
+                  {column.label}
+                </span>
+              ))}
+            </div>
+            {posts.map((post) => (
+              <PostRow
+                key={post.tracked_post_id}
+                post={post}
+                sort={sort}
+                refreshing={refreshing === post.tracked_post_id}
+                cooldown={cooldowns.has(post.tracked_post_id)}
+                onOpen={() => onOpen(post.tracked_post_id)}
+                onRefresh={() => void refresh(post)}
+              />
+            ))}
+            {data.performance_posts.length > collapsedCount && !showAll ? (
+              <button
+                onClick={() => setShowAll(true)}
+                className="min-h-11 pt-4 text-left text-[15px] font-black text-sky-600"
+              >
+                Show all {data.performance_posts.length}
+              </button>
+            ) : null}
+          </Card>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PostRow({
+  post,
+  sort,
+  refreshing,
+  cooldown,
+  onOpen,
+  onRefresh,
+}: {
+  post: PerformancePost;
+  sort: SortKey;
+  refreshing: boolean;
+  cooldown: boolean;
+  onOpen: () => void;
+  onRefresh: () => void;
+}) {
+  const rank = post.rank ? `#${post.rank}` : "–";
+  const selectedValue = cellValue(post, sort);
+  const rowProps = {
+    role: "button",
+    tabIndex: 0,
+    onClick: onOpen,
+    onKeyDown: (event: React.KeyboardEvent) => {
+      if (event.key === "Enter") onOpen();
+    },
+  };
+  const refreshControl = post.needs_refresh ? (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onRefresh();
+      }}
+      className={`min-h-8 shrink-0 text-[12px] font-semibold text-sky-600 ${refreshing || cooldown ? "opacity-50" : ""}`}
+    >
+      {refreshing ? "Refreshing…" : cooldown ? "Refreshed" : "Refresh"}
+    </button>
+  ) : null;
+  const cover = post.thumbnail_url ? (
+    <img src={post.thumbnail_url} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover object-center" />
+  ) : (
+    <span className="h-14 w-14 shrink-0 rounded-xl bg-sky-200" />
+  );
+
+  return (
+    <div className="border-b border-slate-200 last:border-0">
+      <div
+        {...rowProps}
+        className="grid min-h-[72px] cursor-pointer grid-cols-[32px_minmax(108px,1fr)_72px] items-center gap-3 py-2 text-left lg:hidden"
+      >
+        <span className="font-semibold">{rank}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {cover}
+          {refreshControl}
+        </span>
+        <span className="text-right font-black" aria-label={`${sortLabel[sort]}: ${selectedValue}`}>
+          {selectedValue}
+        </span>
+      </div>
+      <div
+        {...rowProps}
+        className={`hidden min-h-[72px] cursor-pointer ${desktopGrid} items-center gap-3 py-2 text-left lg:grid`}
+      >
+        <span className="font-semibold">{rank}</span>
+        <span className="flex min-w-0 items-center gap-3">
+          {cover}
+          {refreshControl}
+        </span>
+        {columns.map((column) => (
+          <span key={column.key} className={sort === column.key ? "font-black" : "font-normal"}>
+            {cellValue(post, column.key)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}

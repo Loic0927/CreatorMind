@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -7,8 +7,8 @@ from PIL import Image
 
 from backend.services.publishing import (
     InstagramPublishingAdapter,
-    PublishInput,
     PublishingAdapterRegistry,
+    PublishInput,
     UnavailablePublishingAdapter,
 )
 
@@ -26,11 +26,15 @@ class FakeContentRepository:
 
 def _request(mime_type="image/jpeg"):
     output = BytesIO()
-    Image.new("RGBA" if mime_type == "image/png" else "RGB", (8, 8), (255, 0, 0, 128) if mime_type == "image/png" else (255, 0, 0)).save(
-        output, format="PNG" if mime_type == "image/png" else "JPEG"
-    )
+    Image.new(
+        "RGBA" if mime_type == "image/png" else "RGB",
+        (8, 8),
+        (255, 0, 0, 128) if mime_type == "image/png" else (255, 0, 0),
+    ).save(output, format="PNG" if mime_type == "image/png" else "JPEG")
     return PublishInput(
-        caption="Caption", hashtags="#tag", mime_type=mime_type,
+        caption="Caption",
+        hashtags="#tag",
+        mime_type=mime_type,
         encoded_media=base64.b64encode(output.getvalue()).decode(),
     )
 
@@ -54,9 +58,12 @@ def test_instagram_adapter_validates_publishes_and_normalizes_result():
         repository_loader=lambda: repository,
         uploader=lambda data, name, mime: uploaded.append((data, name, mime)) or "https://temporary.example/image.jpg",
         provider_publisher=lambda token, user_id, url, caption: {
-            "id": "provider-post-1", "media_type": "IMAGE", "media_url": url,
-            "permalink": "https://instagram.example/p/1", "caption": caption,
-            "timestamp": datetime(2026, 10, 22, tzinfo=timezone.utc).isoformat(),
+            "id": "provider-post-1",
+            "media_type": "IMAGE",
+            "media_url": url,
+            "permalink": "https://instagram.example/p/1",
+            "caption": caption,
+            "timestamp": datetime(2026, 10, 22, tzinfo=UTC).isoformat(),
         },
     )
 
@@ -81,14 +88,21 @@ def test_instagram_adapter_converts_stored_png_to_jpeg_before_publishing():
         token_loader=lambda value: "server-side-token",
         repository_loader=lambda: repository,
         object_loader=lambda name: source,
-        uploader=lambda data, name, mime: uploaded.append((data, name, mime)) or "https://temporary.example/converted.jpg",
+        uploader=lambda data, name, mime: (
+            uploaded.append((data, name, mime)) or "https://temporary.example/converted.jpg"
+        ),
         provider_publisher=lambda token, user_id, url, caption: {
-            "id": "provider-png", "media_type": "IMAGE", "media_url": url,
-            "permalink": "https://instagram.example/p/png", "caption": caption,
-            "timestamp": datetime(2026, 10, 22, tzinfo=timezone.utc).isoformat(),
+            "id": "provider-png",
+            "media_type": "IMAGE",
+            "media_url": url,
+            "permalink": "https://instagram.example/p/png",
+            "caption": caption,
+            "timestamp": datetime(2026, 10, 22, tzinfo=UTC).isoformat(),
         },
     )
-    request = PublishInput(caption="PNG", hashtags="", mime_type="image/png", object_name="draft-assets/user-1/image.png")
+    request = PublishInput(
+        caption="PNG", hashtags="", mime_type="image/png", object_name="draft-assets/user-1/image.png"
+    )
 
     result = adapter.publish("user-1", request)
 
@@ -107,15 +121,22 @@ def test_instagram_adapter_reuses_stored_private_object(monkeypatch):
         token_loader=lambda value: "server-side-token",
         repository_loader=lambda: repository,
         uploader=lambda *args: (_ for _ in ()).throw(AssertionError("stored media must not be uploaded again")),
-        temporary_url_factory=lambda name, lifetime_minutes: temporary_urls.append((name, lifetime_minutes)) or "https://temporary.example/image.jpg",
+        temporary_url_factory=lambda name, lifetime_minutes: (
+            temporary_urls.append((name, lifetime_minutes)) or "https://temporary.example/image.jpg"
+        ),
         provider_publisher=lambda token, user_id, url, caption: {
-            "id": "provider-post-2", "media_type": "IMAGE", "media_url": url,
-            "permalink": "https://instagram.example/p/2", "caption": caption,
-            "timestamp": datetime(2026, 10, 22, tzinfo=timezone.utc).isoformat(),
+            "id": "provider-post-2",
+            "media_type": "IMAGE",
+            "media_url": url,
+            "permalink": "https://instagram.example/p/2",
+            "caption": caption,
+            "timestamp": datetime(2026, 10, 22, tzinfo=UTC).isoformat(),
         },
     )
     request = PublishInput(
-        caption="Stored", hashtags="#private", mime_type="image/jpeg",
+        caption="Stored",
+        hashtags="#private",
+        mime_type="image/jpeg",
         object_name="draft-assets/user-1/image.jpg",
     )
 
@@ -138,16 +159,25 @@ def test_instagram_adapter_uploads_and_publishes_short_video():
         repository_loader=lambda: repository,
         uploader=lambda data, name, mime: uploaded.append((data, name, mime)) or "https://temporary.example/video.mp4",
         provider_publisher=lambda *args: (_ for _ in ()).throw(AssertionError("image publisher must not be used")),
-        video_publisher=lambda token, user_id, url, caption: published.append((token, user_id, url, caption)) or {
-            "id": "provider-reel-1", "media_type": "VIDEO", "media_url": url,
-            "thumbnail_url": "https://instagram.example/thumb.jpg",
-            "permalink": "https://instagram.example/reel/1", "caption": caption,
-            "timestamp": datetime(2026, 11, 17, tzinfo=timezone.utc).isoformat(),
-        },
+        video_publisher=lambda token, user_id, url, caption: (
+            published.append((token, user_id, url, caption))
+            or {
+                "id": "provider-reel-1",
+                "media_type": "VIDEO",
+                "media_url": url,
+                "thumbnail_url": "https://instagram.example/thumb.jpg",
+                "permalink": "https://instagram.example/reel/1",
+                "caption": caption,
+                "timestamp": datetime(2026, 11, 17, tzinfo=UTC).isoformat(),
+            }
+        ),
     )
     request = PublishInput(
-        caption="Video", hashtags="#reel", mime_type="video/mp4",
-        encoded_media=base64.b64encode(video).decode(), duration_seconds=59.5,
+        caption="Video",
+        hashtags="#reel",
+        mime_type="video/mp4",
+        encoded_media=base64.b64encode(video).decode(),
+        duration_seconds=59.5,
     )
 
     result = adapter.publish("user-1", request)
@@ -166,8 +196,11 @@ def test_instagram_adapter_rejects_video_longer_than_one_minute():
         token_loader=lambda value: "token",
     )
     request = PublishInput(
-        caption="Video", hashtags="", mime_type="video/mp4",
-        encoded_media=base64.b64encode(b"video").decode(), duration_seconds=60.1,
+        caption="Video",
+        hashtags="",
+        mime_type="video/mp4",
+        encoded_media=base64.b64encode(b"video").decode(),
+        duration_seconds=60.1,
     )
 
     result = adapter.validate(request)

@@ -17,6 +17,7 @@ __pycache__/
 .venv/
 venv/
 backend/data/*.json
+backend/data/*.db
 !backend/data/store.example.json
 
 # local development tools

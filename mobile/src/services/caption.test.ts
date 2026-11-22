@@ -1,16 +1,16 @@
-import { buildMockCaption } from './caption';
+import { buildMockCaption } from "./caption";
 
-describe('buildMockCaption', () => {
-  it('creates an editable caption from information without network access', () => {
+describe("buildMockCaption", () => {
+  it("creates an editable caption from information without network access", () => {
     const result = buildMockCaption({
-      information: 'Calm Content Workflow. Plan once and reuse ideas.',
-      goal: 'Educate',
-      platform: 'Instagram',
-      image: { mime_type: 'image/jpeg', data: 'image-data' },
+      information: "Calm Content Workflow. Plan once and reuse ideas.",
+      goal: "Educate",
+      platform: "Instagram",
+      image: { mime_type: "image/jpeg", data: "image-data" },
     });
-    expect(result.caption).toContain('Calm Content Workflow');
-    expect(result.caption).toContain('Plan once and reuse ideas.');
-    expect(result.hashtags).toContain('#calm');
-    expect(result.hashtags).toContain('#postbridge');
+    expect(result.caption).toContain("Calm Content Workflow");
+    expect(result.caption).toContain("Plan once and reuse ideas.");
+    expect(result.hashtags).toContain("#calm");
+    expect(result.hashtags).toContain("#postbridge");
   });
 });

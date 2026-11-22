@@ -2,6 +2,8 @@
 
 Audited: 2026-11-01. This report contains aggregate counts and non-secret identifiers only.
 
+> Update 2026-11-22: `backend/models/` (the numeric views predictor and its training script) was deleted together with the retired `/predict` endpoints. It remains available in git history. The audit conclusion is unchanged: no eligible trained Summary model exists.
+
 ## Result
 
 One trained artifact exists: `backend/models/model.pkl` (962 bytes). It is a joblib bundle containing a scikit-learn `LinearRegression` numeric views predictor. It is not a text-generating feedback model and is disabled for Summary feedback. No tuned-model endpoint, hosted feedback endpoint, model bucket/object path, notebook, or additional model artifact was found in the working tree or full git history.

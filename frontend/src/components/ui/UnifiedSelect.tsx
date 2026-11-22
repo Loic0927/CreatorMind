@@ -29,9 +29,23 @@ type UnifiedSelectProps = {
 const OPEN_EVENT = "postbridge:select-open";
 
 export function UnifiedSelect({
-  label, helper, options, value = "", values = [], onChange, onValuesChange,
-  multiple = false, max, compact = false, placeholder = "Choose an option", disabled = false,
-  error, title, otherOptionValue, otherValue = "", onOtherValueChange,
+  label,
+  helper,
+  options,
+  value = "",
+  values = [],
+  onChange,
+  onValuesChange,
+  multiple = false,
+  max,
+  compact = false,
+  placeholder = "Choose an option",
+  disabled = false,
+  error,
+  title,
+  otherOptionValue,
+  otherValue = "",
+  onOtherValueChange,
   otherPlaceholder = "Please specify",
 }: UnifiedSelectProps) {
   const id = useId();
@@ -41,13 +55,17 @@ export function UnifiedSelect({
   const [search, setSearch] = useState("");
   const [isSmall, setIsSmall] = useState(false);
   const [desktopPlacement, setDesktopPlacement] = useState<"bottom start" | "top start">("bottom start");
-  const selected = useMemo(() => new Set(multiple ? values : options.some((option) => option.value === value) ? [value] : []), [multiple, options, value, values]);
+  const selected = useMemo(
+    () => new Set(multiple ? values : options.some((option) => option.value === value) ? [value] : []),
+    [multiple, options, value, values],
+  );
   const selectedOptions = options.filter((option) => selected.has(option.value));
   const atMax = multiple && max != null && values.length >= max;
   const searchable = options.length > 8;
-  const visibleOptions = searchable && search
-    ? options.filter((option) => option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
-    : options;
+  const visibleOptions =
+    searchable && search
+      ? options.filter((option) => option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+      : options;
   const showOther = Boolean(otherOptionValue && selected.has(otherOptionValue) && onOtherValueChange);
 
   useEffect(() => {
@@ -84,7 +102,9 @@ export function UnifiedSelect({
 
   useEffect(() => {
     if (!open) return;
-    const closeOnTab = (event: KeyboardEvent) => { if (event.key === "Tab") setOpen(false); };
+    const closeOnTab = (event: KeyboardEvent) => {
+      if (event.key === "Tab") setOpen(false);
+    };
     document.addEventListener("keydown", closeOnTab);
     return () => document.removeEventListener("keydown", closeOnTab);
   }, [open]);
@@ -143,23 +163,46 @@ export function UnifiedSelect({
               isDisabled={option.disabled || maxDisabled}
               className="unified-select-option"
             >
-              {({ isSelected }) => <>
-                {multiple ? <span className={`unified-select-checkbox${isSelected ? " is-checked" : ""}`} aria-hidden="true"><CheckIcon /></span> : null}
-                <span>{option.label}</span>
-                {!multiple && isSelected ? <span className="unified-select-check" aria-hidden="true"><CheckIcon /></span> : null}
-              </>}
+              {({ isSelected }) => (
+                <>
+                  {multiple ? (
+                    <span className={`unified-select-checkbox${isSelected ? " is-checked" : ""}`} aria-hidden="true">
+                      <CheckIcon />
+                    </span>
+                  ) : null}
+                  <span>{option.label}</span>
+                  {!multiple && isSelected ? (
+                    <span className="unified-select-check" aria-hidden="true">
+                      <CheckIcon />
+                    </span>
+                  ) : null}
+                </>
+              )}
             </ListBoxItem>
           );
         })}
       </ListBox>
-      {multiple && max != null ? <div className="unified-select-footer" aria-live="polite">{values.length} of {max} selected</div> : null}
-      {isSmall && multiple ? <button type="button" className="unified-select-done" onClick={() => changeOpen(false)}>Done</button> : null}
+      {multiple && max != null ? (
+        <div className="unified-select-footer" aria-live="polite">
+          {values.length} of {max} selected
+        </div>
+      ) : null}
+      {isSmall && multiple ? (
+        <button type="button" className="unified-select-done" onClick={() => changeOpen(false)}>
+          Done
+        </button>
+      ) : null}
     </div>
   );
 
   return (
     <div className={`unified-select-field${compact ? " is-compact" : ""}${error ? " has-error" : ""}`}>
-      {!compact ? <div className="unified-select-label-row"><span className="unified-select-label">{label}</span>{helper ? <span className="unified-select-helper">{helper}</span> : null}</div> : null}
+      {!compact ? (
+        <div className="unified-select-label-row">
+          <span className="unified-select-label">{label}</span>
+          {helper ? <span className="unified-select-helper">{helper}</span> : null}
+        </div>
+      ) : null}
       <Button
         ref={triggerRef}
         type="button"
@@ -172,16 +215,30 @@ export function UnifiedSelect({
         onPress={() => changeOpen(!open)}
       >
         <span className={`unified-select-value${selectedOptions.length ? "" : " is-placeholder"}`}>
-          {multiple && selectedOptions.length ? <span className="unified-select-chips">
-            {selectedOptions.slice(0, 2).map((option) => <span className="unified-select-chip" key={option.value}>{option.label}</span>)}
-            {selectedOptions.length > 2 ? <span className="unified-select-chip">+{selectedOptions.length - 2}</span> : null}
-          </span> : compact && triggerText ? `${label}: ${triggerText}` : triggerText || placeholder}
+          {multiple && selectedOptions.length ? (
+            <span className="unified-select-chips">
+              {selectedOptions.slice(0, 2).map((option) => (
+                <span className="unified-select-chip" key={option.value}>
+                  {option.label}
+                </span>
+              ))}
+              {selectedOptions.length > 2 ? (
+                <span className="unified-select-chip">+{selectedOptions.length - 2}</span>
+              ) : null}
+            </span>
+          ) : compact && triggerText ? (
+            `${label}: ${triggerText}`
+          ) : (
+            triggerText || placeholder
+          )}
         </span>
         <ChevronIcon />
       </Button>
       {isSmall ? (
         <ModalOverlay isOpen={open} onOpenChange={changeOpen} isDismissable className="unified-select-scrim">
-          <Modal className="unified-select-sheet"><Dialog aria-label={title || label}>{panel}</Dialog></Modal>
+          <Modal className="unified-select-sheet">
+            <Dialog aria-label={title || label}>{panel}</Dialog>
+          </Modal>
         </ModalOverlay>
       ) : (
         <Popover
@@ -193,19 +250,45 @@ export function UnifiedSelect({
           shouldFlip
           isNonModal
           className="unified-select-popover"
-        >{panel}</Popover>
+        >
+          {panel}
+        </Popover>
       )}
-      {showOther ? <input className="unified-select-other" aria-label={`${label} other value`} value={otherValue} onChange={(event) => onOtherValueChange?.(event.target.value)} placeholder={otherPlaceholder} /> : null}
-      {error ? <span className="unified-select-error" role="alert">{error}</span> : null}
-      {multiple ? <span className="sr-only" aria-live="polite">{values.length} selected</span> : null}
+      {showOther ? (
+        <input
+          className="unified-select-other"
+          aria-label={`${label} other value`}
+          value={otherValue}
+          onChange={(event) => onOtherValueChange?.(event.target.value)}
+          placeholder={otherPlaceholder}
+        />
+      ) : null}
+      {error ? (
+        <span className="unified-select-error" role="alert">
+          {error}
+        </span>
+      ) : null}
+      {multiple ? (
+        <span className="sr-only" aria-live="polite">
+          {values.length} selected
+        </span>
+      ) : null}
     </div>
   );
 }
 
 function ChevronIcon() {
-  return <svg className="unified-select-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="m3 6 5 5 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  return (
+    <svg className="unified-select-chevron" aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path d="m3 6 5 5 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function CheckIcon() {
-  return <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="m2.5 7 3 3 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+  return (
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="m2.5 7 3 3 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }

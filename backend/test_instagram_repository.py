@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.fernet import Fernet
@@ -30,7 +30,7 @@ def repository():
 
 
 def test_state_create_consume_and_replay(repository):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     repository.create_oauth_state("nonce-1", "user-1", now + timedelta(minutes=5))
 
     assert repository.consume_oauth_state("nonce-1", now) == "user-1"
@@ -38,7 +38,7 @@ def test_state_create_consume_and_replay(repository):
 
 
 def test_expired_state_cannot_be_consumed(repository):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     repository.create_oauth_state("nonce-expired", "user-1", now - timedelta(seconds=1))
 
     assert repository.consume_oauth_state("nonce-expired", now) is None
@@ -53,10 +53,10 @@ def _account(username: str = "creator") -> InstagramAccount:
         account_type="BUSINESS",
         media_count=3,
         encrypted_access_token="",
-        token_expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        token_expires_at=datetime.now(UTC) + timedelta(days=30),
         scopes=["instagram_business_basic"],
         status="connected",
-        connected_at=datetime.now(timezone.utc),
+        connected_at=datetime.now(UTC),
     )
 
 
@@ -92,7 +92,7 @@ def test_connection_create_update_read_delete(repository, monkeypatch):
 
 def test_tracking_start_is_set_once_and_survives_reauthorization(repository, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    first_start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    first_start = datetime(2026, 11, 1, tzinfo=UTC)
     created = repository.upsert_connection(
         _account().model_copy(update={"tracking_start_at": first_start}),
         encrypted_token=encrypt_access_token("first-token"),
@@ -129,7 +129,7 @@ def test_database_failure_does_not_expose_credentials():
         repository.create_oauth_state(
             "nonce",
             "user",
-            datetime.now(timezone.utc) + timedelta(minutes=5),
+            datetime.now(UTC) + timedelta(minutes=5),
         )
 
     assert "database-password-should-not-escape" not in str(failure.value)

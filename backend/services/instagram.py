@@ -5,8 +5,8 @@ import json
 import os
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -17,7 +17,6 @@ from backend.storage.instagram_repository import (
     InstagramRepositoryError,
     get_instagram_repository,
 )
-
 
 INSTAGRAM_AUTH_URL = "https://www.instagram.com/oauth/authorize"
 INSTAGRAM_TOKEN_URL = "https://api.instagram.com/oauth/access_token"
@@ -33,12 +32,20 @@ INSTAGRAM_SCOPES = (
 def instagram_comment_ingestion_enabled(user_id: str | None = None, instagram_user_id: str | None = None) -> bool:
     if os.getenv("POSTBRIDGE_INSTAGRAM_COMMENTS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
         return True
-    allowed = {value.strip() for value in os.getenv("POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST", "").split(",") if value.strip()}
+    allowed = {
+        value.strip()
+        for value in os.getenv("POSTBRIDGE_INSTAGRAM_COMMENT_ACCOUNT_ALLOWLIST", "").split(",")
+        if value.strip()
+    }
     return bool(allowed.intersection({value for value in (user_id, instagram_user_id) if value}))
 
 
 def instagram_scopes(user_id: str | None = None, instagram_user_id: str | None = None) -> tuple[str, ...]:
-    return INSTAGRAM_SCOPES + (("instagram_business_manage_comments",) if instagram_comment_ingestion_enabled(user_id, instagram_user_id) else ())
+    return INSTAGRAM_SCOPES + (
+        ("instagram_business_manage_comments",)
+        if instagram_comment_ingestion_enabled(user_id, instagram_user_id)
+        else ()
+    )
 
 
 def granted_instagram_scopes(token_payload: dict[str, Any]) -> tuple[str, ...]:
@@ -90,7 +97,7 @@ def instagram_configured() -> bool:
     return all(os.getenv(name) for name in required)
 
 
-def instagram_app_return_uri(requested_uri: Optional[str] = None) -> str:
+def instagram_app_return_uri(requested_uri: str | None = None) -> str:
     """Return the single server-controlled mobile OAuth destination.
 
     A caller may supply a URI only for equality validation. It can never select an
@@ -113,7 +120,7 @@ def instagram_app_return_uri(requested_uri: Optional[str] = None) -> str:
     return configured
 
 
-def build_app_return_url(status: str, code: Optional[str] = None, client: str = "mobile") -> str:
+def build_app_return_url(status: str, code: str | None = None, client: str = "mobile") -> str:
     query = {"status": status}
     if code:
         query["code"] = code
@@ -129,7 +136,7 @@ def build_app_return_url(status: str, code: Optional[str] = None, client: str = 
 def create_oauth_state(user_id: str, lifetime_seconds: int = 600, client: str = "mobile") -> str:
     if client not in {"mobile", "web"}:
         raise InstagramServiceError("instagram_invalid_client", "Instagram connection client is invalid.", 400)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now + timedelta(seconds=lifetime_seconds)
     payload = {
         "user_id": user_id,
@@ -137,18 +144,14 @@ def create_oauth_state(user_id: str, lifetime_seconds: int = 600, client: str = 
         "exp": int(expires_at.timestamp()),
         "client": client,
     }
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(payload, separators=(",", ":")).encode()
-    ).rstrip(b"=")
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).rstrip(b"=")
     signature = hmac.new(
         _required_env("POSTBRIDGE_OAUTH_STATE_SECRET").encode(),
         encoded,
         hashlib.sha256,
     ).digest()
     try:
-        get_instagram_repository().create_oauth_state(
-            payload["nonce"], user_id, expires_at
-        )
+        get_instagram_repository().create_oauth_state(payload["nonce"], user_id, expires_at)
     except InstagramRepositoryError:
         raise InstagramServiceError(
             "instagram_storage_unavailable",
@@ -166,22 +169,16 @@ def consume_oauth_state_context(state: str) -> tuple[str, str]:
             encoded.encode(),
             hashlib.sha256,
         ).digest()
-        supplied = base64.urlsafe_b64decode(
-            supplied_signature + "=" * (-len(supplied_signature) % 4)
-        )
+        supplied = base64.urlsafe_b64decode(supplied_signature + "=" * (-len(supplied_signature) % 4))
         if not hmac.compare_digest(expected, supplied):
             raise ValueError
-        payload = json.loads(
-            base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-        )
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
         nonce = str(payload["nonce"])
         if int(payload["exp"]) < int(time.time()):
             raise ValueError
         expected_user_id = str(payload["user_id"])
         try:
-            stored_user_id = get_instagram_repository().consume_oauth_state(
-                nonce, datetime.now(timezone.utc)
-            )
+            stored_user_id = get_instagram_repository().consume_oauth_state(nonce, datetime.now(UTC))
         except InstagramRepositoryError:
             raise InstagramServiceError(
                 "instagram_storage_unavailable",
@@ -209,14 +206,18 @@ def consume_oauth_state(state: str) -> str:
 
 
 def build_authorization_url(state: str, user_id: str | None = None) -> str:
-    return INSTAGRAM_AUTH_URL + "?" + urlencode(
-        {
-            "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
-            "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
-            "response_type": "code",
-            "scope": ",".join(instagram_scopes(user_id)),
-            "state": state,
-        }
+    return (
+        INSTAGRAM_AUTH_URL
+        + "?"
+        + urlencode(
+            {
+                "client_id": _required_env("POSTBRIDGE_INSTAGRAM_CLIENT_ID"),
+                "redirect_uri": _required_env("POSTBRIDGE_INSTAGRAM_REDIRECT_URI"),
+                "response_type": "code",
+                "scope": ",".join(instagram_scopes(user_id)),
+                "state": state,
+            }
+        )
     )
 
 
@@ -224,8 +225,8 @@ def _request_json(
     method: str,
     url: str,
     *,
-    form: Optional[dict[str, str]] = None,
-    query: Optional[dict[str, str]] = None,
+    form: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if query:
         url = f"{url}?{urlencode(query)}"
@@ -400,6 +401,7 @@ def fetch_instagram_media(access_token: str) -> list[dict[str, Any]]:
 
 def fetch_instagram_comments(access_token: str, instagram_media_id: str) -> list[dict[str, Any]]:
     """Fetch comment text and counts without requesting or returning usernames."""
+
     def privacy_safe_comment(value: dict[str, Any]) -> dict[str, Any]:
         author = value.get("from") if isinstance(value.get("from"), dict) else {}
         return {
@@ -541,10 +543,19 @@ def fetch_instagram_media_insights(
 ) -> dict[str, Any]:
     """Fetch the metrics supported for a media item without fabricating missing values."""
     metrics: dict[str, Any] = {}
-    status = {name: "unavailable" for name in (
-        "likes", "comments", "reach", "saves", "shares", "views",
-        "average_watch_time_ms", "total_watch_time_ms",
-    )}
+    status = {
+        name: "unavailable"
+        for name in (
+            "likes",
+            "comments",
+            "reach",
+            "saves",
+            "shares",
+            "views",
+            "average_watch_time_ms",
+            "total_watch_time_ms",
+        )
+    }
     retryable_codes = {"instagram_token_invalid", "instagram_rate_limited", "instagram_upstream_error"}
     try:
         basic = _request_json(
@@ -601,7 +612,9 @@ def fetch_instagram_media_insights(
                 if not isinstance(data, list) or not data:
                     continue
                 metric = data[0] if isinstance(data[0], dict) else {}
-                value = metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
+                value = (
+                    metric.get("total_value", {}).get("value") if isinstance(metric.get("total_value"), dict) else None
+                )
                 if value is None and isinstance(metric.get("values"), list) and metric["values"]:
                     value = metric["values"][0].get("value")
                 if isinstance(value, (int, float)):
@@ -610,13 +623,21 @@ def fetch_instagram_media_insights(
             except InstagramServiceError as exc:
                 if exc.code in retryable_codes:
                     raise
-                status[local_name] = "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
+                status[local_name] = (
+                    "permission_required" if exc.code == "instagram_permission_required" else "unavailable"
+                )
     metrics["_metric_status"] = status
     metrics["_media_type"] = (media_type or "UNKNOWN").upper()
     if not any(isinstance(metrics.get(name), int) for name in status):
         if "permission_required" in status.values():
-            raise InstagramServiceError("instagram_permission_required", "Instagram insight permission is required.", 403)
-        raise InstagramServiceError("instagram_media_unavailable", "This Instagram post is no longer accessible or has no available insights.", 404)
+            raise InstagramServiceError(
+                "instagram_permission_required", "Instagram insight permission is required.", 403
+            )
+        raise InstagramServiceError(
+            "instagram_media_unavailable",
+            "This Instagram post is no longer accessible or has no available insights.",
+            404,
+        )
     return metrics
 
 
@@ -644,11 +665,11 @@ def decrypt_access_token(encrypted_token: str) -> str:
         ) from exc
 
 
-def token_expiry(payload: dict[str, Any]) -> Optional[datetime]:
+def token_expiry(payload: dict[str, Any]) -> datetime | None:
     expires_in = payload.get("expires_in")
     if not isinstance(expires_in, (int, float)):
         return None
-    return datetime.fromtimestamp(time.time() + float(expires_in), timezone.utc)
+    return datetime.fromtimestamp(time.time() + float(expires_in), UTC)
 
 
 def engagement_rate(metrics: dict[str, Any]) -> float | None:
@@ -670,44 +691,41 @@ def engagement_rate(metrics: dict[str, Any]) -> float | None:
 
 def safe_raw_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     allowed = {
-        "likes", "comments", "saves", "shares", "reach", "views", "impressions",
-        "average_watch_time_ms", "total_watch_time_ms",
+        "likes",
+        "comments",
+        "saves",
+        "shares",
+        "reach",
+        "views",
+        "impressions",
+        "average_watch_time_ms",
+        "total_watch_time_ms",
     }
     return {key: value for key, value in metrics.items() if key in allowed}
 
 
-def aggregate_seven_days(
-    media: list[Any], snapshots: list[Any], now: Optional[datetime] = None
-) -> dict[str, Any]:
-    current = now or datetime.now(timezone.utc)
+def aggregate_seven_days(media: list[Any], snapshots: list[Any], now: datetime | None = None) -> dict[str, Any]:
+    current = now or datetime.now(UTC)
     start_timestamp = current.timestamp() - 7 * 24 * 60 * 60
     recent_media = [
         item
         for item in media
-        if item.published_at.replace(tzinfo=item.published_at.tzinfo or timezone.utc).timestamp()
-        >= start_timestamp
+        if item.published_at.replace(tzinfo=item.published_at.tzinfo or UTC).timestamp() >= start_timestamp
     ]
     latest: dict[str, Any] = {}
     for snapshot in snapshots:
         if snapshot.media_id in {item.id for item in recent_media} and (
-            snapshot.media_id not in latest
-            or snapshot.captured_at > latest[snapshot.media_id].captured_at
+            snapshot.media_id not in latest or snapshot.captured_at > latest[snapshot.media_id].captured_at
         ):
             latest[snapshot.media_id] = snapshot
-    totals: dict[str, Optional[int]] = {
-        name: 0 for name in ("reach", "views", "likes", "comments", "saves", "shares")
-    }
+    totals: dict[str, int | None] = {name: 0 for name in ("reach", "views", "likes", "comments", "saves", "shares")}
     for name in totals:
-        values = [
-            getattr(item, name)
-            for item in latest.values()
-            if getattr(item, name) is not None
-        ]
+        values = [getattr(item, name) for item in latest.values() if getattr(item, name) is not None]
         totals[name] = sum(values) if values else None
     totals["engagement_rate"] = engagement_rate(totals)
     return {
         "period": "7d",
-        "start": datetime.fromtimestamp(start_timestamp, timezone.utc).isoformat(),
+        "start": datetime.fromtimestamp(start_timestamp, UTC).isoformat(),
         "end": current.isoformat(),
         "posts": len(recent_media),
         "metrics": totals,

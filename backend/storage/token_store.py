@@ -9,10 +9,7 @@ import json
 from pathlib import Path
 from threading import Lock
 
-
-TOKEN_STORE_PATH = (
-    Path(__file__).resolve().parent.parent / "data" / "postbridge_tokens.local.json"
-)
+TOKEN_STORE_PATH = Path(__file__).resolve().parent.parent / "data" / "postbridge_tokens.local.json"
 _LOCK = Lock()
 
 

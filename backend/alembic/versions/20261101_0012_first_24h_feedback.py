@@ -4,8 +4,8 @@ Revision ID: 20261101_0012
 Revises: 20261030_0011
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20261101_0012"
 down_revision = "20261030_0011"
@@ -15,7 +15,9 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("instagram_connections") as batch:
-        batch.add_column(sa.Column("tracking_start_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+        batch.add_column(
+            sa.Column("tracking_start_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
+        )
     with op.batch_alter_table("tracked_posts") as batch:
         batch.add_column(sa.Column("first_24h_status", sa.String(32), nullable=False, server_default="collecting"))
         batch.add_column(sa.Column("first_24h_reason", sa.String(128), nullable=True))

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -61,9 +60,7 @@ def test_oci_production_image_is_non_root_and_has_entrypoint():
 
 
 def test_oci_backup_upload_preserves_private_dump_permissions():
-    script = (ROOT / "scripts" / "oci" / "backup-postgres.sh").read_text(
-        encoding="utf-8"
-    )
+    script = (ROOT / "scripts" / "oci" / "backup-postgres.sh").read_text(encoding="utf-8")
     assert "umask 077" in script
     assert '--user "$(id -u):$(id -g)"' in script
     assert "chmod 644" not in script
@@ -71,9 +68,7 @@ def test_oci_backup_upload_preserves_private_dump_permissions():
 
 def test_oci_frontend_image_is_standalone_and_non_root():
     dockerfile = (ROOT / "Dockerfile.frontend").read_text(encoding="utf-8")
-    next_config = (ROOT / "frontend" / "next.config.mjs").read_text(
-        encoding="utf-8"
-    )
+    next_config = (ROOT / "frontend" / "next.config.mjs").read_text(encoding="utf-8")
     assert 'output: "standalone"' in next_config
     assert "NEXT_PUBLIC_API_BASE_URL" in dockerfile
     assert "/app/.next/standalone" in dockerfile
@@ -83,12 +78,8 @@ def test_oci_frontend_image_is_standalone_and_non_root():
 
 
 def test_oci_nginx_and_certificates_cover_web_www_and_api():
-    nginx = (
-        ROOT / "deploy" / "oci" / "nginx" / "templates" / "default.conf.template"
-    ).read_text(encoding="utf-8")
-    certificate_script = (ROOT / "scripts" / "oci" / "init-https.sh").read_text(
-        encoding="utf-8"
-    )
+    nginx = (ROOT / "deploy" / "oci" / "nginx" / "templates" / "default.conf.template").read_text(encoding="utf-8")
+    certificate_script = (ROOT / "scripts" / "oci" / "init-https.sh").read_text(encoding="utf-8")
     for variable in (
         "NGINX_WEB_SERVER_NAME",
         "NGINX_WWW_SERVER_NAME",

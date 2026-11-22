@@ -4,10 +4,11 @@ import base64
 import binascii
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -22,7 +23,6 @@ from backend.storage.oci_object_storage import (
     download_private_bytes,
     upload_bytes_with_temporary_read_url,
 )
-
 
 SUPPORTED_INSTAGRAM_SOURCE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SUPPORTED_INSTAGRAM_VIDEO_TYPES = {"video/mp4", "video/quicktime"}
@@ -83,11 +83,19 @@ class PublicationResult:
     code: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {key: value for key, value in {
-            "platform": self.platform, "status": self.status, "message": self.message,
-            "provider_post_id": self.provider_post_id, "permalink": self.permalink,
-            "tracked_post_id": self.tracked_post_id, "code": self.code,
-        }.items() if value is not None}
+        return {
+            key: value
+            for key, value in {
+                "platform": self.platform,
+                "status": self.status,
+                "message": self.message,
+                "provider_post_id": self.provider_post_id,
+                "permalink": self.permalink,
+                "tracked_post_id": self.tracked_post_id,
+                "code": self.code,
+            }.items()
+            if value is not None
+        }
 
 
 class PublishingAdapter(ABC):
@@ -107,7 +115,9 @@ class PublishingAdapter(ABC):
 
     def normalize_error(self, exc: Exception) -> PublicationResult:
         return PublicationResult(
-            platform=self.platform, status="failed", code="publish_failed",
+            platform=self.platform,
+            status="failed",
+            code="publish_failed",
             message="Publishing failed.",
         )
 
@@ -161,7 +171,8 @@ class InstagramPublishingAdapter(PublishingAdapter):
             account = None
         available = bool(account and getattr(account, "status", None) == "connected")
         return PublishingCapability(
-            self.platform, available,
+            self.platform,
+            available,
             None if available else "Connect Instagram before publishing.",
         )
 
@@ -169,13 +180,17 @@ class InstagramPublishingAdapter(PublishingAdapter):
         supported_types = SUPPORTED_INSTAGRAM_SOURCE_TYPES | SUPPORTED_INSTAGRAM_VIDEO_TYPES
         if request.mime_type not in supported_types:
             return PublicationResult(
-                self.platform, "failed", "Choose a JPG, PNG, WebP, MP4 or MOV file.",
+                self.platform,
+                "failed",
+                "Choose a JPG, PNG, WebP, MP4 or MOV file.",
                 code="unsupported_media_format",
             )
         is_video = request.mime_type in SUPPORTED_INSTAGRAM_VIDEO_TYPES
         if is_video and (request.duration_seconds is None or not 0 < request.duration_seconds <= 60.05):
             return PublicationResult(
-                self.platform, "failed", "Choose a video that is one minute or shorter.",
+                self.platform,
+                "failed",
+                "Choose a video that is one minute or shorter.",
                 code="invalid_video_duration",
             )
         if request.object_name:
@@ -185,10 +200,17 @@ class InstagramPublishingAdapter(PublishingAdapter):
         try:
             media = base64.b64decode(request.encoded_media, validate=True)
         except (binascii.Error, ValueError):
-            return PublicationResult(self.platform, "failed", "Uploaded media is not valid base64 data.", code="invalid_media")
+            return PublicationResult(
+                self.platform, "failed", "Uploaded media is not valid base64 data.", code="invalid_media"
+            )
         max_bytes = min(int(os.getenv("POSTBRIDGE_MAX_UPLOAD_BYTES", "10485760")), 10 * 1024 * 1024)
         if not media or len(media) > max_bytes:
-            return PublicationResult(self.platform, "failed", "The publish media is empty or exceeds the configured limit.", code="media_too_large")
+            return PublicationResult(
+                self.platform,
+                "failed",
+                "The publish media is empty or exceeds the configured limit.",
+                code="media_too_large",
+            )
         return None
 
     def publish(self, user_id: str, request: PublishInput) -> PublicationResult:
@@ -209,28 +231,38 @@ class InstagramPublishingAdapter(PublishingAdapter):
             elif request.object_name and request.mime_type == "image/jpeg":
                 media_url = self._temporary_url_factory(request.object_name, lifetime_minutes=60)
             else:
-                source_bytes = self._object_loader(request.object_name) if request.object_name else base64.b64decode(request.encoded_media or "", validate=True)
+                source_bytes = (
+                    self._object_loader(request.object_name)
+                    if request.object_name
+                    else base64.b64decode(request.encoded_media or "", validate=True)
+                )
                 image_bytes = convert_to_instagram_jpeg(source_bytes, request.mime_type)
                 object_name = f"publication-assets/{user_id}/{uuid4()}.jpg"
                 media_url = self._uploader(image_bytes, object_name, "image/jpeg")
-            full_caption = "\n\n".join(
-                value.strip() for value in (request.caption, request.hashtags) if value.strip()
-            )
+            full_caption = "\n\n".join(value.strip() for value in (request.caption, request.hashtags) if value.strip())
             publisher = self._video_publisher if is_video else self._provider_publisher
             item = publisher(self._token_loader(account), account.instagram_user_id, media_url, full_caption)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             media_item = InstagramMedia(
-                id=f"instagram:{item['id']}", account_id=account.id,
-                instagram_media_id=str(item["id"]), media_type=str(item.get("media_type", "IMAGE")),
-                media_url=item.get("media_url"), thumbnail_url=item.get("thumbnail_url"),
-                permalink=item.get("permalink"), caption=str(item.get("caption", full_caption)),
-                published_at=_parse_timestamp(item.get("timestamp")), last_synced_at=now,
+                id=f"instagram:{item['id']}",
+                account_id=account.id,
+                instagram_media_id=str(item["id"]),
+                media_type=str(item.get("media_type", "IMAGE")),
+                media_url=item.get("media_url"),
+                thumbnail_url=item.get("thumbnail_url"),
+                permalink=item.get("permalink"),
+                caption=str(item.get("caption", full_caption)),
+                published_at=_parse_timestamp(item.get("timestamp")),
+                last_synced_at=now,
             )
             repository = self._repository_loader()
             repository.upsert_media([media_item])
             return PublicationResult(
-                self.platform, "published", "Published successfully.",
-                provider_post_id=media_item.instagram_media_id, permalink=media_item.permalink,
+                self.platform,
+                "published",
+                "Published successfully.",
+                provider_post_id=media_item.instagram_media_id,
+                permalink=media_item.permalink,
             )
         except Exception as exc:
             return self.normalize_error(exc)
@@ -242,13 +274,20 @@ class InstagramPublishingAdapter(PublishingAdapter):
 
     def normalize_error(self, exc: Exception) -> PublicationResult:
         if isinstance(exc, OCIStorageConfigurationError):
-            return PublicationResult(self.platform, "failed", "Private media storage is not configured for publishing.", code="media_storage_unavailable")
+            return PublicationResult(
+                self.platform,
+                "failed",
+                "Private media storage is not configured for publishing.",
+                code="media_storage_unavailable",
+            )
         if isinstance(exc, InstagramServiceError):
             return PublicationResult(self.platform, "failed", exc.message, code=exc.code)
         if isinstance(exc, HTTPException):
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             return PublicationResult(
-                self.platform, "failed", str(detail.get("message", "Instagram publishing failed.")),
+                self.platform,
+                "failed",
+                str(detail.get("message", "Instagram publishing failed.")),
                 code=str(detail.get("code", "publish_failed")),
             )
         return super().normalize_error(exc)
@@ -273,4 +312,4 @@ def _parse_timestamp(value: object) -> datetime:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             pass
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)

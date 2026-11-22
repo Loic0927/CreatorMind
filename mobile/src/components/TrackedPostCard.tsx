@@ -1,8 +1,47 @@
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { TrackedPost } from '../types';
-const metric = (value?: number | null, suffix = '') => value == null ? '—' : `${value}${suffix}`;
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { TrackedPost } from "../types";
+const metric = (value?: number | null, suffix = "") => (value == null ? "—" : `${value}${suffix}`);
 export function TrackedPostCard({ post, onPress }: { post: TrackedPost; onPress: () => void }) {
   const image = post.media.thumbnail_url || post.media.media_url;
-  return <Pressable onPress={onPress} style={styles.card}>{image ? <Image source={{ uri: image }} style={styles.image} /> : <View style={styles.image} />}<View style={styles.body}><Text style={styles.date}>{new Date(post.media.published_at).toLocaleDateString()}</Text><Text numberOfLines={2} style={styles.caption}>{post.media.caption || 'No caption'}</Text><View style={styles.grid}>{[['Likes', post.latest?.likes], ['Comments', post.latest?.comments], ['Saves', post.latest?.saves], ['Shares', post.latest?.shares], ['Reach', post.latest?.reach], ['Engagement', post.latest?.engagement_rate, '%']].map(([label, value, suffix]) => <View key={String(label)} style={styles.metric}><Text style={styles.metricValue}>{metric(value as number | null | undefined, String(suffix || ''))}</Text><Text style={styles.metricLabel}>{label}</Text></View>)}</View><Text style={styles.updated}>Last updated {post.latest ? new Date(post.latest.captured_at).toLocaleString() : '—'}</Text></View></Pressable>;
+  return (
+    <Pressable onPress={onPress} style={styles.card}>
+      {image ? <Image source={{ uri: image }} style={styles.image} /> : <View style={styles.image} />}
+      <View style={styles.body}>
+        <Text style={styles.date}>{new Date(post.media.published_at).toLocaleDateString()}</Text>
+        <Text numberOfLines={2} style={styles.caption}>
+          {post.media.caption || "No caption"}
+        </Text>
+        <View style={styles.grid}>
+          {[
+            ["Likes", post.latest?.likes],
+            ["Comments", post.latest?.comments],
+            ["Saves", post.latest?.saves],
+            ["Shares", post.latest?.shares],
+            ["Reach", post.latest?.reach],
+            ["Engagement", post.latest?.engagement_rate, "%"],
+          ].map(([label, value, suffix]) => (
+            <View key={String(label)} style={styles.metric}>
+              <Text style={styles.metricValue}>{metric(value as number | null | undefined, String(suffix || ""))}</Text>
+              <Text style={styles.metricLabel}>{label}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.updated}>
+          Last updated {post.latest ? new Date(post.latest.captured_at).toLocaleString() : "—"}
+        </Text>
+      </View>
+    </Pressable>
+  );
 }
-const styles = StyleSheet.create({ card: { backgroundColor: 'white', borderRadius: 18, borderWidth: 1, borderColor: '#E2E8F0', overflow: 'hidden' }, image: { width: '100%', aspectRatio: 1.5, backgroundColor: '#E0F2FE' }, body: { padding: 14, gap: 9 }, date: { color: '#64748B', fontSize: 12 }, caption: { color: '#0F172A', lineHeight: 20, fontWeight: '600' }, grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, metric: { width: '30%' }, metricValue: { fontWeight: '800', color: '#0F172A' }, metricLabel: { fontSize: 11, color: '#64748B' }, updated: { color: '#64748B', fontSize: 11 } });
+const styles = StyleSheet.create({
+  card: { backgroundColor: "white", borderRadius: 18, borderWidth: 1, borderColor: "#E2E8F0", overflow: "hidden" },
+  image: { width: "100%", aspectRatio: 1.5, backgroundColor: "#E0F2FE" },
+  body: { padding: 14, gap: 9 },
+  date: { color: "#64748B", fontSize: 12 },
+  caption: { color: "#0F172A", lineHeight: 20, fontWeight: "600" },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  metric: { width: "30%" },
+  metricValue: { fontWeight: "800", color: "#0F172A" },
+  metricLabel: { fontSize: 11, color: "#64748B" },
+  updated: { color: "#64748B", fontSize: 11 },
+});

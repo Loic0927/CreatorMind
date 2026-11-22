@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
-
 
 MIN_COMPARABLE_POSTS = 6
 PERCENTILE_RANGE_AT = 15
@@ -14,7 +13,7 @@ METRIC_ORDER = ("views", "reach", "engagement_rate", "shares", "saves", "comment
 
 
 def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 def _format_key(media_type: str) -> str:
@@ -45,7 +44,9 @@ def _rate(snapshot: Any | None) -> float | None:
         return round(float(snapshot.engagement_rate), 1)
     if not snapshot.reach:
         return None
-    values = [value for value in (snapshot.likes, snapshot.comments, snapshot.saves, snapshot.shares) if value is not None]
+    values = [
+        value for value in (snapshot.likes, snapshot.comments, snapshot.saves, snapshot.shares) if value is not None
+    ]
     return round(sum(values) / snapshot.reach * 100, 1) if values else None
 
 
@@ -88,7 +89,7 @@ def _post(item: dict[str, Any], now: datetime) -> dict[str, Any] | None:
 
 
 def performance_posts(items: list[dict[str, Any]], now: datetime | None = None) -> list[dict[str, Any]]:
-    current = _aware(now or datetime.now(timezone.utc))
+    current = _aware(now or datetime.now(UTC))
     posts = [post for item in items if (post := _post(item, current)) is not None and post["has_metrics"]]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for post in posts:
@@ -131,8 +132,14 @@ def _highlights(posts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         item("Highest reach", max(reach, key=lambda post: post["metrics"]["reach"]), "reach"),
         item("Lowest reach", min(reach, key=lambda post: post["metrics"]["reach"]), "reach"),
-        item("Highest engagement", max(engagement, key=lambda post: post["metrics"]["engagement_rate"]), "engagement_rate"),
-        item("Lowest engagement", min(engagement, key=lambda post: post["metrics"]["engagement_rate"]), "engagement_rate"),
+        item(
+            "Highest engagement",
+            max(engagement, key=lambda post: post["metrics"]["engagement_rate"]),
+            "engagement_rate",
+        ),
+        item(
+            "Lowest engagement", min(engagement, key=lambda post: post["metrics"]["engagement_rate"]), "engagement_rate"
+        ),
     ]
 
 
@@ -171,7 +178,10 @@ def _range_positions(current: float, lower: float, upper: float) -> tuple[float,
     domain_low = min(0.0, current, lower - span * 0.25)
     domain_high = max(current, upper + span * 0.25)
     domain_span = max(1.0, domain_high - domain_low)
-    position = lambda value: max(0.0, min(100.0, (value - domain_low) / domain_span * 100))
+
+    def position(value: float) -> float:
+        return max(0.0, min(100.0, (value - domain_low) / domain_span * 100))
+
     return position(lower), position(upper), position(current)
 
 
@@ -183,7 +193,7 @@ def build_post_analysis(
     audience_comments: dict[str, Any],
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    current_time = _aware(now or datetime.now(timezone.utc))
+    current_time = _aware(now or datetime.now(UTC))
     media = selected["media"]
     latest = _latest(selected)
     current_metrics = _metrics(latest)
@@ -191,7 +201,9 @@ def build_post_analysis(
     for item in items:
         if item.get("tracking") is None or item["tracking"].id == selected["tracking"].id or item.get("media") is None:
             continue
-        if _format_key(item["media"].media_type) != _format_key(media.media_type) or not _mature(item["media"], current_time):
+        if _format_key(item["media"].media_type) != _format_key(media.media_type) or not _mature(
+            item["media"], current_time
+        ):
             continue
         peer_items.append(item)
 
@@ -199,30 +211,34 @@ def build_post_analysis(
     if len(peer_items) >= MIN_COMPARABLE_POSTS:
         for metric in METRIC_ORDER:
             current_value = current_metrics.get(metric)
-            peer_values = [float(value) for item in peer_items if (value := _metrics(_latest(item)).get(metric)) is not None]
+            peer_values = [
+                float(value) for item in peer_items if (value := _metrics(_latest(item)).get(metric)) is not None
+            ]
             if current_value is None or len(peer_values) < MIN_COMPARABLE_POSTS:
                 continue
             if len(peer_values) >= PERCENTILE_RANGE_AT:
-                lower = _percentile(peer_values, .10)
-                upper = _percentile(peer_values, .90)
+                lower = _percentile(peer_values, 0.10)
+                upper = _percentile(peer_values, 0.90)
             else:
                 lower, upper = min(peer_values), max(peer_values)
             status = "above" if current_value > upper else "below" if current_value < lower else "inside"
             rank_values = sorted([*peer_values, float(current_value)], reverse=True)
             rank = rank_values.index(float(current_value)) + 1
             band_start, band_end, marker = _range_positions(float(current_value), lower, upper)
-            rows.append({
-                "metric": metric,
-                "value": _rounded(metric, float(current_value)),
-                "usual_min": _rounded(metric, lower),
-                "usual_max": _rounded(metric, upper),
-                "status": status,
-                "rank": rank,
-                "group_size": len(rank_values),
-                "band_start": round(band_start, 2),
-                "band_end": round(band_end, 2),
-                "marker": round(marker, 2),
-            })
+            rows.append(
+                {
+                    "metric": metric,
+                    "value": _rounded(metric, float(current_value)),
+                    "usual_min": _rounded(metric, lower),
+                    "usual_max": _rounded(metric, upper),
+                    "status": status,
+                    "rank": rank,
+                    "group_size": len(rank_values),
+                    "band_start": round(band_start, 2),
+                    "band_end": round(band_end, 2),
+                    "marker": round(marker, 2),
+                }
+            )
 
     stands_out = [row for row in rows if row["status"] == "above"]
     weaker = [row for row in rows if row["status"] == "below"]

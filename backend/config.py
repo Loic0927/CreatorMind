@@ -38,6 +38,4 @@ def validate_runtime_environment() -> None:
         return
     missing = [name for name in PRODUCTION_REQUIRED_ENV if not os.getenv(name)]
     if missing:
-        raise ConfigurationError(
-            "Production configuration is incomplete; missing: " + ", ".join(missing)
-        )
+        raise ConfigurationError("Production configuration is incomplete; missing: " + ", ".join(missing))

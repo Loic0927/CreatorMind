@@ -4,25 +4,69 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Literal
-from collections import Counter
-
 
 CONTEXT_STORAGE_VERSION = 3
 MAX_SERIALIZED_CONTEXT_LENGTH = 12000
 _WORDS = re.compile(r"[^\W_][\w'-]{1,}", re.UNICODE)
 _STOP_WORDS = {
-    "about", "account", "audience", "brand", "content", "creator", "family",
-    "focused", "friendly", "guidance", "people", "social", "this", "with",
-    "when", "from", "that", "their", "through", "into", "your", "the", "and",
-    "for", "are", "who", "enjoy", "based", "using", "make", "more",
+    "about",
+    "account",
+    "audience",
+    "brand",
+    "content",
+    "creator",
+    "family",
+    "focused",
+    "friendly",
+    "guidance",
+    "people",
+    "social",
+    "this",
+    "with",
+    "when",
+    "from",
+    "that",
+    "their",
+    "through",
+    "into",
+    "your",
+    "the",
+    "and",
+    "for",
+    "are",
+    "who",
+    "enjoy",
+    "based",
+    "using",
+    "make",
+    "more",
 }
 
 TONE_KEYS = {"warm", "direct", "playful", "educational", "professional", "conversational", "calm", "bold", "other"}
 CONTENT_FORMAT_KEYS = {"image", "carousel", "reel_video", "story", "text"}
-CAPTION_LANGUAGE_KEYS = {"auto", "english", "traditional_chinese", "simplified_chinese", "japanese", "korean", "spanish", "other"}
-PRIMARY_CATEGORY_KEYS = {"education", "entertainment", "inspiration", "personal", "product_service", "news_commentary", "community", "other"}
+CAPTION_LANGUAGE_KEYS = {
+    "auto",
+    "english",
+    "traditional_chinese",
+    "simplified_chinese",
+    "japanese",
+    "korean",
+    "spanish",
+    "other",
+}
+PRIMARY_CATEGORY_KEYS = {
+    "education",
+    "entertainment",
+    "inspiration",
+    "personal",
+    "product_service",
+    "news_commentary",
+    "community",
+    "other",
+}
 AUDIENCE_AGE_KEYS = {"under_18", "18_24", "25_34", "35_44", "45_54", "55_64", "65_plus"}
 
 
@@ -59,10 +103,13 @@ def normalize_context_fields(value: AccountContextFields) -> AccountContextField
     tones = tuple(dict.fromkeys(key for key in value.tone_keys if key in TONE_KEYS))[:3]
     formats = tuple(dict.fromkeys(key for key in value.content_formats if key in CONTENT_FORMAT_KEYS))
     ages = tuple(dict.fromkeys(key for key in value.audience_age_ranges if key in AUDIENCE_AGE_KEYS))
-    hashtags = tuple(dict.fromkeys(
-        f"#{cleaned}" for item in value.preferred_hashtags
-        if (cleaned := re.sub(r"[^\w\-]", "", str(item or "").lstrip("#"), flags=re.UNICODE))
-    ))[:10]
+    hashtags = tuple(
+        dict.fromkeys(
+            f"#{cleaned}"
+            for item in value.preferred_hashtags
+            if (cleaned := re.sub(r"[^\w\-]", "", str(item or "").lstrip("#"), flags=re.UNICODE))
+        )
+    )[:10]
     return AccountContextFields(
         account_theme=_clean(value.account_theme, 300),
         about_this_account=_clean(value.about_this_account, 3000),
@@ -99,19 +146,21 @@ def deserialize_account_context(raw: str | None) -> AccountContextFields:
         return AccountContextFields(about_this_account=_clean(value, 3000))
     if not isinstance(payload, dict):
         return AccountContextFields(about_this_account=_clean(value, 3000))
-    return normalize_context_fields(AccountContextFields(
-        account_theme=payload.get("account_theme", ""),
-        about_this_account=payload.get("about_this_account", payload.get("account_context", "")),
-        target_audience=payload.get("target_audience", ""),
-        tone_keys=tuple(payload.get("tone_keys") or ()),
-        tone_other=payload.get("tone_other", ""),
-        content_formats=tuple(payload.get("content_formats") or ()),
-        caption_language=payload.get("caption_language", "auto"),
-        primary_category=payload.get("primary_category", ""),
-        primary_category_other=payload.get("primary_category_other", ""),
-        audience_age_ranges=tuple(payload.get("audience_age_ranges") or ()),
-        preferred_hashtags=tuple(payload.get("preferred_hashtags") or ()),
-    ))
+    return normalize_context_fields(
+        AccountContextFields(
+            account_theme=payload.get("account_theme", ""),
+            about_this_account=payload.get("about_this_account", payload.get("account_context", "")),
+            target_audience=payload.get("target_audience", ""),
+            tone_keys=tuple(payload.get("tone_keys") or ()),
+            tone_other=payload.get("tone_other", ""),
+            content_formats=tuple(payload.get("content_formats") or ()),
+            caption_language=payload.get("caption_language", "auto"),
+            primary_category=payload.get("primary_category", ""),
+            primary_category_other=payload.get("primary_category_other", ""),
+            audience_age_ranges=tuple(payload.get("audience_age_ranges") or ()),
+            preferred_hashtags=tuple(payload.get("preferred_hashtags") or ()),
+        )
+    )
 
 
 def context_as_dict(raw: str | None) -> dict[str, object]:
@@ -119,11 +168,7 @@ def context_as_dict(raw: str | None) -> dict[str, object]:
 
 
 def _keywords(value: str) -> set[str]:
-    return {
-        word.lower()
-        for word in _WORDS.findall(value)
-        if word.lower() not in _STOP_WORDS and not word.isdigit()
-    }
+    return {word.lower() for word in _WORDS.findall(value) if word.lower() not in _STOP_WORDS and not word.isdigit()}
 
 
 def _format_sections(fields: AccountContextFields, mode: Literal["creation", "analysis"]) -> str:
@@ -133,14 +178,16 @@ def _format_sections(fields: AccountContextFields, mode: Literal["creation", "an
         ("Target Audience", fields.target_audience),
     ]
     if mode == "creation":
-        sections.extend([
-            ("Tone", ", ".join(fields.tone_keys) + (f": {fields.tone_other}" if fields.tone_other else "")),
-            ("Content Formats", ", ".join(fields.content_formats)),
-            ("Caption Language", fields.caption_language),
-            ("Primary Category", fields.primary_category_other or fields.primary_category),
-            ("Audience Age (user supplied)", ", ".join(fields.audience_age_ranges)),
-            ("Preferred Hashtags (use only when relevant)", " ".join(fields.preferred_hashtags)),
-        ])
+        sections.extend(
+            [
+                ("Tone", ", ".join(fields.tone_keys) + (f": {fields.tone_other}" if fields.tone_other else "")),
+                ("Content Formats", ", ".join(fields.content_formats)),
+                ("Caption Language", fields.caption_language),
+                ("Primary Category", fields.primary_category_other or fields.primary_category),
+                ("Audience Age (user supplied)", ", ".join(fields.audience_age_ranges)),
+                ("Preferred Hashtags (use only when relevant)", " ".join(fields.preferred_hashtags)),
+            ]
+        )
     return "\n".join(f"{label}: {value}" for label, value in sections if value.strip())
 
 
@@ -155,12 +202,14 @@ def context_reference_for_content(
     if fields.is_empty():
         return ContextReference(text="", relevance="none", used=False)
 
-    theme_text = "\n".join((
-        fields.account_theme,
-        fields.about_this_account,
-        fields.target_audience,
-        " ".join(fields.preferred_hashtags),
-    ))
+    theme_text = "\n".join(
+        (
+            fields.account_theme,
+            fields.about_this_account,
+            fields.target_audience,
+            " ".join(fields.preferred_hashtags),
+        )
+    )
     theme_keywords = _keywords(theme_text)
     content_keywords = _keywords(content)
     related = not theme_keywords or bool(theme_keywords & content_keywords)
@@ -178,7 +227,15 @@ def suggest_context_from_posts(posts: list[dict[str, object]]) -> dict[str, obje
     formats = []
     for item in recent:
         media_type = str(item.get("media_type") or "").upper()
-        key = "reel_video" if media_type in {"VIDEO", "REELS"} else "carousel" if media_type == "CAROUSEL_ALBUM" else "image" if media_type == "IMAGE" else ""
+        key = (
+            "reel_video"
+            if media_type in {"VIDEO", "REELS"}
+            else "carousel"
+            if media_type == "CAROUSEL_ALBUM"
+            else "image"
+            if media_type == "IMAGE"
+            else ""
+        )
         if key and key not in formats:
             formats.append(key)
     combined = " ".join(cleaned_captions)
@@ -190,8 +247,12 @@ def suggest_context_from_posts(posts: list[dict[str, object]]) -> dict[str, obje
         language = "traditional_chinese" if re.search(r"[體臺灣這個與為會後]", combined) else "simplified_chinese"
     else:
         language = "english" if re.search(r"[A-Za-z]", combined) else "auto"
-    keywords = Counter(word.lower() for caption in cleaned_captions for word in _WORDS.findall(caption)
-                       if word.lower() not in _STOP_WORDS and len(word) > 2)
+    keywords = Counter(
+        word.lower()
+        for caption in cleaned_captions
+        for word in _WORDS.findall(caption)
+        if word.lower() not in _STOP_WORDS and len(word) > 2
+    )
     repeated = [word for word, count in keywords.most_common(5) if count >= 2]
     tones = []
     if any("?" in caption for caption in captions):
@@ -209,18 +270,28 @@ def suggest_context_from_posts(posts: list[dict[str, object]]) -> dict[str, obje
     }
     lowered = combined.lower()
     category_scores = {category: sum(lowered.count(cue) for cue in cues) for category, cues in purpose_cues.items()}
-    primary_category = max(category_scores, key=category_scores.get) if category_scores and max(category_scores.values()) > 0 else ""
+    primary_category = (
+        max(category_scores, key=category_scores.get) if category_scores and max(category_scores.values()) > 0 else ""
+    )
     return {
         "draft": {
             "account_theme": f"Recent captions often mention: {', '.join(repeated)}." if repeated else "",
             "about_this_account": f"Recent posts use {', '.join(formats)} formats." if formats else "",
-            "target_audience": "", "tone_keys": tones[:3], "tone_other": "",
-            "content_formats": formats, "caption_language": language,
-            "primary_category": primary_category, "primary_category_other": "", "audience_age_ranges": [],
+            "target_audience": "",
+            "tone_keys": tones[:3],
+            "tone_other": "",
+            "content_formats": formats,
+            "caption_language": language,
+            "primary_category": primary_category,
+            "primary_category_other": "",
+            "audience_age_ranges": [],
             "preferred_hashtags": [],
         },
-        "source": {"posts_considered": len(recent), "captions_considered": len(captions),
-                   "covers_available": sum(bool(item.get("thumbnail_url")) for item in recent)},
+        "source": {
+            "posts_considered": len(recent),
+            "captions_considered": len(captions),
+            "covers_available": sum(bool(item.get("thumbnail_url")) for item in recent),
+        },
         "not_inferred": ["audience demographics", "sensitive traits"],
     }
 
@@ -237,6 +308,11 @@ def preview_context(value: AccountContextFields) -> dict[str, object]:
         "spanish": "Una actualización sencilla y clara.",
     }
     sample = templates.get(fields.caption_language, f"A simple update written in a {tone} tone.")
-    return {"label": "Sample only", "caption": sample, "language": language,
-            "stored": False, "used_for": ["caption generation", "Create prefill"],
-            "not_used_for": ["performance facts", "metric comparisons"]}
+    return {
+        "label": "Sample only",
+        "caption": sample,
+        "language": language,
+        "stored": False,
+        "used_for": ["caption generation", "Create prefill"],
+        "not_used_for": ["performance facts", "metric comparisons"],
+    }

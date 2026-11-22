@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from alembic import command
 from alembic.config import Config
@@ -26,18 +26,19 @@ def test_draft_migration_preserves_populated_database(tmp_path, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_DATABASE_URL", url)
     command.upgrade(_config(), "20261022_0003")
     engine = create_engine(url)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     with engine.begin() as connection:
-        connection.execute(text(
-            "INSERT INTO users (id, email, created_at, updated_at) "
-            "VALUES ('existing-user', 'existing@example.test', :now, :now)"
-        ), {"now": now})
+        connection.execute(
+            text(
+                "INSERT INTO users (id, email, created_at, updated_at) "
+                "VALUES ('existing-user', 'existing@example.test', :now, :now)"
+            ),
+            {"now": now},
+        )
 
     command.upgrade(_config(), "head")
     with engine.connect() as connection:
-        row = connection.execute(text(
-            "SELECT email, account_context FROM users WHERE id = 'existing-user'"
-        )).one()
+        row = connection.execute(text("SELECT email, account_context FROM users WHERE id = 'existing-user'")).one()
     assert row.email == "existing@example.test"
     assert row.account_context == ""
     assert "post_drafts" in inspect(engine).get_table_names()

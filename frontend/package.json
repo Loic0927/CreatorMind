@@ -6,10 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run"
+    "test": "vitest run",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src"
   },
   "dependencies": {
-    "next": "16.4.2",
+    "next": "16.4.6",
     "react": "19.3.1",
     "react-aria-components": "^1.22.1",
     "react-dom": "19.3.1"
@@ -25,6 +27,7 @@
     "axe-core": "^4.14.0",
     "jsdom": "^25.0.1",
     "postcss": "8.5.31",
+    "prettier": "3.10.1",
     "tailwindcss": "3.4.17",
     "typescript": "5.7.2",
     "vitest": "^2.1.9"

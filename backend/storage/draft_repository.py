@@ -1,6 +1,6 @@
 """Account-scoped persistence for reusable media, drafts, and publications."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 from uuid import uuid4
@@ -33,7 +33,7 @@ class DraftConflictError(DraftRepositoryError):
 def _utc(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
         return value
-    return value.replace(tzinfo=timezone.utc)
+    return value.replace(tzinfo=UTC)
 
 
 class DraftRepository:
@@ -56,12 +56,19 @@ class DraftRepository:
         checksum_sha256: str,
         status: str = "uploaded",
     ) -> MediaAsset:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         record = MediaAssetRecord(
-            id=str(uuid4()), user_id=user_id, storage_provider=storage_provider,
-            object_name=object_name, original_filename=original_filename,
-            mime_type=mime_type, byte_size=byte_size, checksum_sha256=checksum_sha256,
-            status=status, created_at=now, updated_at=now,
+            id=str(uuid4()),
+            user_id=user_id,
+            storage_provider=storage_provider,
+            object_name=object_name,
+            original_filename=original_filename,
+            mime_type=mime_type,
+            byte_size=byte_size,
+            checksum_sha256=checksum_sha256,
+            status=status,
+            created_at=now,
+            updated_at=now,
         )
         try:
             with self._factory.begin() as session:
@@ -74,9 +81,12 @@ class DraftRepository:
     def get_media_asset(self, user_id: str, asset_id: str) -> MediaAsset | None:
         try:
             with self._factory() as session:
-                record = session.scalar(select(MediaAssetRecord).where(
-                    MediaAssetRecord.id == asset_id, MediaAssetRecord.user_id == user_id,
-                ))
+                record = session.scalar(
+                    select(MediaAssetRecord).where(
+                        MediaAssetRecord.id == asset_id,
+                        MediaAssetRecord.user_id == user_id,
+                    )
+                )
             return self._media(record) if record else None
         except Exception as exc:
             raise DraftRepositoryError("Draft storage is unavailable.") from exc
@@ -92,15 +102,22 @@ class DraftRepository:
         caption: str,
         hashtags: list[str],
     ) -> PostDraft:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         try:
             with self._factory.begin() as session:
                 self._require_owned_media(session, user_id, media_asset_id)
                 record = PostDraftRecord(
-                    id=str(uuid4()), user_id=user_id, media_asset_id=media_asset_id,
-                    target_platforms=target_platforms, content_brief=content_brief,
-                    goal=goal, caption=caption, hashtags=hashtags, status="draft",
-                    created_at=now, updated_at=now,
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    media_asset_id=media_asset_id,
+                    target_platforms=target_platforms,
+                    content_brief=content_brief,
+                    goal=goal,
+                    caption=caption,
+                    hashtags=hashtags,
+                    status="draft",
+                    created_at=now,
+                    updated_at=now,
                 )
                 session.add(record)
                 session.flush()
@@ -145,7 +162,7 @@ class DraftRepository:
                     self._require_owned_media(session, user_id, changes["media_asset_id"])
                 for key, value in changes.items():
                     setattr(record, key, value)
-                record.updated_at = datetime.now(timezone.utc)
+                record.updated_at = datetime.now(UTC)
                 session.flush()
                 return self._draft(record)
         except DraftRepositoryError:
@@ -161,10 +178,14 @@ class DraftRepository:
                     return False
                 if record.status not in {"draft", "failed"}:
                     raise DraftConflictError("A publishing or published draft cannot be deleted.")
-                publication = session.scalar(select(PostPublicationRecord.id).where(
-                    PostPublicationRecord.user_id == user_id,
-                    PostPublicationRecord.draft_id == draft_id,
-                ).limit(1))
+                publication = session.scalar(
+                    select(PostPublicationRecord.id)
+                    .where(
+                        PostPublicationRecord.user_id == user_id,
+                        PostPublicationRecord.draft_id == draft_id,
+                    )
+                    .limit(1)
+                )
                 if publication is not None:
                     raise DraftConflictError("A draft with publication history cannot be deleted.")
                 session.execute(delete(PostDraftRecord).where(PostDraftRecord.id == draft_id))
@@ -183,15 +204,20 @@ class DraftRepository:
         }
         try:
             with self._factory.begin() as session:
-                record = session.scalar(select(PostDraftRecord).where(
-                    PostDraftRecord.id == draft_id, PostDraftRecord.user_id == user_id,
-                ).with_for_update())
+                record = session.scalar(
+                    select(PostDraftRecord)
+                    .where(
+                        PostDraftRecord.id == draft_id,
+                        PostDraftRecord.user_id == user_id,
+                    )
+                    .with_for_update()
+                )
                 if record is None:
                     raise DraftNotFoundError("Draft not found.")
                 if status not in transitions.get(record.status, set()):
                     raise DraftConflictError(f"A {record.status} draft cannot transition to {status}.")
                 record.status = status
-                record.updated_at = datetime.now(timezone.utc)
+                record.updated_at = datetime.now(UTC)
                 session.flush()
                 return self._draft(record)
         except DraftRepositoryError:
@@ -203,7 +229,7 @@ class DraftRepository:
         self, user_id: str, draft_id: str, platform: str, idempotency_key: str
     ) -> tuple[PostPublication, bool]:
         """Return the existing attempt for a repeated key, otherwise create one."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         try:
             with self._factory.begin() as session:
                 draft = self._owned_draft(session, user_id, draft_id)
@@ -211,20 +237,31 @@ class DraftRepository:
                     raise DraftNotFoundError("Draft not found.")
                 if platform not in (draft.target_platforms or []):
                     raise DraftConflictError("The platform is not selected on this draft.")
-                existing = session.scalar(select(PostPublicationRecord).where(
-                    PostPublicationRecord.user_id == user_id,
-                    PostPublicationRecord.platform == platform,
-                    PostPublicationRecord.idempotency_key == idempotency_key,
-                ))
+                existing = session.scalar(
+                    select(PostPublicationRecord).where(
+                        PostPublicationRecord.user_id == user_id,
+                        PostPublicationRecord.platform == platform,
+                        PostPublicationRecord.idempotency_key == idempotency_key,
+                    )
+                )
                 if existing:
                     if existing.draft_id != draft_id:
                         raise DraftConflictError("The idempotency key belongs to another draft.")
                     return self._publication(existing), False
                 record = PostPublicationRecord(
-                    id=str(uuid4()), user_id=user_id, draft_id=draft_id, platform=platform,
-                    provider_media_id=None, provider_post_id=None,
-                    idempotency_key=idempotency_key, status="pending", error_code=None,
-                    error_message=None, created_at=now, updated_at=now, published_at=None,
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    draft_id=draft_id,
+                    platform=platform,
+                    provider_media_id=None,
+                    provider_post_id=None,
+                    idempotency_key=idempotency_key,
+                    status="pending",
+                    error_code=None,
+                    error_message=None,
+                    created_at=now,
+                    updated_at=now,
+                    published_at=None,
                 )
                 session.add(record)
                 session.flush()
@@ -232,11 +269,13 @@ class DraftRepository:
         except IntegrityError:
             try:
                 with self._factory() as session:
-                    existing = session.scalar(select(PostPublicationRecord).where(
-                        PostPublicationRecord.user_id == user_id,
-                        PostPublicationRecord.platform == platform,
-                        PostPublicationRecord.idempotency_key == idempotency_key,
-                    ))
+                    existing = session.scalar(
+                        select(PostPublicationRecord).where(
+                            PostPublicationRecord.user_id == user_id,
+                            PostPublicationRecord.platform == platform,
+                            PostPublicationRecord.idempotency_key == idempotency_key,
+                        )
+                    )
                 if existing and existing.draft_id == draft_id:
                     return self._publication(existing), False
                 raise DraftConflictError("The idempotency key belongs to another draft.")
@@ -254,10 +293,14 @@ class DraftRepository:
             with self._factory() as session:
                 if self._owned_draft(session, user_id, draft_id) is None:
                     raise DraftNotFoundError("Draft not found.")
-                records = session.scalars(select(PostPublicationRecord).where(
-                    PostPublicationRecord.user_id == user_id,
-                    PostPublicationRecord.draft_id == draft_id,
-                ).order_by(PostPublicationRecord.created_at.desc())).all()
+                records = session.scalars(
+                    select(PostPublicationRecord)
+                    .where(
+                        PostPublicationRecord.user_id == user_id,
+                        PostPublicationRecord.draft_id == draft_id,
+                    )
+                    .order_by(PostPublicationRecord.created_at.desc())
+                ).all()
             return [self._publication(item) for item in records]
         except DraftRepositoryError:
             raise
@@ -284,16 +327,18 @@ class DraftRepository:
         }
         try:
             with self._factory.begin() as session:
-                record = session.scalar(select(PostPublicationRecord).where(
-                    PostPublicationRecord.id == publication_id,
-                    PostPublicationRecord.user_id == user_id,
-                ).with_for_update())
+                record = session.scalar(
+                    select(PostPublicationRecord)
+                    .where(
+                        PostPublicationRecord.id == publication_id,
+                        PostPublicationRecord.user_id == user_id,
+                    )
+                    .with_for_update()
+                )
                 if record is None:
                     raise DraftNotFoundError("Publication not found.")
                 if status not in transitions.get(record.status, set()):
-                    raise DraftConflictError(
-                        f"A {record.status} publication cannot transition to {status}."
-                    )
+                    raise DraftConflictError(f"A {record.status} publication cannot transition to {status}.")
                 if status == "published" and not provider_post_id:
                     raise DraftConflictError("A published attempt requires a provider post ID.")
                 record.status = status
@@ -301,7 +346,7 @@ class DraftRepository:
                 record.provider_post_id = provider_post_id or record.provider_post_id
                 record.error_code = error_code if status == "failed" else None
                 record.error_message = error_message if status == "failed" else None
-                record.updated_at = datetime.now(timezone.utc)
+                record.updated_at = datetime.now(UTC)
                 record.published_at = record.updated_at if status == "published" else None
                 session.flush()
                 return self._publication(record)
@@ -312,48 +357,74 @@ class DraftRepository:
 
     @staticmethod
     def _owned_draft(session: Session, user_id: str, draft_id: str) -> PostDraftRecord | None:
-        return session.scalar(select(PostDraftRecord).where(
-            PostDraftRecord.id == draft_id, PostDraftRecord.user_id == user_id,
-        ))
+        return session.scalar(
+            select(PostDraftRecord).where(
+                PostDraftRecord.id == draft_id,
+                PostDraftRecord.user_id == user_id,
+            )
+        )
 
     @staticmethod
     def _require_owned_media(session: Session, user_id: str, asset_id: str | None) -> None:
         if asset_id is None:
             return
-        owned = session.scalar(select(MediaAssetRecord.id).where(
-            MediaAssetRecord.id == asset_id, MediaAssetRecord.user_id == user_id,
-            MediaAssetRecord.status.in_(("uploaded", "ready")),
-        ))
+        owned = session.scalar(
+            select(MediaAssetRecord.id).where(
+                MediaAssetRecord.id == asset_id,
+                MediaAssetRecord.user_id == user_id,
+                MediaAssetRecord.status.in_(("uploaded", "ready")),
+            )
+        )
         if owned is None:
             raise MediaAssetNotFoundError("Media asset not found.")
 
     @staticmethod
     def _media(item: MediaAssetRecord) -> MediaAsset:
         return MediaAsset(
-            id=item.id, user_id=item.user_id, storage_provider=item.storage_provider,
-            object_name=item.object_name, original_filename=item.original_filename,
-            mime_type=item.mime_type, byte_size=item.byte_size,
-            checksum_sha256=item.checksum_sha256, status=item.status,
-            created_at=_utc(item.created_at), updated_at=_utc(item.updated_at),
+            id=item.id,
+            user_id=item.user_id,
+            storage_provider=item.storage_provider,
+            object_name=item.object_name,
+            original_filename=item.original_filename,
+            mime_type=item.mime_type,
+            byte_size=item.byte_size,
+            checksum_sha256=item.checksum_sha256,
+            status=item.status,
+            created_at=_utc(item.created_at),
+            updated_at=_utc(item.updated_at),
         )
 
     @staticmethod
     def _draft(item: PostDraftRecord) -> PostDraft:
         return PostDraft(
-            id=item.id, user_id=item.user_id, media_asset_id=item.media_asset_id,
-            target_platforms=item.target_platforms or [], content_brief=item.content_brief,
-            goal=item.goal, caption=item.caption, hashtags=item.hashtags or [], status=item.status,
-            created_at=_utc(item.created_at), updated_at=_utc(item.updated_at),
+            id=item.id,
+            user_id=item.user_id,
+            media_asset_id=item.media_asset_id,
+            target_platforms=item.target_platforms or [],
+            content_brief=item.content_brief,
+            goal=item.goal,
+            caption=item.caption,
+            hashtags=item.hashtags or [],
+            status=item.status,
+            created_at=_utc(item.created_at),
+            updated_at=_utc(item.updated_at),
         )
 
     @staticmethod
     def _publication(item: PostPublicationRecord) -> PostPublication:
         return PostPublication(
-            id=item.id, user_id=item.user_id, draft_id=item.draft_id, platform=item.platform,
-            provider_media_id=item.provider_media_id, provider_post_id=item.provider_post_id,
-            idempotency_key=item.idempotency_key, status=item.status,
-            error_code=item.error_code, error_message=item.error_message,
-            created_at=_utc(item.created_at), updated_at=_utc(item.updated_at),
+            id=item.id,
+            user_id=item.user_id,
+            draft_id=item.draft_id,
+            platform=item.platform,
+            provider_media_id=item.provider_media_id,
+            provider_post_id=item.provider_post_id,
+            idempotency_key=item.idempotency_key,
+            status=item.status,
+            error_code=item.error_code,
+            error_message=item.error_message,
+            created_at=_utc(item.created_at),
+            updated_at=_utc(item.updated_at),
             published_at=_utc(item.published_at),
         )
 

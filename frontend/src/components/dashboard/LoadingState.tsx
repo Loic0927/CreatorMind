@@ -41,9 +41,9 @@ export function LoadingState({ label, description }: LoadingStateProps) {
       aria-label={label}
       aria-live="polite"
       tabIndex={-1}
-      className="fixed inset-0 z-[2000] grid place-items-center bg-[#c7cedd]/70 px-4 py-8 backdrop-blur-md focus:outline-none"
+      className="fixed inset-0 z-[2000] grid place-items-center bg-slate-300 px-4 py-8 backdrop-blur-md focus:outline-none"
     >
-      <div className="flex min-h-[320px] w-full max-w-xl flex-col items-center justify-center rounded-[2rem] border border-white/80 bg-[#f8faff]/95 px-6 py-10 text-center shadow-[0_28px_80px_rgba(30,22,51,.28)] sm:min-h-[390px] sm:px-12 sm:py-14">
+      <div className="flex min-h-[320px] w-full max-w-xl flex-col items-center justify-center rounded-[2rem] border border-white/80 bg-slate-50 px-6 py-10 text-center shadow-[0_28px_80px_rgba(15,23,42,.28)] sm:min-h-[390px] sm:px-12 sm:py-14">
         <div className="relative h-40 w-40 sm:h-48 sm:w-48" aria-hidden="true">
           {loadingFrames.map((frame) => (
             <img
@@ -55,13 +55,13 @@ export function LoadingState({ label, description }: LoadingStateProps) {
             />
           ))}
         </div>
-        <h2 className="mt-5 text-xl font-black text-[#201633] sm:text-2xl">{label}</h2>
+        <h2 className="mt-5 text-xl font-black text-slate-900 sm:text-2xl">{label}</h2>
         <div className="mt-5 flex items-center justify-center gap-3" aria-hidden="true">
           <span className="loading-dot" />
           <span className="loading-dot" />
           <span className="loading-dot" />
         </div>
-        {description ? <p className="mt-5 max-w-sm text-sm leading-6 text-[#5f587a]">{description}</p> : null}
+        {description ? <p className="mt-5 max-w-sm text-sm leading-6 text-slate-500">{description}</p> : null}
       </div>
     </div>
   );

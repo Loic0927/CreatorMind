@@ -6,7 +6,6 @@ from typing import Any
 
 from backend.storage.models import InstagramComment
 
-
 MIN_AUDIENCE_COMMENTS = 3
 
 

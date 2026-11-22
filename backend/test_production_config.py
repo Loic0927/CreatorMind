@@ -1,6 +1,6 @@
 import pytest
 
-from backend.config import ConfigurationError, PRODUCTION_REQUIRED_ENV, validate_runtime_environment
+from backend.config import PRODUCTION_REQUIRED_ENV, ConfigurationError, validate_runtime_environment
 from backend.main import health_check
 from backend.storage.instagram_repository import InstagramRepositoryError, get_instagram_repository
 

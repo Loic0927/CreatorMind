@@ -1,12 +1,13 @@
 import base64
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend import draft_api
-from backend import instagram_api
+from backend import draft_api, instagram_api
 from backend.auth import AuthenticatedUser, require_user
 from backend.services.publishing import PublicationResult, PublishingCapability
 from backend.storage.draft_repository import (
@@ -16,7 +17,6 @@ from backend.storage.draft_repository import (
     MediaAssetNotFoundError,
 )
 from backend.storage.sql_models import Base, PostDraftRecord, UserRecord
-from datetime import datetime, timezone
 
 
 @pytest.fixture
@@ -28,12 +28,14 @@ def draft_repository():
     )
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with factory.begin() as session:
-        session.add_all([
-            UserRecord(id="user-1", email="one@example.test", created_at=now, updated_at=now),
-            UserRecord(id="user-2", email="two@example.test", created_at=now, updated_at=now),
-        ])
+        session.add_all(
+            [
+                UserRecord(id="user-1", email="one@example.test", created_at=now, updated_at=now),
+                UserRecord(id="user-2", email="two@example.test", created_at=now, updated_at=now),
+            ]
+        )
     try:
         yield DraftRepository.from_engine(engine), factory
     finally:
@@ -122,9 +124,7 @@ def test_draft_and_publication_state_transitions_are_controlled(draft_repository
     assert repository.transition_publication("user-1", publication.id, "publishing").status == "publishing"
     with pytest.raises(DraftConflictError):
         repository.transition_publication("user-1", publication.id, "published")
-    published = repository.transition_publication(
-        "user-1", publication.id, "published", provider_post_id="provider-1"
-    )
+    published = repository.transition_publication("user-1", publication.id, "published", provider_post_id="provider-1")
     assert published.published_at is not None
     assert repository.transition_draft_status("user-1", draft.id, "published").status == "published"
 
@@ -136,14 +136,19 @@ def test_draft_api_happy_path_validation_and_isolation(draft_repository, monkeyp
     user_one = AuthenticatedUser(id="user-1", email="one@example.test", token_hash="hash")
     user_two = AuthenticatedUser(id="user-2", email="two@example.test", token_hash="hash")
 
-    created = draft_api.create_draft(draft_api.DraftCreate(**{
-        "media_asset_id": asset.id,
-        "target_platforms": ["Instagram", "Instagram"],
-        "content_brief": "A calm workspace",
-        "goal": "Engagement",
-        "caption": "Editable caption",
-        "hashtags": ["creator", "#Creator", "#workflow"],
-    }), user_one)
+    created = draft_api.create_draft(
+        draft_api.DraftCreate(
+            **{
+                "media_asset_id": asset.id,
+                "target_platforms": ["Instagram", "Instagram"],
+                "content_brief": "A calm workspace",
+                "goal": "Engagement",
+                "caption": "Editable caption",
+                "hashtags": ["creator", "#Creator", "#workflow"],
+            }
+        ),
+        user_one,
+    )
     assert created.target_platforms == ["Instagram"]
     assert created.hashtags == ["#creator", "#workflow"]
 
@@ -158,9 +163,16 @@ def test_draft_api_happy_path_validation_and_isolation(draft_repository, monkeyp
     assert protected.value.status_code == 404
 
     with pytest.raises(HTTPException) as invalid_media:
-        draft_api.create_draft(draft_api.DraftCreate(**{
-        "media_asset_id": asset.id, "target_platforms": ["Instagram"], "caption": "No access",
-        }), user_two)
+        draft_api.create_draft(
+            draft_api.DraftCreate(
+                **{
+                    "media_asset_id": asset.id,
+                    "target_platforms": ["Instagram"],
+                    "caption": "No access",
+                }
+            ),
+            user_two,
+        )
     assert invalid_media.value.status_code == 404
 
 
@@ -169,9 +181,13 @@ def test_draft_api_rejects_caption_over_selected_platform_limit(draft_repository
     monkeypatch.setattr(draft_api, "get_draft_repository", lambda: repository)
     user = AuthenticatedUser(id="user-1", email="one@example.test", token_hash="hash")
     with pytest.raises(HTTPException) as response:
-        draft_api.create_draft(draft_api.DraftCreate(
-            target_platforms=["Twitter"], caption="x" * 281,
-        ), user)
+        draft_api.create_draft(
+            draft_api.DraftCreate(
+                target_platforms=["Twitter"],
+                caption="x" * 281,
+            ),
+            user,
+        )
     assert response.value.status_code == 422
     assert response.value.detail["code"] == "caption_too_long"
 
@@ -187,16 +203,21 @@ def test_media_upload_validates_content_and_persists_private_metadata(draft_repo
     uploaded = []
     monkeypatch.setattr(draft_api, "get_draft_repository", lambda: repository)
     monkeypatch.setattr(
-        draft_api, "upload_private_bytes",
+        draft_api,
+        "upload_private_bytes",
         lambda body, object_name, mime_type: uploaded.append((body, object_name, mime_type)),
     )
     user = AuthenticatedUser(id="user-1", email="one@example.test", token_hash="hash")
     body = b"\xff\xd8\xff" + b"safe-jpeg"
 
-    asset = draft_api.upload_media_asset(draft_api.MediaAssetUpload(
-        filename="../campaign.jpg", mime_type="image/jpeg",
-        data=base64.b64encode(body).decode(),
-    ), user)
+    asset = draft_api.upload_media_asset(
+        draft_api.MediaAssetUpload(
+            filename="../campaign.jpg",
+            mime_type="image/jpeg",
+            data=base64.b64encode(body).decode(),
+        ),
+        user,
+    )
 
     assert asset.user_id == "user-1"
     assert asset.original_filename == "campaign.jpg"
@@ -206,10 +227,14 @@ def test_media_upload_validates_content_and_persists_private_metadata(draft_repo
     assert "user-1" in asset.object_name
 
     with pytest.raises(HTTPException) as invalid:
-        draft_api.upload_media_asset(draft_api.MediaAssetUpload(
-            filename="fake.jpg", mime_type="image/jpeg",
-            data=base64.b64encode(b"not really jpeg").decode(),
-        ), user)
+        draft_api.upload_media_asset(
+            draft_api.MediaAssetUpload(
+                filename="fake.jpg",
+                mime_type="image/jpeg",
+                data=base64.b64encode(b"not really jpeg").decode(),
+            ),
+            user,
+        )
     assert invalid.value.status_code == 422
     assert len(uploaded) == 1
 
@@ -234,8 +259,11 @@ def test_durable_publish_is_idempotent_and_records_provider_result(draft_reposit
         def publish(self, user_id, request):
             calls.append((user_id, request.object_name))
             return PublicationResult(
-                "Instagram", "published", "Published and tracked.",
-                provider_post_id="provider-1", tracked_post_id="tracked-1",
+                "Instagram",
+                "published",
+                "Published and tracked.",
+                provider_post_id="provider-1",
+                tracked_post_id="tracked-1",
             )
 
     class FakeRegistry:
@@ -245,7 +273,8 @@ def test_durable_publish_is_idempotent_and_records_provider_result(draft_reposit
     monkeypatch.setattr(draft_api, "get_draft_repository", lambda: repository)
     monkeypatch.setattr(instagram_api, "publishing_registry", lambda: FakeRegistry())
     payload = draft_api.DraftPublishRequest(
-        platforms=["Instagram"], idempotency_key="request-1234",
+        platforms=["Instagram"],
+        idempotency_key="request-1234",
     )
 
     first = draft_api.publish_draft(payload, draft.id, user)
@@ -264,9 +293,14 @@ def test_durable_publish_is_idempotent_and_records_provider_result(draft_reposit
 def test_unsupported_platform_media_validation_happens_before_publication_record(draft_repository, monkeypatch):
     repository, _ = draft_repository
     asset = repository.create_media_asset(
-        "user-1", storage_provider="oci", object_name="draft-assets/user-1/image.png",
-        original_filename="image.gif", mime_type="image/gif", byte_size=100,
-        checksum_sha256="b" * 64, status="ready",
+        "user-1",
+        storage_provider="oci",
+        object_name="draft-assets/user-1/image.png",
+        original_filename="image.gif",
+        mime_type="image/gif",
+        byte_size=100,
+        checksum_sha256="b" * 64,
+        status="ready",
     )
     draft = _draft(repository, media_asset_id=asset.id)
     user = AuthenticatedUser(id="user-1", email="one@example.test", token_hash="hash")
@@ -277,7 +311,9 @@ def test_unsupported_platform_media_validation_happens_before_publication_record
 
         def validate(self, request):
             return PublicationResult(
-                "Instagram", "failed", "Choose a JPG, PNG or WebP image.",
+                "Instagram",
+                "failed",
+                "Choose a JPG, PNG or WebP image.",
                 code="unsupported_image_format",
             )
 
@@ -291,9 +327,14 @@ def test_unsupported_platform_media_validation_happens_before_publication_record
     monkeypatch.setattr(draft_api, "get_draft_repository", lambda: repository)
     monkeypatch.setattr(instagram_api, "publishing_registry", lambda: FakeRegistry())
 
-    result = draft_api.publish_draft(draft_api.DraftPublishRequest(
-        platforms=["Instagram"], idempotency_key="invalid-media-1",
-    ), draft.id, user)
+    result = draft_api.publish_draft(
+        draft_api.DraftPublishRequest(
+            platforms=["Instagram"],
+            idempotency_key="invalid-media-1",
+        ),
+        draft.id,
+        user,
+    )
 
     assert result["results"][0]["code"] == "unsupported_image_format"
     assert repository.list_publications("user-1", draft.id) == []

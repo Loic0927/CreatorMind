@@ -1,219 +1,81 @@
 # PostBridge
 
-PostBridge is a full-stack creator app with one email-based account shared by the
-responsive Next.js web app and the Expo mobile app. It connects Instagram,
-tracks post insights at durable post-publish milestones, generates captions, and preserves the trained social-content
-prediction model in `backend/models/model.pkl`.
+PostBridge is a full-stack creator app. One email-based account is shared by the responsive
+Next.js web app and the Expo mobile app. Creators connect Instagram, generate captions with
+Gemini, publish image posts, and track per-post Instagram insights.
 
-OCI production deployment for `postbridge.dev` is documented in `docs/oci-deployment.md`; database backup and restore procedures are in `docs/oci-backup-restore.md`.
+- Production deployment (OCI, `postbridge.dev`): `docs/oci-deployment.md`
+- Backup and restore: `docs/oci-backup-restore.md`
+- Product plan and progress log: `plan.md`
+- Archived YouTube analysis (not deployed): `archive/youtube/README.md`
 
-Stack:
+## Stack
 
-- Frontend: Next.js + TypeScript + Tailwind
-- Backend: FastAPI
-- ML artifact: `backend/models/model.pkl`
-- Production persistence: PostgreSQL
-- Local development persistence: SQLite for accounts and optional JSON fallback for legacy content
+| Part | Technology |
+| --- | --- |
+| Web | Next.js + TypeScript + Tailwind (`frontend/`) |
+| Mobile | Expo / React Native (`mobile/`) |
+| API | FastAPI (`backend/`), Alembic migrations |
+| Storage | PostgreSQL in production, SQLite locally; private OCI Object Storage for media |
+| AI | Gemini, server-side only |
 
-## Project Setup
+## Environment files
 
-### Environment files
+FastAPI, Next.js, Expo, and the OCI deployment load different files. Only the templates belong
+in Git; copy the one you need and fill in real values. Client files must never contain provider
+secrets, OAuth client secrets, database credentials, or permanent access tokens.
 
-Environment files are intentionally separated because FastAPI, Next.js, Expo, and
-the OCI production deployment load different filenames from different directories.
-Do not combine secrets into a root client environment file.
+| Runtime | Template | Runtime file |
+| --- | --- | --- |
+| FastAPI | `backend/.env.example` | `backend/.env` |
+| Next.js | `frontend/.env.local.example` | `frontend/.env.local` |
+| Expo | `mobile/.env.example` | `mobile/.env.local` |
+| OCI production | `.env.oci.example` | `.env.oci` |
 
-| Runtime | Tracked template | Local/runtime file | Loaded by |
-| --- | --- | --- | --- |
-| FastAPI local backend | `backend/.env.example` | `backend/.env` | `backend/main.py` |
-| Next.js frontend | `frontend/.env.local.example` | `frontend/.env.local` | Next.js |
-| Expo mobile | `mobile/.env.example` | `mobile/.env.local` | Expo CLI |
-| OCI production | `.env.oci.example` | `.env.oci` | Docker Compose |
-
-Only templates belong in Git. The corresponding runtime files contain real values
-and are ignored. Copy only the template for the runtime you are starting, then
-replace its placeholders. Client files (`frontend/.env.local` and
-`mobile/.env.local`) must never contain provider secrets, OAuth client secrets,
-database credentials, or permanent access tokens.
-
-From the project root, install backend dependencies:
+## Local development
 
 ```bash
+# API (from the repository root)
 python -m pip install -r backend/requirements.txt
+python -m uvicorn backend.main:app --reload     # http://127.0.0.1:8000/docs
+
+# Web
+cd frontend && npm install && npm run dev       # http://localhost:3000
+
+# Mobile
+cd mobile && npm install && npx expo start
 ```
 
-Then install frontend dependencies:
+The web app expects `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000`.
 
-```bash
-cd frontend
-npm install
-```
+## Checks
 
-Create the frontend environment file:
+CI (`.github/workflows/ci.yml`) runs the same commands on every push and pull request:
 
-```bash
-copy .env.local.example .env.local
-```
+| Area | Commands |
+| --- | --- |
+| Backend | `ruff check`, `ruff format --check`, `python -m pytest backend` |
+| Web | `npm run format:check`, `npm test`, `npm run build` |
+| Mobile | `npm run format:check`, `npm run typecheck`, `npm run lint`, `npm test` |
 
-Configure backend integrations in `backend/.env`, using
-`backend/.env.example` as the complete local-backend reference. PostBridge uses
-the YouTube key only for the official YouTube Data API public `videos` endpoint;
-it does not scrape YouTube pages.
+Use `ruff format` and `npm run format` to fix formatting.
 
-## Backend
+## API overview
 
-Train the model bundle:
+All routes except sign-in and health checks require `Authorization: Bearer <session token>`.
 
-```bash
-python -m backend.models.train_model
-```
+| Area | Routes |
+| --- | --- |
+| Auth | `POST /auth/request-code`, `POST /auth/verify-code`, `GET /auth/session`, `POST /auth/logout`, `DELETE /auth/account` |
+| Account context | `GET/PATCH /auth/account-context`, `GET /auth/account-context/suggest`, `POST /auth/account-context/preview` |
+| Instagram | `/api/instagram/connection`, `/api/instagram/connect/start`, `/api/instagram/connect/callback`, `/api/instagram/account`, `/api/instagram/media` |
+| Tracking and insights | `/tracked-posts`, `/tracked-posts/{id}`, `/tracked-posts/{id}/refresh`, `/insights/account`, `/insights/instagram` |
+| Create and publish | `POST /mobile/caption`, `POST /media-assets`, `/drafts`, `/drafts/{id}/publish`, `GET /publishing/capabilities`, `POST /publications` |
+| Health | `GET /`, `GET /health` |
 
-Run the FastAPI server from the project root:
+## Abuse protection
 
-```bash
-python -m uvicorn backend.main:app --reload
-```
-
-Available routes:
-
-- `GET /`
-- `GET /health`
-- `POST /auth/request-code`
-- `POST /auth/verify-code`
-- `GET /auth/session`
-- `POST /auth/logout`
-- `DELETE /auth/account`
-- `POST /predict`
-- `POST /mobile/caption`
-- `POST /audit-content`
-- `POST /audit-youtube`
-- `GET /auth/youtube/start`
-- `GET /auth/youtube/callback`
-- `GET /auth/youtube/status`
-- `GET /dashboard/summary`
-- `GET /dashboard/recent-analyses`
-- `GET /dashboard/platform-status`
-- `GET /history`
-- `GET /docs`
-
-To verify the API in the browser:
-
-- Open `http://127.0.0.1:8000/docs`
-- Expand `POST /predict`
-- Click `Try it out`
-- Submit a payload such as:
-
-```json
-{
-  "platform": "TikTok",
-  "contentType": "Reel",
-  "captionLength": 120,
-  "postingHour": 19
-}
-```
-
-## Frontend
-
-Run the frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend expects the backend at:
-
-```env
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-```
-
-The same email address creates the same backend user on web and mobile. Both
-clients send an opaque bearer session to the API, so Instagram connections,
-tracked posts, insight snapshots, and saved predictions are account-scoped and
-available on either client.
-
-## Current Real Capabilities
-
-- Real prediction requests through `POST /predict`
-- Real model inference from `backend/models/model.pkl`
-- Real account-scoped prediction history persistence in PostgreSQL in production
-- Real dashboard summary data derived from saved prediction history
-- Real recent analyses list derived from saved prediction history
-- Real platform connection status responses from stored connection records
-
-## Dashboard Data
-
-Dashboard data is generated only from stored backend records:
-
-- `GET /dashboard/summary`
-  Returns saved prediction counts plus averages computed from persisted prediction history.
-- `GET /dashboard/recent-analyses`
-  Returns recent items from persisted prediction history.
-- `GET /dashboard/platform-status`
-  Returns real connection records when available, otherwise honest `not_connected` states.
-- `GET /history`
-  Returns saved prediction history entries.
-
-If no stored data exists yet, these endpoints return empty-safe values such as `0`, `null`, or empty arrays.
-
-## Platform Integrations
-
-Currently supported now:
-
-- Local prediction workflow through the CreatorMind backend
-- YouTube URL audit with official public YouTube Data API fields when `YOUTUBE_API_KEY` is configured
-- YouTube OAuth connection flow that stores a connected account per CreatorMind user for future advanced analytics
-
-Prepared only, not fully integrated yet:
-
-- Instagram: official owned-media Insights with an independent 1/3/6/12/24-hour tracking worker
-- YouTube: prepared for OAuth-backed private Analytics API workflows
-- TikTok: prepared only for official profile and video metadata import workflows
-
-Not supported yet:
-
-- Fabricated TikTok analytics access
-- Historical platform trend sync
-- Archive sync from live social platforms
-
-## YouTube Audit
-
-`POST /audit-youtube` can now fetch these real public fields from the official YouTube
-Data API:
-
-- `title`
-- `description`
-- `published_at`
-- `thumbnail_url`
-- `channel_title`
-- public `views`
-- public `likes` when available
-- public `comments` when available
-
-This is public metadata only. Advanced YouTube analytics still require OAuth-backed
-YouTube Analytics API access, including fields such as:
-
-- `averageViewDuration`
-- retention / audience watch behavior
-- subscriber attribution
-- traffic source analytics
-
-The OAuth connection flow is now implemented and stores the connected YouTube account
-state locally per application user. Advanced analytics fetch methods are still scaffolded, so CreatorMind
-stays honest and does not fabricate retention or private analytics values yet.
-
-## Model Verification
-
-When the trained model is being used successfully, the backend logs should include messages like:
-
-```text
-INFO:backend.main:MODEL PATH: ...\backend\models\model.pkl
-INFO:backend.main:MODEL EXISTS: True
-INFO:backend.main:MODEL TYPE: <class 'dict'>
-INFO:backend.main:USING MODEL BUNDLE: True
-INFO:backend.main:FEATURE VECTOR: [1, 2, 120, 6, 19]
-INFO:backend.main:USING REAL MODEL
-```
-
-If the model cannot be loaded, the backend will log that it is using the fallback heuristic instead.
+- Sign-in codes: 60-second cooldown, 5 attempts per code, and at most `POSTBRIDGE_LOGIN_CODES_PER_DAY`
+  (default 10) codes per email per 24 hours. Nginx also limits the sign-in routes per IP.
+- Caption generation: `POSTBRIDGE_CAPTION_LIMIT_PER_HOUR` (default 30) per user per API worker.
+- Deleting an account removes the user's database rows and their private media in OCI.
