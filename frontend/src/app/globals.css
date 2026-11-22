@@ -75,7 +75,8 @@ body {
 
 /* Cool-tone palette: keeps the existing component structure and utility classes intact. */
 [class*="bg-[#faf8ff]"],
-[class*="bg-[#f7f5ff]"],
+[class~="bg-[#f7f5ff]"],
+[class*="bg-[#f7f5ff]/"],
 [class*="bg-[#f6f3ff]"],
 [class*="bg-[#f2f3ff]"],
 [class*="bg-[#f7f8ff]"] { background-color: #f1f5f9 !important; }
@@ -103,6 +104,7 @@ body {
 [class*="bg-[#25005a]"] { background-color: #0369a1 !important; }
 [class*="bg-[rgba(218,226,253,0.4)]"] { background-color: rgba(224, 242, 254, .4) !important; }
 [class*="bg-[#ffdad6]"] { background-color: #fee2e2 !important; }
+[class*="hover:bg-[#f7f5ff]"]:hover { background-color: #f1f5f9 !important; }
 
 [class*="text-[#131b2e]"],
 [class*="text-[#201633]"],

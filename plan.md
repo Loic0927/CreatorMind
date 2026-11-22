@@ -220,6 +220,7 @@ Use this procedure for every normal production redeployment. Run the commands th
 ### Normal redeployment
 
 ```sh
+cd CreatorMind
 git pull --ff-only
 sh scripts/oci/update.sh
 sh scripts/oci/validate.sh

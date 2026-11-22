@@ -35,7 +35,7 @@ export default function DashboardPage() {
   return <div className="min-h-screen bg-[#f7f5ff] text-[#201633]">
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-[#e7e0f0] bg-white p-5 lg:flex lg:flex-col">
       <Brand />
-      <nav className="mt-10 -mx-5">{tabs.map((item) => <NavButton key={item.key} label={item.label} icon={item.icon} active={tab === item.key} onClick={() => setTab(item.key)} />)}</nav>
+      <nav className="mt-10 -mx-5 bg-white">{tabs.map((item) => <NavButton key={item.key} label={item.label} icon={item.icon} active={tab === item.key} onClick={() => setTab(item.key)} />)}</nav>
       <p className="mt-auto break-all rounded-2xl bg-[#f2edff] p-4 text-sm font-bold leading-5 text-[#5b516c]">{session.user.email}</p>
     </aside>
     <header className="sticky top-0 z-20 flex h-16 items-center border-b border-[#e7e0f0] bg-[#f7f5ff]/90 px-5 backdrop-blur lg:hidden"><Brand compact /></header>
@@ -50,7 +50,7 @@ export default function DashboardPage() {
   </div>;
 }
 
-function Brand({ compact = false }: { compact?: boolean }) { return <div className={`flex items-center justify-center gap-3 ${compact ? "lg:hidden" : ""}`}><img src="/brand/logo.png" alt="CreatorMind logo" className="h-10 w-10 rounded-xl object-contain" /><div className="font-black">PostBridge</div></div>; }
+function Brand({ compact = false }: { compact?: boolean }) { return <div className={`flex items-center justify-center gap-3 ${compact ? "lg:hidden" : ""}`}><img src="/brand/logo.png" alt="CreatorMind logo" className="h-14 w-14 rounded-xl object-contain" /><div className="text-xl font-black">PostBridge</div></div>; }
 function NavButton({ label, icon, active, onClick }: { label: string; icon: string; active: boolean; onClick: () => void }) { return <button onClick={onClick} className={`flex w-full items-center gap-3 px-9 py-3 text-sm font-bold ${active ? "bg-[#eee8fa] text-[#5b21b6]" : "text-[#746b82] hover:bg-[#f7f5ff]"}`}><span className="w-5 text-center text-lg">{icon}</span>{label}</button>; }
 function Card({ children }: { children: React.ReactNode }) { return <div className="rounded-3xl border border-[#e7e0f0] bg-white p-5 shadow-sm md:p-6">{children}</div>; }
 function ErrorText({ value }: { value: string }) { return value ? <div className="mb-5 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{value}</div> : null; }
