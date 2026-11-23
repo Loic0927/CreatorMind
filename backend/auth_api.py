@@ -211,12 +211,22 @@ def account_context(user: AuthenticatedUser = Depends(require_user)) -> dict:
 
 
 @router.patch("/account-context")
-def save_account_context(payload: AccountContextRequest, user: AuthenticatedUser = Depends(require_user)) -> dict:
+def save_account_context(
+    payload: AccountContextRequest,
+    user: AuthenticatedUser = Depends(require_user),
+    background_tasks: BackgroundTasks = None,
+) -> dict:
     try:
         encoded = serialize_account_context(AccountContextFields(**payload.model_dump()))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     update_account_context(user.id, encoded)
+    # Generated analysis includes the saved context in its input hash. Refresh
+    # it from this write-side event so read endpoints never need to generate.
+    if background_tasks is not None:
+        from backend.services.insight_refresh import refresh_cached_insights
+
+        background_tasks.add_task(refresh_cached_insights, user.id)
     return context_as_dict(encoded)
 
 

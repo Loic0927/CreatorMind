@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.auth import get_account_context
 from backend.services.account_insights import build_account_insights
 from backend.services.feedback import refresh_summary_for_user
 from backend.services.insight_texts import audience_description, next_post_suggestion
@@ -101,6 +102,7 @@ def refresh_cached_insights(user_id: str, tracked_post_id: str | None = None) ->
             user_id,
             _internal_posts(items, account_insights["performance_posts"]),
             comments_by_tracking,
+            account_context=get_account_context(user_id),
         )
     except Exception as exc:  # pragma: no cover - provider-specific logging path
         LOGGER.warning("suggestion_refresh_failed user_id=%s error_type=%s", user_id, type(exc).__name__)

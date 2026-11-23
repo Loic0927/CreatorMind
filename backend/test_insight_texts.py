@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import backend.services.insight_texts as insight_texts
+from backend.services.account_context import AccountContextFields, serialize_account_context
 from backend.services.gemini import GeminiUpstreamError
 
 
@@ -121,6 +122,34 @@ def test_next_post_suggestion_includes_video_watch_time_bucket_when_available(mo
         "lower",
         "usual",
     }
+
+
+def test_reflection_includes_matching_account_context_but_not_as_a_performance_signal(monkeypatch):
+    repository = _TextCacheRepository()
+    monkeypatch.setattr(insight_texts, "get_content_repository", lambda: repository)
+    posts = [_post(f"history-{index}", index * 100, media_type="REELS") for index in range(1, 7)]
+    latest = _post("latest", 1_000, media_type="REELS")
+    latest["caption"] = "A fursuit magic reveal #furry"
+    latest["published_at"] = datetime(2026, 11, 1, tzinfo=UTC).isoformat()
+    posts.append(latest)
+    context = serialize_account_context(
+        AccountContextFields(
+            about_this_account="Short videos of magic performances in a fursuit.",
+            target_audience="People in the furry fandom who enjoy magic tricks.",
+            preferred_hashtags=("#furry", "#magictrick"),
+        )
+    )
+    captured = {}
+
+    def generate(prompt: str) -> str:
+        captured["data"] = _prompt_data(prompt)
+        return "Reflection: The latest post is stronger than comparable history. Keep the clear reveal."
+
+    assert insight_texts.next_post_suggestion("user", posts, {}, account_context=context, generator=generate)
+    creator_context = captured["data"]["creator_context"]
+    assert "fursuit" in creator_context
+    assert "furry fandom" in creator_context
+    assert "performance_signals" not in creator_context
 
 
 def test_next_post_suggestion_uses_video_watch_time_when_reach_is_missing(monkeypatch):

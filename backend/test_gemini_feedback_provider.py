@@ -73,6 +73,25 @@ def test_gemini_feedback_retries_invalid_json_without_thread_timeout():
     assert len(calls) == 2
 
 
+def test_gemini_feedback_includes_untrusted_post_and_creator_context_when_supplied():
+    captured = {}
+
+    def generate(prompt: str, **_kwargs):
+        captured["prompt"] = prompt
+        return json.dumps(PAYLOAD)
+
+    context = {
+        "post_caption": "A fursuit magic reveal #furry",
+        "creator_context": "About This Account: Short fursuit magic performances\nTarget Audience: Furry magic fans",
+    }
+    feedback.GeminiFeedbackProvider(generator=generate).generate(FACTS, analysis_context=context)
+
+    assert "FACTS_JSON=" in captured["prompt"]
+    marker = "\nUNTRUSTED_POST_AND_CREATOR_CONTEXT_JSON="
+    assert marker in captured["prompt"]
+    assert json.loads(captured["prompt"].split(marker, 1)[1]) == context
+
+
 def test_gemini_feedback_accepts_a_json_object_wrapped_by_provider_presentation_text():
     wrapped = "Here is the requested JSON:\n```JSON\n" + json.dumps(PAYLOAD) + "\n```"
 
@@ -86,7 +105,7 @@ def test_generate_summary_persists_gemini_token_usage_in_generation_log(monkeypa
         name = "gemini"
         model = "unit-test-model"
 
-        def generate(self, facts, *, media_input=None):
+        def generate(self, facts, *, media_input=None, analysis_context=None):
             assert facts == FACTS
             assert media_input is None
             return feedback.FeedbackGeneration(payload=PAYLOAD, token_usage={"prompt_token_count": 7})

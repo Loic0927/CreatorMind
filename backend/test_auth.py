@@ -237,6 +237,23 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
     assert account_context(second)["about_this_account"] == ""
 
 
+def test_saving_account_context_queues_a_contextual_analysis_refresh(auth_database):
+    code = request_signup_code("context-refresh@example.test")["development_code"]
+    session = verify_code(signup_request("context-refresh@example.test", code))
+    user = auth.authenticate_token(session["access_token"])
+    tasks = BackgroundTasks()
+
+    save_account_context(
+        AccountContextRequest(about_this_account="Fursuit magic performances"),
+        user,
+        background_tasks=tasks,
+    )
+
+    assert len(tasks.tasks) == 1
+    assert tasks.tasks[0].func.__name__ == "refresh_cached_insights"
+    assert tasks.tasks[0].args == (user.id,)
+
+
 def test_legacy_account_context_fields_are_ignored(auth_database):
     code = request_signup_code("legacy@example.test")["development_code"]
     verified = verify_code(signup_request("legacy@example.test", code))

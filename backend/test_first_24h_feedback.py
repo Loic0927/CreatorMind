@@ -398,7 +398,7 @@ def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
         name = "trained"
         model = "bad"
 
-        def generate(self, facts):
+        def generate(self, facts, *, analysis_context=None):
             calls.append("trained")
             return _payload("It will grow.")
 
@@ -406,7 +406,7 @@ def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
         name = "gemini"
         model = "one"
 
-        def generate(self, facts):
+        def generate(self, facts, *, analysis_context=None):
             calls.append("gemini-one")
             return _payload()
 
@@ -418,7 +418,7 @@ def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
     class Changed(Good):
         model = "two"
 
-        def generate(self, facts):
+        def generate(self, facts, *, analysis_context=None):
             calls.append("gemini-two")
             return _payload("Attention continued accumulating across the observed checkpoints.")
 
@@ -438,7 +438,7 @@ def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeyp
         name = "gemini"
         model = "gemini-3.8-flash"
 
-        def generate(self, received_facts, *, media_input=None):
+        def generate(self, received_facts, *, media_input=None, analysis_context=None):
             captured["facts"] = received_facts
             captured["media_input"] = media_input
             return _payload("The attached video shows a clear visual sequence.", ids=["media_content"])
@@ -455,6 +455,37 @@ def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeyp
     assert result == "The attached video shows a clear visual sequence."
     assert captured["media_input"] == (b"video-content", "video/mp4")
     assert any(item["id"] == "media_content" for item in captured["facts"])
+
+
+def test_summary_passes_post_caption_and_matching_creator_context_to_gemini(monkeypatch):
+    repository = _SummaryCacheRepository()
+    captured = {}
+    facts = [
+        {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
+    ]
+
+    class Provider:
+        name = "gemini"
+        model = "unit"
+
+        def generate(self, _facts, *, media_input=None, analysis_context=None):
+            captured["context"] = analysis_context
+            return _payload()
+
+    monkeypatch.setattr(feedback, "get_content_repository", lambda: repository)
+    monkeypatch.setattr(feedback, "_selection", lambda: ([Provider()], "gemini:unit"))
+
+    assert feedback.generate_summary(
+        "user",
+        "post",
+        facts,
+        post_caption="A fursuit magic reveal #furry",
+        creator_context="About This Account: Fursuit magic performances\nTarget Audience: Furry magic fans",
+    )
+    assert captured["context"] == {
+        "post_caption": "A fursuit magic reveal #furry",
+        "creator_context": "About This Account: Fursuit magic performances\nTarget Audience: Furry magic fans",
+    }
 
 
 def test_summary_without_consent_uses_a_template_without_loading_media_or_calling_gemini(monkeypatch):
@@ -498,7 +529,7 @@ def test_summary_uses_stable_media_identity_and_loads_media_only_on_cache_miss(m
         name = "gemini"
         model = "unit"
 
-        def generate(self, _facts, *, media_input=None):
+        def generate(self, _facts, *, media_input=None, analysis_context=None):
             calls["provider"] += 1
             assert media_input == (b"first-download", "video/mp4")
             return _payload()
