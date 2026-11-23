@@ -42,23 +42,7 @@ from backend.services.publishing import (
     InstagramPublishingAdapter,
     PublishingAdapterRegistry,
     PublishInput,
-    TikTokPublishingAdapter,
     UnavailablePublishingAdapter,
-)
-from backend.services.tiktok import (
-    create_media_url as create_tiktok_media_url,
-)
-from backend.services.tiktok import (
-    fetch_creator_info as fetch_tiktok_creator_info,
-)
-from backend.services.tiktok import (
-    fetch_publish_status as fetch_tiktok_publish_status,
-)
-from backend.services.tiktok import (
-    initialize_photo_post as publish_tiktok_photo,
-)
-from backend.services.tiktok import (
-    initialize_video_post as publish_tiktok_video,
 )
 from backend.services.tracked_items import load_tracked_items
 from backend.storage.content_repository import get_content_repository
@@ -69,8 +53,6 @@ from backend.storage.instagram_repository import (
 )
 from backend.storage.models import InstagramAccount, InstagramMedia
 from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
-from backend.tiktok_api import access_token_for as tiktok_access_token
-from backend.tiktok_api import active_connection as active_tiktok_connection
 
 router = APIRouter()
 LOGGER = logging.getLogger("postbridge.instagram_api")
@@ -618,7 +600,6 @@ class PublishRequest(BaseModel):
     hashtags: str = Field(default="", max_length=1000)
     image: PublishImage | None = None
     media: PublishImage | None = None
-    platform_options: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
 def publishing_registry() -> PublishingAdapterRegistry:
@@ -631,15 +612,6 @@ def publishing_registry() -> PublishingAdapterRegistry:
                 uploader=upload_bytes_with_temporary_read_url,
                 provider_publisher=publish_instagram_image,
                 video_publisher=publish_instagram_reel,
-            ),
-            TikTokPublishingAdapter(
-                account_loader=active_tiktok_connection,
-                token_loader=tiktok_access_token,
-                creator_info_loader=fetch_tiktok_creator_info,
-                media_url_factory=create_tiktok_media_url,
-                photo_publisher=publish_tiktok_photo,
-                video_publisher=publish_tiktok_video,
-                status_loader=fetch_tiktok_publish_status,
             ),
             *[UnavailablePublishingAdapter(platform) for platform in ("Twitter", "Facebook", "Threads", "YouTube")],
         ]
@@ -678,7 +650,6 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
         mime_type=supplied_media.mime_type,
         encoded_media=supplied_media.data,
         duration_seconds=supplied_media.duration_seconds,
-        platform_options=payload.platform_options,
     )
     results = [registry.get(platform).publish(user_id, request).as_dict() for platform in platforms]
     return {"results": results}
