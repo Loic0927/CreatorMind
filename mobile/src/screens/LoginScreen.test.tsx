@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
+import { Alert } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Login } from "../../App";
 import { requestLoginCode, verifyLoginCode } from "../services/auth";
@@ -37,6 +38,7 @@ describe("mobile Login", () => {
     await fireEvent.press(view.getByRole("button", { name: "Create account" }));
     await fireEvent.changeText(view.getByLabelText("Email"), "new@example.com");
     await fireEvent.press(view.getByRole("button", { name: "Email me a code" }));
+    expect(requestLoginCode).toHaveBeenCalledWith("new@example.com", "sign_up");
     expect(await view.findByDisplayValue("123456")).toBeTruthy();
     await fireEvent.press(view.getByRole("button", { name: "Review and create account" }));
 
@@ -56,5 +58,27 @@ describe("mobile Login", () => {
       }),
     );
     expect(onLogin).toHaveBeenCalledWith(session);
+  });
+
+  it("reports an unknown account before showing the verification-code step", async () => {
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
+    jest.mocked(requestLoginCode).mockRejectedValue(new Error("No account exists for this email. Create one first."));
+    const view = await render(
+      <SafeAreaProvider initialMetrics={metrics}>
+        <Login onLogin={jest.fn()} />
+      </SafeAreaProvider>,
+    );
+
+    expect(view.queryByText("Back to homepage")).toBeNull();
+    expect(view.queryByText(/Welcome back/)).toBeNull();
+    await fireEvent.changeText(view.getByLabelText("Email"), "missing@example.com");
+    await fireEvent.press(view.getByRole("button", { name: "Email me a code" }));
+
+    await waitFor(() =>
+      expect(alert).toHaveBeenCalledWith("Sign in failed", "No account exists for this email. Create one first."),
+    );
+    expect(requestLoginCode).toHaveBeenCalledWith("missing@example.com", "sign_in");
+    expect(view.queryByLabelText("Verification code")).toBeNull();
+    expect(verifyLoginCode).not.toHaveBeenCalled();
   });
 });

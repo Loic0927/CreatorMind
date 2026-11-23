@@ -43,15 +43,18 @@ export async function getSession(): Promise<Session | null> {
   }
 }
 
-export async function requestLoginCode(email: string): Promise<{ developmentCode?: string }> {
+export type AuthIntent = "sign_in" | "sign_up";
+
+export async function requestLoginCode(
+  email: string,
+  intent: AuthIntent = "sign_in",
+): Promise<{ developmentCode?: string }> {
   const result = await json<{ development_code?: string }>("/auth/request-code", {
     method: "POST",
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, intent }),
   });
   return { developmentCode: result.development_code };
 }
-
-export type AuthIntent = "sign_in" | "sign_up";
 
 export async function verifyLoginCode(
   email: string,

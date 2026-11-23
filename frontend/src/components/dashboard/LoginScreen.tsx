@@ -40,7 +40,7 @@ export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) 
         onLogin(await verifyCode(email.trim(), code.trim(), { intent: "sign_in" }));
         return;
       }
-      const result = await requestCode(email.trim());
+      const result = await requestCode(email.trim(), intent);
       setSent(true);
       if (result.development_code) setCode(result.development_code);
     } catch (reason) {
@@ -73,14 +73,7 @@ export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) 
 
   return (
     <main className="min-h-screen overflow-y-auto bg-canvas-gradient px-5 py-8 sm:px-8 sm:py-12">
-      <Link
-        href="/"
-        className="inline-flex items-center gap-2 text-sm font-bold text-muted transition-colors hover:text-primary sm:text-base"
-      >
-        <span aria-hidden="true">←</span> Back to homepage
-      </Link>
-
-      <div className="mx-auto flex min-h-[calc(100vh-8rem)] max-w-2xl items-center justify-center py-8">
+      <div className="mx-auto flex min-h-[calc(100vh-6rem)] max-w-2xl items-center justify-center py-8">
         <section className="w-full rounded-[1.75rem] border border-white/80 bg-white/95 px-6 py-8 shadow-float sm:px-12 sm:py-10">
           <Image
             src="/loginpage.png"
@@ -91,11 +84,6 @@ export function LoginScreen({ onLogin }: { onLogin: (value: Session) => void }) 
             className="mx-auto h-40 w-40 object-contain sm:h-48 sm:w-48"
           />
           <h1 className="mt-1 text-center text-4xl font-black tracking-tight text-ink sm:text-5xl">{title}</h1>
-          <p className="mx-auto mt-3 max-w-md text-center text-sm leading-6 text-muted">
-            {intent === "sign_up"
-              ? "Create your PostBridge account with a secure email verification code."
-              : "Welcome back. We’ll email you a secure six-digit code—no password needed."}
-          </p>
 
           <div className="my-7 flex items-center gap-4 text-sm font-bold text-muted">
             <span className="h-px flex-1 bg-line" />

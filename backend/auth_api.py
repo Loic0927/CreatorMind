@@ -62,6 +62,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class EmailRequest(BaseModel):
     email: str
+    intent: Literal["sign_in", "sign_up"] = "sign_in"
 
 
 class VerifyCodeRequest(BaseModel):
@@ -97,6 +98,24 @@ def _consent_payload(user_id: str) -> dict:
 @router.post("/request-code")
 def request_code(payload: EmailRequest) -> dict:
     email = normalize_email(payload.email)
+    factory = session_factory()
+    with factory() as session:
+        account_exists = session.scalar(select(UserRecord.id).where(UserRecord.email == email)) is not None
+
+    if payload.intent == "sign_in" and not account_exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "account_not_found", "message": "No account exists for this email. Create one first."},
+        )
+    if payload.intent == "sign_up" and account_exists:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "account_exists",
+                "message": "An account already exists for this email. Sign in instead.",
+            },
+        )
+
     code = create_login_code(email)
     reviewer_login = reviewer_login_enabled_for(email)
     if reviewer_login:

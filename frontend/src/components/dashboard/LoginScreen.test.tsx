@@ -31,6 +31,7 @@ describe("LoginScreen", () => {
     await user.type(screen.getByLabelText("Email"), "new@example.com");
     await user.click(screen.getByRole("button", { name: "Email me a code" }));
 
+    expect(requestCode).toHaveBeenCalledWith("new@example.com", "sign_up");
     expect(await screen.findByLabelText("Verification code")).toHaveValue("123456");
     await user.click(screen.getByRole("button", { name: "Review and create account" }));
 
@@ -70,6 +71,23 @@ describe("LoginScreen", () => {
     await user.click(screen.getByRole("button", { name: "Email me a code" }));
     await user.click(await screen.findByRole("button", { name: "Verify and sign in" }));
 
+    expect(requestCode).toHaveBeenCalledWith("member@example.com", "sign_in");
     expect(verifyCode).toHaveBeenCalledWith("member@example.com", "654321", { intent: "sign_in" });
+  });
+
+  it("reports an unknown account before showing the verification-code step", async () => {
+    const user = userEvent.setup();
+    vi.mocked(requestCode).mockRejectedValue(new Error("No account exists for this email. Create one first."));
+
+    render(<LoginScreen onLogin={vi.fn()} />);
+    expect(screen.queryByText("Back to homepage")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Welcome back/)).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Email"), "missing@example.com");
+    await user.click(screen.getByRole("button", { name: "Email me a code" }));
+
+    expect(await screen.findByText("No account exists for this email. Create one first.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Verification code")).not.toBeInTheDocument();
+    expect(verifyCode).not.toHaveBeenCalled();
   });
 });

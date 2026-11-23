@@ -223,16 +223,17 @@ export function saveSession(session: Session | null) {
       ? window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session))
       : window.localStorage.removeItem(STORAGE_KEY);
 }
-export async function requestCode(email: string) {
+export type AuthIntent = "sign_in" | "sign_up";
+
+export async function requestCode(email: string, intent: AuthIntent = "sign_in") {
   return responseJson<{ sent: boolean; development_code?: string }>(
     await fetch(`${API_BASE_URL}/auth/request-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, intent }),
     }),
   );
 }
-export type AuthIntent = "sign_in" | "sign_up";
 export type VerifyCodeOptions = {
   intent?: AuthIntent;
   privacyTermsAccepted?: boolean;

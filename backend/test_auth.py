@@ -91,8 +91,12 @@ def signup_request(email: str, code: str, **overrides) -> VerifyCodeRequest:
     )
 
 
+def request_signup_code(email: str) -> dict:
+    return request_code(EmailRequest(email=email, intent="sign_up"))
+
+
 def test_email_code_creates_a_reusable_cross_client_session(auth_database):
-    requested = request_code(EmailRequest(email="Owner@Example.Test"))
+    requested = request_signup_code("Owner@Example.Test")
     assert requested["sent"] is True
     assert len(requested["development_code"]) == 6
 
@@ -105,7 +109,7 @@ def test_email_code_creates_a_reusable_cross_client_session(auth_database):
 
 
 def test_signup_requires_legal_and_ai_consent_before_creating_user(auth_database):
-    code = request_code(EmailRequest(email="new@example.test"))["development_code"]
+    code = request_signup_code("new@example.test")["development_code"]
 
     with pytest.raises(HTTPException) as rejected:
         verify_code(VerifyCodeRequest(email="new@example.test", code=code, intent="sign_up"))
@@ -118,17 +122,17 @@ def test_signup_requires_legal_and_ai_consent_before_creating_user(auth_database
 
 def test_sign_in_and_sign_up_are_distinct_flows(auth_database, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "0")
-    unknown_code = request_code(EmailRequest(email="unknown@example.test"))["development_code"]
     with pytest.raises(HTTPException) as missing:
-        verify_code(VerifyCodeRequest(email="unknown@example.test", code=unknown_code, intent="sign_in"))
+        request_code(EmailRequest(email="unknown@example.test", intent="sign_in"))
     assert missing.value.status_code == 404
     assert missing.value.detail["code"] == "account_not_found"
+    with auth_database() as session:
+        assert session.scalar(select(func.count()).select_from(LoginCodeRecord)) == 0
 
-    signup_code = request_code(EmailRequest(email="member@example.test"))["development_code"]
+    signup_code = request_signup_code("member@example.test")["development_code"]
     verify_code(signup_request("member@example.test", signup_code))
-    duplicate_code = request_code(EmailRequest(email="member@example.test"))["development_code"]
     with pytest.raises(HTTPException) as duplicate:
-        verify_code(signup_request("member@example.test", duplicate_code))
+        request_signup_code("member@example.test")
     assert duplicate.value.status_code == 409
     assert duplicate.value.detail["code"] == "account_exists"
 
@@ -138,7 +142,7 @@ def test_sign_in_and_sign_up_are_distinct_flows(auth_database, monkeypatch):
 
 
 def test_ai_processing_consent_is_explicit_and_revocation_clears_text_cache(auth_database):
-    code = request_code(EmailRequest(email="consent@example.test"))["development_code"]
+    code = request_signup_code("consent@example.test")["development_code"]
     verified = verify_code(signup_request("consent@example.test", code))
     user = auth.authenticate_token(verified["access_token"])
 
@@ -178,7 +182,7 @@ def test_ai_processing_consent_is_explicit_and_revocation_clears_text_cache(auth
 
 
 def test_login_code_cannot_be_replayed(auth_database):
-    requested = request_code(EmailRequest(email="owner@example.test"))
+    requested = request_signup_code("owner@example.test")
     payload = signup_request("owner@example.test", requested["development_code"])
     verify_code(payload)
     with pytest.raises(HTTPException) as replayed:
@@ -187,7 +191,7 @@ def test_login_code_cannot_be_replayed(auth_database):
 
 
 def test_failed_login_attempts_are_persisted(auth_database):
-    requested = request_code(EmailRequest(email="owner@example.test"))
+    requested = request_signup_code("owner@example.test")
     incorrect_code = "000000" if requested["development_code"] != "000000" else "999999"
     for _ in range(5):
         with pytest.raises(HTTPException):
@@ -199,10 +203,10 @@ def test_failed_login_attempts_are_persisted(auth_database):
 
 
 def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
-    first_code = request_code(EmailRequest(email="first@example.test"))["development_code"]
+    first_code = request_signup_code("first@example.test")["development_code"]
     first_session = verify_code(signup_request("first@example.test", first_code))
     first = auth.authenticate_token(first_session["access_token"])
-    second_code = request_code(EmailRequest(email="second@example.test"))["development_code"]
+    second_code = request_signup_code("second@example.test")["development_code"]
     second_session = verify_code(signup_request("second@example.test", second_code))
     second = auth.authenticate_token(second_session["access_token"])
 
@@ -234,7 +238,7 @@ def test_account_context_is_persisted_and_scoped_to_the_user(auth_database):
 
 
 def test_legacy_account_context_fields_are_ignored(auth_database):
-    code = request_code(EmailRequest(email="legacy@example.test"))["development_code"]
+    code = request_signup_code("legacy@example.test")["development_code"]
     verified = verify_code(signup_request("legacy@example.test", code))
     user = auth.authenticate_token(verified["access_token"])
     auth.update_account_context(
@@ -277,24 +281,24 @@ def test_recent_post_suggestion_is_editable_and_never_infers_sensitive_or_demogr
 def test_login_codes_are_capped_per_email_per_day(auth_database, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "0")
     monkeypatch.setenv("POSTBRIDGE_LOGIN_CODES_PER_DAY", "2")
-    first = request_code(EmailRequest(email="owner@example.test"))["development_code"]
-    request_code(EmailRequest(email="owner@example.test"))
+    first = request_signup_code("owner@example.test")["development_code"]
+    request_signup_code("owner@example.test")
 
     with pytest.raises(HTTPException) as capped:
-        request_code(EmailRequest(email="owner@example.test"))
+        request_signup_code("owner@example.test")
     assert capped.value.status_code == 429
     assert capped.value.detail["code"] == "too_many_codes"
 
     with pytest.raises(HTTPException):
         verify_code(VerifyCodeRequest(email="owner@example.test", code=first))
-    assert request_code(EmailRequest(email="other@example.test"))["sent"] is True
+    assert request_signup_code("other@example.test")["sent"] is True
 
 
 def test_reviewer_login_is_disabled_until_both_values_are_configured(auth_database, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_REVIEW_LOGIN_EMAIL", "reviewer@example.test")
     monkeypatch.delenv("POSTBRIDGE_REVIEW_LOGIN_CODE_HASH", raising=False)
 
-    response = request_code(EmailRequest(email="reviewer@example.test"))
+    response = request_signup_code("reviewer@example.test")
 
     assert response["sent"] is True
     assert "development_code" in response
@@ -307,13 +311,13 @@ def test_reviewer_login_uses_only_the_configured_email_and_hashed_code(auth_data
         hashlib.sha256(b"246810").hexdigest(),
     )
 
-    requested = request_code(EmailRequest(email="reviewer@example.test"))
+    requested = request_signup_code("reviewer@example.test")
     assert requested["sent"] is True
     assert "development_code" not in requested
     verified = verify_code(signup_request("REVIEWER@example.test", "246810"))
     assert verified["user"]["email"] == "reviewer@example.test"
 
-    other = request_code(EmailRequest(email="other@example.test"))
+    other = request_signup_code("other@example.test")
     assert "development_code" in other
     with pytest.raises(HTTPException) as rejected:
         verify_code(VerifyCodeRequest(email="other@example.test", code="246810"))
@@ -326,19 +330,19 @@ def test_reviewer_login_rejects_a_wrong_code_and_keeps_existing_rate_limits(auth
     monkeypatch.setenv("POSTBRIDGE_LOGIN_CODE_COOLDOWN_SECONDS", "0")
     monkeypatch.setenv("POSTBRIDGE_LOGIN_CODES_PER_DAY", "2")
 
-    request_code(EmailRequest(email="reviewer@example.test"))
+    request_signup_code("reviewer@example.test")
     with pytest.raises(HTTPException) as rejected:
         verify_code(signup_request("reviewer@example.test", "000000"))
     assert rejected.value.status_code == 401
-    request_code(EmailRequest(email="reviewer@example.test"))
+    request_signup_code("reviewer@example.test")
     with pytest.raises(HTTPException) as capped:
-        request_code(EmailRequest(email="reviewer@example.test"))
+        request_signup_code("reviewer@example.test")
     assert capped.value.status_code == 429
 
 
 def test_delete_account_removes_all_sql_records_with_foreign_keys_enabled(auth_database, monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_MEDIA_STORAGE", "local")
-    requested = request_code(EmailRequest(email="delete@example.test"))
+    requested = request_signup_code("delete@example.test")
     verified = verify_code(signup_request("delete@example.test", requested["development_code"]))
     user = auth.authenticate_token(verified["access_token"])
     now = datetime.now(UTC)

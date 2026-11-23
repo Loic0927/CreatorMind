@@ -23,7 +23,7 @@ import { SettingsScreen } from "./src/screens/SettingsScreen";
 import { TrackingReportScreen } from "./src/screens/TrackingReportScreen";
 import { AuthIntent, getSession, logout, requestLoginCode, verifyLoginCode, Session } from "./src/services/auth";
 import { connectInstagram, getConnection, getTrackedPost } from "./src/services/api";
-import { legalUrl, WEB_BASE_URL } from "./src/config/environment";
+import { legalUrl } from "./src/config/environment";
 import { AppScreen, Draft, InstagramConnection, TrackedPost } from "./src/types";
 import { colors } from "./src/theme/colors";
 
@@ -186,7 +186,7 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     setBusy(true);
     try {
       if (!sent) {
-        const result = await requestLoginCode(email.trim());
+        const result = await requestLoginCode(email.trim(), intent);
         setSent(true);
         if (result.developmentCode) setCode(result.developmentCode);
       } else {
@@ -227,9 +227,6 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={[styles.loginScroll, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 32 }]}
       >
-        <Pressable accessibilityRole="link" onPress={() => openUrl(WEB_BASE_URL)}>
-          <Text style={styles.backLink}>← Back to homepage</Text>
-        </Pressable>
         <View style={styles.loginCard}>
           <Image
             source={require("./assets/loginpage.png")}
@@ -239,11 +236,6 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
           />
           <Text accessibilityRole="header" style={styles.loginTitle}>
             {title}
-          </Text>
-          <Text style={styles.loginDescription}>
-            {intent === "sign_up"
-              ? "Create your PostBridge account with a secure email verification code."
-              : "Welcome back. We’ll email you a secure six-digit code—no password needed."}
           </Text>
           <View style={styles.loginDividerRow}>
             <View style={styles.loginDivider} />
@@ -445,7 +437,6 @@ const styles = StyleSheet.create({
   navActive: { color: colors.primary },
   loginPage: { flex: 1, backgroundColor: "#EEF3FF" },
   loginScroll: { flexGrow: 1, paddingHorizontal: 20 },
-  backLink: { color: colors.muted, fontSize: 15, fontWeight: "700", marginBottom: 28 },
   loginCard: {
     width: "100%",
     maxWidth: 540,
@@ -465,13 +456,6 @@ const styles = StyleSheet.create({
   },
   loginMascot: { width: 180, height: 180, alignSelf: "center" },
   loginTitle: { color: colors.ink, fontSize: 38, lineHeight: 44, fontWeight: "900", textAlign: "center" },
-  loginDescription: {
-    marginTop: 10,
-    color: colors.muted,
-    fontSize: 14,
-    lineHeight: 21,
-    textAlign: "center",
-  },
   loginDividerRow: { flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 24 },
   loginDivider: { flex: 1, height: 1, backgroundColor: colors.line },
   loginDividerText: { color: colors.muted, fontSize: 12, fontWeight: "700" },
