@@ -227,9 +227,7 @@ def _reflection_statuses(
         if _rate_value(current, signal) is not None and values
     }
     if _video_format(current) and _rate_value(current, "average_watch_time") is not None and watch_values:
-        statuses["average_watch_time"] = _relative_signal(
-            _rate_value(current, "average_watch_time"), watch_values
-        )
+        statuses["average_watch_time"] = _relative_signal(_rate_value(current, "average_watch_time"), watch_values)
 
     def score(post: dict[str, Any]) -> float:
         values = [
@@ -274,12 +272,17 @@ def next_post_suggestion(
     if not has_ai_processing_consent(user_id):
         return None
     signals = ("views_per_reach", "saves_and_shares_per_reach", "comments_per_reach")
-    eligible = [post for post in posts if post.get("has_metrics", bool(post.get("metrics"))) and _has_rate_signal(post, signals)]
+    eligible = [
+        post for post in posts if post.get("has_metrics", bool(post.get("metrics"))) and _has_rate_signal(post, signals)
+    ]
     if not eligible:
         return None
     latest = max(
         eligible,
-        key=lambda post: (_as_datetime(post.get("published_at")) or datetime.min.replace(tzinfo=UTC), str(post.get("tracked_post_id") or "")),
+        key=lambda post: (
+            _as_datetime(post.get("published_at")) or datetime.min.replace(tzinfo=UTC),
+            str(post.get("tracked_post_id") or ""),
+        ),
     )
     latest_id = str(latest.get("tracked_post_id") or "")
     latest_published = _as_datetime(latest.get("published_at"))

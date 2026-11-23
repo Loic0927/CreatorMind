@@ -82,7 +82,10 @@ def test_next_post_suggestion_reflects_the_latest_post_against_high_performing_h
 
     result = insight_texts.next_post_suggestion("user", posts, {}, generator=generate)
 
-    assert result == "Reflection: The latest post is performing strongly against comparable history. Keep the clear action premise."
+    assert (
+        result
+        == "Reflection: The latest post is performing strongly against comparable history. Keep the clear action premise."
+    )
     assert captured["data"]["latest_post"]["role"] == "latest"
     assert captured["data"]["latest_post"]["outcome"] == "stronger_than_history"
     assert captured["data"]["latest_post"]["caption"] == "caption-latest"
@@ -206,7 +209,10 @@ def test_next_post_cache_keeps_the_last_good_text_when_generation_fails_after_in
     posts[-1]["published_at"] = datetime(2026, 11, 1, tzinfo=UTC).isoformat()
 
     first = insight_texts.next_post_suggestion(
-        "user", posts, {}, generator=lambda _: "Reflection: Keep the clearer opening, while treating the result cautiously."
+        "user",
+        posts,
+        {},
+        generator=lambda _: "Reflection: Keep the clearer opening, while treating the result cautiously.",
     )
     posts[-1]["caption"] = "changed caption changes the cache input"
     second = insight_texts.next_post_suggestion(

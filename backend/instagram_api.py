@@ -42,7 +42,23 @@ from backend.services.publishing import (
     InstagramPublishingAdapter,
     PublishingAdapterRegistry,
     PublishInput,
+    TikTokPublishingAdapter,
     UnavailablePublishingAdapter,
+)
+from backend.services.tiktok import (
+    create_media_url as create_tiktok_media_url,
+)
+from backend.services.tiktok import (
+    fetch_creator_info as fetch_tiktok_creator_info,
+)
+from backend.services.tiktok import (
+    fetch_publish_status as fetch_tiktok_publish_status,
+)
+from backend.services.tiktok import (
+    initialize_photo_post as publish_tiktok_photo,
+)
+from backend.services.tiktok import (
+    initialize_video_post as publish_tiktok_video,
 )
 from backend.services.tracked_items import load_tracked_items
 from backend.storage.content_repository import get_content_repository
@@ -53,6 +69,8 @@ from backend.storage.instagram_repository import (
 )
 from backend.storage.models import InstagramAccount, InstagramMedia
 from backend.storage.oci_object_storage import upload_bytes_with_temporary_read_url
+from backend.tiktok_api import access_token_for as tiktok_access_token
+from backend.tiktok_api import active_connection as active_tiktok_connection
 
 router = APIRouter()
 LOGGER = logging.getLogger("postbridge.instagram_api")
@@ -546,17 +564,15 @@ def _cached_text_with_status(
 
 
 def _next_suggestion_can_be_generated(posts: list[dict]) -> bool:
-    """Return whether the persisted posts meet the cache generator's floor.
+    """Return whether the newest post has enough comparable history for Reflection.
 
     This is deliberately a local, deterministic availability check. It does
     not call the generator (or duplicate its scoring): a missing cache stays
     ``pending`` only while a background refresh could actually create one.
     """
 
-    groups: dict[str, int] = {}
+    eligible: list[dict] = []
     for post in posts:
-        if not post.get("mature"):
-            continue
         metrics = post.get("metrics") or {}
         reach = metrics.get("reach")
         has_reach_signal = (
@@ -573,8 +589,21 @@ def _next_suggestion_can_be_generated(posts: list[dict]) -> bool:
         has_watch_signal = is_video and isinstance(metrics.get("average_watch_time_ms"), (int, float))
         if not (has_reach_signal or has_watch_signal):
             continue
-        groups[format_key] = groups.get(format_key, 0) + 1
-    return any(count >= 6 for count in groups.values())
+        eligible.append(post)
+    if not eligible:
+        return False
+    latest = max(
+        eligible, key=lambda post: (str(post.get("published_at") or ""), str(post.get("tracked_post_id") or ""))
+    )
+    latest_format = str(latest.get("format_key") or latest.get("media_type") or "unknown").lower()
+    historical_count = sum(
+        1
+        for post in eligible
+        if post is not latest
+        and post.get("mature")
+        and str(post.get("format_key") or post.get("media_type") or "unknown").lower() == latest_format
+    )
+    return historical_count >= 6
 
 
 class PublishImage(BaseModel):
@@ -589,6 +618,7 @@ class PublishRequest(BaseModel):
     hashtags: str = Field(default="", max_length=1000)
     image: PublishImage | None = None
     media: PublishImage | None = None
+    platform_options: dict[str, dict[str, object]] = Field(default_factory=dict)
 
 
 def publishing_registry() -> PublishingAdapterRegistry:
@@ -601,6 +631,15 @@ def publishing_registry() -> PublishingAdapterRegistry:
                 uploader=upload_bytes_with_temporary_read_url,
                 provider_publisher=publish_instagram_image,
                 video_publisher=publish_instagram_reel,
+            ),
+            TikTokPublishingAdapter(
+                account_loader=active_tiktok_connection,
+                token_loader=tiktok_access_token,
+                creator_info_loader=fetch_tiktok_creator_info,
+                media_url_factory=create_tiktok_media_url,
+                photo_publisher=publish_tiktok_photo,
+                video_publisher=publish_tiktok_video,
+                status_loader=fetch_tiktok_publish_status,
             ),
             *[UnavailablePublishingAdapter(platform) for platform in ("Twitter", "Facebook", "Threads", "YouTube")],
         ]
@@ -639,6 +678,7 @@ def publish(payload: PublishRequest, user: AuthenticatedUser = Depends(require_u
         mime_type=supplied_media.mime_type,
         encoded_media=supplied_media.data,
         duration_seconds=supplied_media.duration_seconds,
+        platform_options=payload.platform_options,
     )
     results = [registry.get(platform).publish(user_id, request).as_dict() for platform in platforms]
     return {"results": results}
