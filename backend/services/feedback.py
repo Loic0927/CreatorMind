@@ -32,7 +32,7 @@ from backend.storage.models import InsightTextCache
 from backend.storage.sql_models import AIGenerationLogRecord
 
 LOGGER = logging.getLogger("postbridge.feedback")
-PROMPT_VERSION = "summary-facts-media-v4"
+PROMPT_VERSION = "summary-facts-media-v5"
 MEDIA_FACT_ID = "media_content"
 MIN_PEERS = 6
 PERCENTILE_RANGE_AT = 15
@@ -47,9 +47,12 @@ ADVICE = re.compile(r"\b(try|consider|could|might|option|recommend|suggest|reuse
 IMPERATIVE_ADVICE = re.compile(r"\b(try|consider|recommend|suggest|you should)\b", re.I)
 
 FEEDBACK_SYSTEM_INSTRUCTION = (
-    "You write concise, evidence-first social-media post summaries. Return only JSON matching the response schema. "
+    "You write concise, evidence-first social-media post reflections. Return only JSON matching the response schema. "
     "Use at most three sentences and at most one suggestion. Cite only supplied qualifying fact ids. Use plain language. "
-    "Do not restate values, ranks, ranges, dates, or titles. Make no causal, predictive, or promise claim. "
+    "Use the supplied historical comparison to explain what is working or what deserves attention. When supplied media is "
+    "available, identify concrete content, visual sequence, spoken audio, or on-screen text that is actually present, then "
+    "relate it cautiously to the observed data. Do not restate values, ranks, ranges, dates, or titles. Make no causal, "
+    "predictive, or promise claim. "
     "If attached image or video input is supplied, describe only concrete visual or audible content grounded in it and cite "
     "the media_content fact. For video, visual sequence, spoken audio, and on-screen text are eligible evidence. Do not infer "
     "audience reaction or say media caused performance. Do not give hashtag, call-to-action, or engagement-bait advice. "
@@ -292,6 +295,44 @@ def build_feedback_facts(
         )
     )
 
+    # Account-relative metric comparisons are the core performance evidence.
+    # Keep the two clearest differences so the summary can explain the video
+    # through useful historical context rather than merely narrating its
+    # snapshot timing. The values themselves remain out of the model prompt;
+    # it receives only the observed direction and comparison basis.
+    comparison_basis = str(analysis.get("comparison_basis") or "")
+    stronger = list(analysis.get("stands_out") or [])
+    weaker = list(analysis.get("weaker") or [])
+    comparison_rows = [(row, "stronger") for row in stronger[:2]] + [(row, "weaker") for row in weaker[:2]]
+    for row, direction in comparison_rows:
+        metric = str(row.get("metric") or "")
+        if not metric:
+            continue
+        facts.append(
+            _fact(
+                f"historical_{metric}",
+                "historical_metric_comparison",
+                {
+                    "metric": metric,
+                    "direction": direction,
+                    "comparison_basis": comparison_basis,
+                    "peer_count": row.get("group_size"),
+                },
+                direction,
+                True,
+            )
+        )
+    if analysis.get("comparable") and not comparison_rows:
+        facts.append(
+            _fact(
+                "historical_profile",
+                "historical_metric_comparison",
+                {"comparison_basis": comparison_basis, "peer_count": analysis.get("comparable_count")},
+                "within_usual_range",
+                True,
+            )
+        )
+
     # Interaction mix is redundant when the page already exposes all of its
     # component comparisons. Other facts describe relationships or time paths.
     visible = {row.get("metric") for row in analysis.get("usual_ranges", [])}
@@ -304,6 +345,18 @@ def build_feedback_facts(
 
 
 TEMPLATES: dict[tuple[str, str], tuple[str, str]] = {
+    ("historical_metric_comparison", "stronger"): (
+        "One of this post's key performance signals stood above its comparable history.",
+        "observation",
+    ),
+    ("historical_metric_comparison", "weaker"): (
+        "One of this post's key performance signals was below its comparable history.",
+        "observation",
+    ),
+    ("historical_metric_comparison", "within_usual_range"): (
+        "The observed performance signals were within this format's usual historical range.",
+        "observation",
+    ),
     ("growth_stage", "still_growing"): (
         "This post was still accumulating attention across the observed checkpoints.",
         "observation",
@@ -341,7 +394,13 @@ TEMPLATES: dict[tuple[str, str], tuple[str, str]] = {
 
 def template_output(facts: list[dict[str, Any]]) -> dict[str, Any]:
     sentences = []
-    for fact in facts:
+    # Comparison facts are the clearest deterministic feedback when AI media
+    # processing is unavailable, so surface them before timing observations.
+    ordered = sorted(
+        facts,
+        key=lambda fact: 0 if fact.get("type") == "historical_metric_comparison" else 1,
+    )
+    for fact in ordered:
         template = TEMPLATES.get((fact["type"], fact.get("value", ""))) if fact.get("qualifies") else None
         if template:
             sentences.append({"text": template[0], "kind": template[1], "fact_ids": [fact["id"]]})

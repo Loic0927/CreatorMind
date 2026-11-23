@@ -27,14 +27,40 @@ def _internal_posts(items: list[dict[str, Any]], performance_posts: list[dict[st
         source = by_tracking_id.get(post["tracked_post_id"], {})
         media = source.get("media")
         latest = source.get("latest")
+        snapshots = list(source.get("snapshots") or [])
+        if latest is not None and not any(snapshot is latest for snapshot in snapshots):
+            snapshots.append(latest)
+
+        def snapshot_metrics(snapshot: Any) -> dict[str, Any]:
+            return {
+                "reach": getattr(snapshot, "reach", None),
+                "views": getattr(snapshot, "views", None),
+                "saves": getattr(snapshot, "saves", None),
+                "shares": getattr(snapshot, "shares", None),
+                "comments": getattr(snapshot, "comments", None),
+                "average_watch_time_ms": getattr(snapshot, "average_watch_time_ms", None),
+            }
+
         # Watch time is generator-only context: exposing it in the account
-        # response would require a separate public contract change, while the
-        # rate-based suggestion can safely use the stored value here.
+        # response would require a separate public contract change. The
+        # private history lets the Reflection make a same-age comparison when
+        # the newest post is still young, without changing that public shape.
         metrics = {
             **(post.get("metrics") or {}),
             "average_watch_time_ms": getattr(latest, "average_watch_time_ms", None),
         }
-        result.append({**post, "metrics": metrics, "caption": str(media.caption) if media else ""})
+        result.append(
+            {
+                **post,
+                "metrics": metrics,
+                "caption": str(media.caption) if media else "",
+                "latest_captured_at": getattr(latest, "captured_at", None),
+                "history": [
+                    {"captured_at": getattr(snapshot, "captured_at", None), "metrics": snapshot_metrics(snapshot)}
+                    for snapshot in snapshots
+                ],
+            }
+        )
     return result
 
 

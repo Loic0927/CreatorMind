@@ -237,6 +237,31 @@ def test_fact_boundaries_and_novelty_rule_do_not_invent_evidence():
     assert mix["qualifies"] is False and mix["evidence"]["novelty_dropped"] is True
 
 
+def test_summary_facts_include_selected_post_comparison_with_history():
+    selected = _item("selected", "REELS", NOW - timedelta(days=20), [_snapshot("selected", NOW, 2_000)])
+    peers = [
+        _item(f"peer-{index}", "REELS", NOW - timedelta(days=30), [_snapshot(f"peer-{index}", NOW, 100)])
+        for index in range(6)
+    ]
+    analysis = {
+        "comparable": True,
+        "comparable_count": 6,
+        "comparison_basis": "lifetime",
+        "stands_out": [{"metric": "views", "group_size": 7}],
+        "weaker": [{"metric": "comments", "group_size": 7}],
+        "usual_ranges": [],
+    }
+
+    facts = feedback.build_feedback_facts(selected, [selected, *peers], analysis, now=NOW)
+
+    comparison = [fact for fact in facts if fact["type"] == "historical_metric_comparison"]
+    assert [(fact["id"], fact["value"]) for fact in comparison] == [
+        ("historical_views", "stronger"),
+        ("historical_comments", "weaker"),
+    ]
+    assert feedback.template_output(facts)["sentences"][0]["fact_ids"] == ["historical_views"]
+
+
 def _growth_fact(selected):
     return next(
         fact
