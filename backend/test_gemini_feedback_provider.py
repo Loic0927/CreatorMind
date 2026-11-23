@@ -73,6 +73,14 @@ def test_gemini_feedback_retries_invalid_json_without_thread_timeout():
     assert len(calls) == 2
 
 
+def test_gemini_feedback_accepts_a_json_object_wrapped_by_provider_presentation_text():
+    wrapped = "Here is the requested JSON:\n```JSON\n" + json.dumps(PAYLOAD) + "\n```"
+
+    result = feedback.GeminiFeedbackProvider(generator=lambda _prompt, **_kwargs: wrapped).generate(FACTS)
+
+    assert result.payload == PAYLOAD
+
+
 def test_generate_summary_persists_gemini_token_usage_in_generation_log(monkeypatch):
     class Provider:
         name = "gemini"

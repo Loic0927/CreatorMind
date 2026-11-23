@@ -85,6 +85,29 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
+def _structured_payload(raw: str) -> dict[str, Any]:
+    """Read a model JSON object despite harmless provider presentation wrappers.
+
+    Gemini's structured-output mode normally returns a bare JSON object, but
+    some successful responses include a case-varied Markdown fence or a short
+    leading label. Those responses are still safe to use only after the usual
+    evidence validator runs below.
+    """
+    clean = raw.strip()
+    clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.I)
+    clean = re.sub(r"\s*```\s*$", "", clean)
+    try:
+        payload = json.loads(clean)
+    except json.JSONDecodeError:
+        start = clean.find("{")
+        if start < 0:
+            raise
+        payload, _ = json.JSONDecoder().raw_decode(clean[start:])
+    if not isinstance(payload, dict):
+        raise json.JSONDecodeError("Expected a JSON object", clean, 0)
+    return payload
+
+
 def _format(media_type: str) -> str:
     return "video" if str(media_type).upper() in {"VIDEO", "REELS"} else str(media_type or "IMAGE").lower()
 
@@ -504,11 +527,7 @@ class GeminiFeedbackProvider:
                     token_usage = None
                 if not isinstance(raw, str):
                     raise GeminiUpstreamError("Gemini returned an invalid response.")
-                payload = json.loads(
-                    raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-                )
-                if not isinstance(payload, dict):
-                    raise GeminiUpstreamError("Gemini returned an invalid response.")
+                payload = _structured_payload(raw)
                 return FeedbackGeneration(payload=payload, token_usage=token_usage)
             except (json.JSONDecodeError, GeminiConfigurationError, GeminiUpstreamError) as exc:
                 last_error = exc
