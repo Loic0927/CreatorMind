@@ -181,6 +181,24 @@ def test_next_post_suggestion_uses_same_age_history_for_a_newest_young_post(monk
     assert captured["data"]["latest_post"]["comparison_basis"] == "same_age"
 
 
+def test_next_post_suggestion_uses_mature_rate_history_when_same_age_snapshots_are_missing(monkeypatch):
+    repository = _TextCacheRepository()
+    monkeypatch.setattr(insight_texts, "get_content_repository", lambda: repository)
+    posts = [_post(f"history-{index}", 100 + index * 100) for index in range(6)]
+    latest = _post("latest", 1_000, mature=False)
+    latest["published_at"] = datetime(2026, 11, 1, tzinfo=UTC).isoformat()
+    latest["latest_captured_at"] = datetime(2026, 11, 2, tzinfo=UTC).isoformat()
+    posts.append(latest)
+    captured = {}
+
+    def generate(prompt: str) -> str:
+        captured["data"] = _prompt_data(prompt)
+        return "Reflection: The latest response is stronger than its mature history. Keep the direct premise."
+
+    assert insight_texts.next_post_suggestion("user", posts, {}, generator=generate)
+    assert captured["data"]["latest_post"]["comparison_basis"] == "latest_response_rates"
+
+
 def test_audience_cache_keeps_the_last_good_text_when_generation_fails_after_inputs_change(monkeypatch):
     repository = _TextCacheRepository()
     monkeypatch.setattr(insight_texts, "get_content_repository", lambda: repository)
@@ -224,7 +242,7 @@ def test_next_post_cache_keeps_the_last_good_text_when_generation_fails_after_in
 
     assert second == first
     assert len(repository.writes) == 1
-    assert repository.get_text_cache("user", "next-post-suggestion").text == first
+    assert repository.get_text_cache("user", insight_texts.REFLECTION_CACHE_KEY).text == first
 
 
 def test_cached_text_keeps_the_last_good_text_when_validation_rejects_new_output(monkeypatch):

@@ -31,7 +31,8 @@ REFLECTION_SYSTEM_INSTRUCTION = (
     "is mixed, explain that plainly. Do not quote or restate metric values, claim causation, promise a result, use engagement "
     "bait, assume a niche, or discuss posting time."
 )
-REFLECTION_VERSION = "latest-post-history-v1"
+REFLECTION_VERSION = "latest-post-history-v2"
+REFLECTION_CACHE_KEY = "reflection:latest-post"
 
 
 def _hash(value: Any) -> str:
@@ -291,18 +292,29 @@ def next_post_suggestion(
     if not latest.get("mature") and latest_published is not None and latest_captured is not None:
         same_age = latest_captured - latest_published
 
-    peers: list[dict[str, Any]] = []
-    for post in eligible:
-        if str(post.get("tracked_post_id") or "") == latest_id or _format_group(post) != _format_group(latest):
-            continue
-        if same_age is None and not post.get("mature"):
-            continue
-        metrics = _history_metrics(post, same_age)
-        if metrics is None:
-            continue
-        candidate = {**post, "metrics": metrics}
-        if _has_rate_signal(candidate, signals):
-            peers.append(candidate)
+    def comparable_peers(target_age: timedelta | None) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for post in eligible:
+            if str(post.get("tracked_post_id") or "") == latest_id or _format_group(post) != _format_group(latest):
+                continue
+            if target_age is None and not post.get("mature"):
+                continue
+            metrics = _history_metrics(post, target_age)
+            if metrics is None:
+                continue
+            candidate = {**post, "metrics": metrics}
+            if _has_rate_signal(candidate, signals):
+                result.append(candidate)
+        return result
+
+    peers = comparable_peers(same_age)
+    comparison_basis = "same_age" if same_age is not None else "mature_lifetime"
+    # New posts usually have only one live reading. If no six historical posts
+    # have a matching-age snapshot yet, their reach-normalised response is
+    # still a meaningful, clearly labelled comparison with mature history.
+    if len(peers) < 6 and same_age is not None:
+        peers = comparable_peers(None)
+        comparison_basis = "latest_response_rates"
     if len(peers) < 6:
         return None
 
@@ -333,7 +345,7 @@ def next_post_suggestion(
         "latest_post": {
             **_reflection_item(latest, latest_statuses, "latest"),
             "outcome": outcome,
-            "comparison_basis": "same_age" if same_age is not None else "mature_lifetime",
+            "comparison_basis": comparison_basis,
         },
         "historical_examples": [
             _reflection_item(
@@ -360,9 +372,9 @@ def next_post_suggestion(
             return generator(prompt_text, system_instruction=REFLECTION_SYSTEM_INSTRUCTION, temperature=0.2)
         return generator(prompt_text)
 
-    # Keep the storage key and public property stable: only the meaning of the
-    # generated copy changes, so no wireframe/API migration is needed.
-    text = _cached_text(user_id, "next-post-suggestion", None, chosen, prompt, maximum_sentences=3, generator=generate)
+    # This new key prevents a prior next-post suggestion being presented as a
+    # Reflection. The public response property stays unchanged for the UI.
+    text = _cached_text(user_id, REFLECTION_CACHE_KEY, None, chosen, prompt, maximum_sentences=3, generator=generate)
     if text and not text.lower().startswith("reflection:"):
         return f"Reflection: {text}"
     return text

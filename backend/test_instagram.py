@@ -778,8 +778,8 @@ def test_tracked_detail_requires_consent_for_comment_summary_but_keeps_safe_item
 
 def test_account_insights_reads_cached_suggestion_once_without_generation(monkeypatch):
     now = datetime.now(UTC)
-    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(6)]
-    content = _CacheContent({("user-1", "next-post-suggestion"): SimpleNamespace(text="Suggestion: Stored text.")})
+    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(7)]
+    content = _CacheContent({("user-1", "reflection:latest-post"): SimpleNamespace(text="Reflection: Stored text.")})
     account = SimpleNamespace(status="connected", session_sync_error=None)
     build_calls = []
     original_build = instagram_api.build_account_insights
@@ -801,7 +801,7 @@ def test_account_insights_reads_cached_suggestion_once_without_generation(monkey
     ready = instagram_api.account_insights(user)
 
     assert len(build_calls) == 1
-    assert ready["next_post_suggestion"] == "Suggestion: Stored text."
+    assert ready["next_post_suggestion"] == "Reflection: Stored text."
     assert ready["next_post_suggestion_status"] == "ready"
 
     content.caches.clear()
@@ -809,15 +809,15 @@ def test_account_insights_reads_cached_suggestion_once_without_generation(monkey
     assert pending["next_post_suggestion"] is None
     assert pending["next_post_suggestion_status"] == "pending"
 
-    content.caches[("user-1", "next-post-suggestion")] = SimpleNamespace(text="")
+    content.caches[("user-1", "reflection:latest-post")] = SimpleNamespace(text="")
     resolved_empty = instagram_api.account_insights(user)
     assert resolved_empty["next_post_suggestion_status"] == "none"
 
 
 def test_account_insights_hides_cached_suggestion_when_consent_is_revoked(monkeypatch):
     now = datetime.now(UTC)
-    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(6)]
-    content = _CacheContent({("user-1", "next-post-suggestion"): SimpleNamespace(text="Suggestion: Old cache.")})
+    items = [_api_item(str(index), now - timedelta(minutes=index), views=100 + index) for index in range(7)]
+    content = _CacheContent({("user-1", "reflection:latest-post"): SimpleNamespace(text="Reflection: Old cache.")})
     account = SimpleNamespace(status="connected", session_sync_error=None)
     monkeypatch.setattr(instagram_api, "has_ai_processing_consent", lambda _user_id: False)
     monkeypatch.setattr(instagram_api, "stored_connection", lambda _user_id: account)

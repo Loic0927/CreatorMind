@@ -394,6 +394,7 @@ TEMPLATES: dict[tuple[str, str], tuple[str, str]] = {
 
 def template_output(facts: list[dict[str, Any]]) -> dict[str, Any]:
     sentences = []
+    seen_text: set[str] = set()
     # Comparison facts are the clearest deterministic feedback when AI media
     # processing is unavailable, so surface them before timing observations.
     ordered = sorted(
@@ -402,8 +403,9 @@ def template_output(facts: list[dict[str, Any]]) -> dict[str, Any]:
     )
     for fact in ordered:
         template = TEMPLATES.get((fact["type"], fact.get("value", ""))) if fact.get("qualifies") else None
-        if template:
+        if template and template[0] not in seen_text:
             sentences.append({"text": template[0], "kind": template[1], "fact_ids": [fact["id"]]})
+            seen_text.add(template[0])
         if len(sentences) == 3:
             break
     return {"sentences": sentences}

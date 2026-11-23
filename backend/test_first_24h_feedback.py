@@ -262,6 +262,17 @@ def test_summary_facts_include_selected_post_comparison_with_history():
     assert feedback.template_output(facts)["sentences"][0]["fact_ids"] == ["historical_views"]
 
 
+def test_summary_template_deduplicates_repeated_historical_signal_copy():
+    facts = [
+        {"id": "historical_saves", "type": "historical_metric_comparison", "value": "stronger", "qualifies": True},
+        {"id": "historical_comments", "type": "historical_metric_comparison", "value": "stronger", "qualifies": True},
+    ]
+
+    output = feedback.template_output(facts)
+
+    assert len(output["sentences"]) == 1
+
+
 def _growth_fact(selected):
     return next(
         fact

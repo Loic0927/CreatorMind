@@ -853,7 +853,7 @@ def account_insights(user: AuthenticatedUser = Depends(require_user)):
     suggestion, suggestion_status, suggestion_resolved = _cached_text_with_status(
         content,
         user_id,
-        "next-post-suggestion",
+        "reflection:latest-post",
         pending_when_missing=False,
     )
     # Build this once: it is pure, and includes both highlights and the
