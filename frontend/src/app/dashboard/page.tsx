@@ -12,6 +12,8 @@ import { TikTokPostTab } from "@/components/dashboard/TikTokPostTab";
 import { Brand } from "@/components/dashboard/ui";
 
 type Tab = "home" | "create" | "analyze" | "insights" | "settings";
+type PostPlatform = "instagram" | "tiktok";
+type PostDetail = { platform: PostPlatform; id: string } | null;
 const tabs: Array<{ key: Tab; label: string; icon: string }> = [
   { key: "home", label: "Home", icon: "⌂" },
   { key: "create", label: "Create", icon: "+" },
@@ -22,11 +24,17 @@ const tabs: Array<{ key: Tab; label: string; icon: string }> = [
 
 const isTab = (value: string | null): value is Tab => tabs.some((item) => item.key === value);
 
-export function dashboardLocation(): { tab: Tab; analyzeId: string } {
+export function dashboardLocation(): { tab: Tab; analyzeId: string; postDetail: PostDetail } {
   const params = new URLSearchParams(window.location.search);
   const requestedTab = params.get("tab");
   const tab = isTab(requestedTab) ? requestedTab : "home";
-  return { tab, analyzeId: tab === "analyze" ? (params.get("post") ?? "") : "" };
+  const platform = params.get("platform");
+  const postId = params.get("post") ?? "";
+  const postDetail: PostDetail =
+    tab === "home" && params.get("view") === "post" && postId && (platform === "instagram" || platform === "tiktok")
+      ? { platform: platform as PostPlatform, id: postId }
+      : null;
+  return { tab, analyzeId: tab === "analyze" ? postId : "", postDetail };
 }
 
 export default function DashboardPage() {
@@ -34,6 +42,7 @@ export default function DashboardPage() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [analyzeId, setAnalyzeId] = useState("");
+  const [postDetail, setPostDetail] = useState<PostDetail>(null);
 
   useEffect(() => {
     setSession(storedSession());
@@ -41,6 +50,7 @@ export default function DashboardPage() {
       const location = dashboardLocation();
       setTab(location.tab);
       setAnalyzeId(location.analyzeId);
+      setPostDetail(location.postDetail);
     };
     syncLocation();
     window.addEventListener("popstate", syncLocation);
@@ -69,11 +79,26 @@ export default function DashboardPage() {
   const navigate = (nextTab: Tab, nextAnalyzeId = "") => {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", nextTab);
+    url.searchParams.delete("view");
+    url.searchParams.delete("platform");
     if (nextTab === "analyze" && nextAnalyzeId) url.searchParams.set("post", nextAnalyzeId);
     else url.searchParams.delete("post");
     window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
     setTab(nextTab);
     setAnalyzeId(nextTab === "analyze" ? nextAnalyzeId : "");
+    setPostDetail(null);
+  };
+
+  const openPost = (platform: PostPlatform, id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "home");
+    url.searchParams.set("view", "post");
+    url.searchParams.set("platform", platform);
+    url.searchParams.set("post", id);
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    setTab("home");
+    setAnalyzeId("");
+    setPostDetail({ platform, id });
   };
 
   return (
@@ -100,9 +125,24 @@ export default function DashboardPage() {
         <Brand compact />
       </header>
       <main className="mx-auto max-w-6xl px-5 pb-28 pt-5 lg:ml-64 lg:px-9 lg:pb-12 lg:pt-7">
-        {tab === "home" && (
-          <HomeTab session={session} onConnect={connect} onOpenTikTok={(id) => navigate("analyze", `tiktok:${id}`)} />
-        )}
+        {tab === "home" &&
+          (postDetail?.platform === "tiktok" ? (
+            <TikTokPostTab session={session} trackedId={postDetail.id} onBack={() => navigate("home")} />
+          ) : postDetail?.platform === "instagram" ? (
+            <AnalyzeTab
+              session={session}
+              initialId={postDetail.id}
+              onClear={() => navigate("home")}
+              detailTitle="Instagram"
+            />
+          ) : (
+            <HomeTab
+              session={session}
+              onConnect={connect}
+              onOpenInstagram={(id) => openPost("instagram", id)}
+              onOpenTikTok={(id) => openPost("tiktok", id)}
+            />
+          ))}
         {tab === "create" && <CreateTab session={session} />}
         {tab === "analyze" &&
           (analyzeId.startsWith("tiktok:") ? (

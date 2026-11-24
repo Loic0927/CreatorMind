@@ -35,11 +35,11 @@ type TikTokMediaItem = {
 };
 
 const primaryButton = "rounded-xl bg-primary px-5 py-3 font-bold text-white hover:bg-primary-hover";
-const byOldestFirst = <T,>(items: T[]) =>
+const byNewestFirst = <T,>(items: T[]) =>
   [...items].sort(
     (left, right) =>
-      new Date((left as { published_at?: string }).published_at ?? 0).getTime() -
-      new Date((right as { published_at?: string }).published_at ?? 0).getTime(),
+      new Date((right as { published_at?: string }).published_at ?? 0).getTime() -
+      new Date((left as { published_at?: string }).published_at ?? 0).getTime(),
   );
 const tikTokPublishedAt = (value: number | string | undefined) => {
   if (typeof value === "number") return value * 1000;
@@ -49,10 +49,12 @@ const tikTokPublishedAt = (value: number | string | undefined) => {
 export function HomeTab({
   session,
   onConnect,
+  onOpenInstagram,
   onOpenTikTok,
 }: {
   session: Session;
   onConnect: () => Promise<void>;
+  onOpenInstagram: (id: string) => void;
   onOpenTikTok: (id: string) => void;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -113,7 +115,7 @@ export function HomeTab({
     void attempt("Could not load Instagram posts.", async () => {
       const trackedIds = new Set(posts.map((post) => post.media.id));
       const { items } = await getInstagramMedia(session);
-      setMedia(byOldestFirst(items.filter((item) => !trackedIds.has(item.id))));
+      setMedia(byNewestFirst(items.filter((item) => !trackedIds.has(item.id))));
       setChoosing(true);
     });
   };
@@ -121,9 +123,10 @@ export function HomeTab({
   const addPost = async (mediaId: string) => {
     setAddingId(mediaId);
     await attempt("Could not add this Instagram post.", async () => {
-      await trackInstagramPost(session, mediaId);
+      const tracked = await trackInstagramPost(session, mediaId);
       setChoosing(false);
       await load();
+      onOpenInstagram(tracked.id);
     });
     setAddingId("");
   };
@@ -131,9 +134,10 @@ export function HomeTab({
   const addTikTokPost = async (videoId: string) => {
     setAddingId(videoId);
     await attempt("Could not add this TikTok post.", async () => {
-      await trackTikTokPost(session, videoId);
+      const tracked = await trackTikTokPost(session, videoId);
       setChoosing(false);
       await load();
+      onOpenTikTok(tracked.id);
     });
     setAddingId("");
   };
@@ -145,7 +149,7 @@ export function HomeTab({
         const { items } = await getTikTokMedia(session);
         setTikTokMedia(
           [...items].sort(
-            (left, right) => tikTokPublishedAt(left.published_at) - tikTokPublishedAt(right.published_at),
+            (left, right) => tikTokPublishedAt(right.published_at) - tikTokPublishedAt(left.published_at),
           ),
         );
       } finally {
@@ -321,6 +325,7 @@ export function HomeTab({
             posts={orderedPosts}
             deletingId={deletingId}
             onRemove={removePost}
+            onOpen={onOpenInstagram}
           />
           <TikTokPostSection posts={tikTokPosts} onOpen={onOpenTikTok} />
         </div>
@@ -369,11 +374,13 @@ function PlatformPostSection({
   posts,
   deletingId,
   onRemove,
+  onOpen,
 }: {
   platform: SelectionPlatform;
   posts: TrackedPost[];
   deletingId: string;
   onRemove: (post: TrackedPost) => Promise<void>;
+  onOpen: (id: string) => void;
 }) {
   return (
     <section aria-labelledby={`${platform.toLowerCase()}-posts`}>
@@ -386,21 +393,28 @@ function PlatformPostSection({
             const image = post.media.thumbnail_url || post.media.media_url;
             return (
               <div key={post.tracking.id} className="group relative aspect-square overflow-hidden bg-selected">
-                {image ? (
-                  <img
-                    alt={post.media.caption || `${platform} post`}
-                    src={image}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="h-full w-full bg-line-strong" />
-                )}
+                <button
+                  type="button"
+                  onClick={() => onOpen(post.tracking.id)}
+                  aria-label={`Open ${platform} post`}
+                  className="h-full w-full text-left"
+                >
+                  {image ? (
+                    <img
+                      alt={post.media.caption || `${platform} post`}
+                      src={image}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-line-strong" />
+                  )}
+                </button>
                 <button
                   type="button"
                   aria-label="Remove tracked post"
                   disabled={Boolean(deletingId)}
                   onClick={() => void onRemove(post)}
-                  className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-surface/95 text-lg font-bold leading-none text-primary-hover opacity-0 shadow-float transition-opacity focus:opacity-100 group-hover:opacity-100 disabled:opacity-50"
+                  className="absolute right-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-surface/95 text-lg font-bold leading-none text-primary-hover opacity-0 shadow-float transition-opacity focus:opacity-100 group-hover:opacity-100 disabled:opacity-50"
                 >
                   ×
                 </button>

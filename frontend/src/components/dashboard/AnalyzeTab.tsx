@@ -6,7 +6,9 @@ import {
   NotComparableReason,
   RangeRow,
   Session,
+  TikTokTrackedPost,
   TrackedPost,
+  getTikTokTrackedPosts,
   getTrackedPost,
   getTrackedPosts,
   grantAIProcessingConsent,
@@ -36,13 +38,16 @@ export function AnalyzeTab({
   initialId,
   onOpen,
   onClear,
+  detailTitle = "Analyze",
 }: {
   session: Session;
   initialId?: string;
   onOpen?: (id: string) => void;
   onClear: () => void;
+  detailTitle?: string;
 }) {
   const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [tikTokPosts, setTikTokPosts] = useState<TikTokTrackedPost[]>([]);
   const [platform, setPlatform] = useState<DashboardPlatform>("Instagram");
   const [selectedId, setSelectedId] = useState(initialId ?? "");
   const [post, setPost] = useState<TrackedPost | null>(null);
@@ -72,8 +77,17 @@ export function AnalyzeTab({
 
   const loadPosts = useCallback(
     () =>
-      getTrackedPosts(session)
-        .then(({ items }) => setPosts(items))
+      Promise.all([getTrackedPosts(session), getTikTokTrackedPosts(session).catch(() => ({ items: [] }))])
+        .then(([instagram, tikTok]) => {
+          setPosts(instagram.items);
+          setTikTokPosts(
+            [...tikTok.items].sort(
+              (left, right) =>
+                new Date(right.published_at ?? right.created_at).getTime() -
+                new Date(left.published_at ?? left.created_at).getTime(),
+            ),
+          );
+        })
         .catch((reason) => setError(errorMessage(reason, "Couldn't load posts.")))
         .finally(() => setLoading(false)),
     [session],
@@ -143,10 +157,29 @@ export function AnalyzeTab({
       <section className="mx-auto w-full lg:w-4/5">
         <PlatformNavigator value={platform} onChange={changePlatform} className="mb-5 md:mb-7" />
         <ErrorBanner message={error} />
-        {platform === "TikTok" ? (
-          <Card>Track a TikTok post first.</Card>
-        ) : loading ? (
+        {loading ? (
           <Card>Loading tracked posts…</Card>
+        ) : platform === "TikTok" && tikTokPosts.length ? (
+          <div className="grid gap-5 md:grid-cols-2">
+            {tikTokPosts.map((item) => (
+              <button key={item.id} onClick={() => onOpen?.(`tiktok:${item.id}`)} className="text-left">
+                <div className="h-full rounded-3xl border border-line bg-surface p-5 shadow-soft md:p-6">
+                  {item.thumbnail_url ? (
+                    <img
+                      alt="TikTok post"
+                      src={item.thumbnail_url}
+                      className="mb-4 aspect-video w-full rounded-2xl object-cover"
+                    />
+                  ) : (
+                    <div className="mb-4 aspect-video w-full rounded-2xl bg-selected" />
+                  )}
+                  <p className="line-clamp-2 font-bold">{item.caption || "TikTok post"}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : platform === "TikTok" ? (
+          <Card>Track a TikTok post first.</Card>
         ) : posts.length ? (
           <div className="grid gap-5 md:grid-cols-2">
             {posts.map((item) => (
@@ -185,7 +218,7 @@ export function AnalyzeTab({
   return (
     <section className="mx-auto w-full max-w-[720px]">
       <div className="mb-5 flex items-center justify-between gap-3 md:mb-7">
-        <PageTitle>Analyze</PageTitle>
+        <PageTitle>{detailTitle}</PageTitle>
         <button onClick={back} className={backButton}>
           Back
         </button>
