@@ -127,7 +127,7 @@ def test_callback_encrypts_both_tokens_and_redirects_without_secrets(monkeypatch
     response = tiktok_api.connect_callback(code="private-code", state=state)
 
     assert response.status_code == 302
-    assert response.headers["location"] == "https://app.example.test/dashboard?tiktok=connected"
+    assert response.headers["location"] == "https://app.example.test/dashboard?tab=settings&tiktok=connected"
     stored = tiktok_environment.get_connection("user-1")
     encrypted = tiktok_environment.get_encrypted_tokens(stored.id)
     assert tiktok.decrypt_token(encrypted[0]) == "access-sensitive"

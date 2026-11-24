@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CreateTab } from "./CreateTab";
 import { SettingsTab } from "./SettingsTab";
 import { InsightsTab } from "./InsightsTab";
-import { caption, getAccountContext, updateAccountContext } from "@/lib/postbridge";
+import { caption, getAccountContext, getTikTokConnection, updateAccountContext } from "@/lib/postbridge";
 
 const { accountContext } = vi.hoisted(() => ({
   accountContext: {
@@ -89,6 +89,17 @@ describe("selection controls on active pages", () => {
     expect(screen.queryByRole("heading", { name: "AI processing" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
     expect(screen.getByRole("link", { name: "Terms" })).toHaveAttribute("href", "/terms");
+  });
+
+  it("shows the TikTok login control and explains when Login Kit is not configured", async () => {
+    vi.mocked(getTikTokConnection).mockResolvedValueOnce({ connected: false, configured: false });
+    render(<SettingsTab session={session} onLogout={() => {}} />);
+
+    const connect = await screen.findByRole("button", { name: "Connect TikTok" });
+    expect(connect).toBeDisabled();
+    expect(
+      screen.getByText("TikTok Login Kit must be configured before you can connect an account."),
+    ).toBeInTheDocument();
   });
 
   it("keeps the surrounding page layout containers unchanged", async () => {

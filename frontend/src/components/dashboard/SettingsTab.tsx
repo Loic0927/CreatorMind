@@ -104,6 +104,7 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [hashtagInput, setHashtagInput] = useState("");
+  const [tikTokNotice, setTikTokNotice] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -116,6 +117,17 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
       .catch((reason) => setError(errorMessage(reason, "Could not load settings.")))
       .finally(() => setLoading(false));
   }, [session]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const status = url.searchParams.get("tiktok");
+    if (!status) return;
+
+    url.searchParams.delete("tiktok");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    if (status === "connected") setTikTokNotice("TikTok connected successfully.");
+    else setError("TikTok could not be connected. Please try again.");
+  }, []);
 
   const edit = (changes: Partial<AccountContext>) => {
     setContext({ ...context, ...changes });
@@ -199,6 +211,9 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
     <div className="mx-auto w-full lg:w-[80%]">
       <PageTitle className="mb-5 md:mb-7">Settings</PageTitle>
       <ErrorBanner message={error} />
+      {tikTokNotice ? (
+        <p className="mb-5 rounded-2xl bg-green-50 p-4 text-sm font-bold text-green-800">{tikTokNotice}</p>
+      ) : null}
       <div className="space-y-5">
         <Panel>
           <p className="text-xs font-bold uppercase tracking-wider text-muted">Signed in as</p>
@@ -385,13 +400,21 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
               >
                 Log out
               </button>
-            ) : tikTokConnection?.configured ? (
-              <button
-                onClick={() => void connectTikTokAccount()}
-                className="rounded-xl bg-primary px-5 py-3 text-sm font-black text-white hover:bg-primary-hover"
-              >
-                Connect TikTok
-              </button>
+            ) : tikTokConnection ? (
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <button
+                  disabled={!tikTokConnection.configured}
+                  onClick={() => void connectTikTokAccount()}
+                  className="rounded-xl bg-primary px-5 py-3 text-sm font-black text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Connect TikTok
+                </button>
+                {!tikTokConnection.configured ? (
+                  <p className="max-w-xs text-xs leading-5 text-muted sm:text-right">
+                    TikTok Login Kit must be configured before you can connect an account.
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </Panel>

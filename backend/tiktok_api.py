@@ -148,7 +148,7 @@ def access_token_for(connection: TikTokConnection) -> str:
 
 def _frontend_redirect(status: str, code: str | None = None) -> RedirectResponse:
     base = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
-    query = {"tiktok": status}
+    query = {"tab": "settings", "tiktok": status}
     if code:
         query["code"] = code
     return RedirectResponse(f"{base}/dashboard?{urlencode(query)}", status_code=302)
