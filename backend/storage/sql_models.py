@@ -94,6 +94,12 @@ class TikTokTrackedPostRecord(Base):
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
     permalink: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    likes: Mapped[int | None] = mapped_column(Integer)
+    comments: Mapped[int | None] = mapped_column(Integer)
+    shares: Mapped[int | None] = mapped_column(Integer)
+    views: Mapped[int | None] = mapped_column(Integer)
+    engagement_rate: Mapped[float | None] = mapped_column(Float)
+    metrics_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

@@ -226,7 +226,8 @@ class TikTokRepository:
                         created_at=datetime.now(UTC),
                     )
                     session.add(row)
-                    session.flush()
+                self._apply_video(row, item)
+                session.flush()
                 return self._tracked(row)
         except Exception:
             raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
@@ -239,9 +240,70 @@ class TikTokRepository:
         except Exception:
             raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
 
+    def refresh_tracked_post(self, user_id: str, tracked_id: str, item: dict) -> dict | None:
+        try:
+            with self._factory.begin() as session:
+                row = session.scalar(
+                    select(TikTokTrackedPostRecord).where(
+                        TikTokTrackedPostRecord.user_id == user_id,
+                        TikTokTrackedPostRecord.id == tracked_id,
+                    )
+                )
+                if row is None:
+                    return None
+                self._apply_video(row, item)
+                session.flush()
+                return self._tracked(row)
+        except Exception:
+            raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
+
+    def delete_tracked_post(self, user_id: str, tracked_id: str) -> bool:
+        try:
+            with self._factory.begin() as session:
+                result = session.execute(
+                    delete(TikTokTrackedPostRecord).where(
+                        TikTokTrackedPostRecord.user_id == user_id,
+                        TikTokTrackedPostRecord.id == tracked_id,
+                    )
+                )
+                return bool(result.rowcount)
+        except Exception:
+            raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
+
+    @staticmethod
+    def _apply_video(row: TikTokTrackedPostRecord, item: dict) -> None:
+        row.caption = str(item.get("video_description") or item.get("title") or row.caption or "TikTok post")
+        row.thumbnail_url = item.get("cover_image_url") or row.thumbnail_url
+        row.permalink = item.get("share_url") or row.permalink
+        if item.get("create_time"):
+            row.published_at = datetime.fromtimestamp(int(item["create_time"]), UTC)
+        row.likes = int(item["like_count"]) if item.get("like_count") is not None else row.likes
+        row.comments = int(item["comment_count"]) if item.get("comment_count") is not None else row.comments
+        row.shares = int(item["share_count"]) if item.get("share_count") is not None else row.shares
+        row.views = int(item["view_count"]) if item.get("view_count") is not None else row.views
+        if row.views:
+            row.engagement_rate = round(((row.likes or 0) + (row.comments or 0) + (row.shares or 0)) / row.views * 100, 1)
+        elif row.views == 0:
+            row.engagement_rate = 0.0
+        row.metrics_updated_at = datetime.now(UTC)
+
     @staticmethod
     def _tracked(row: TikTokTrackedPostRecord) -> dict:
-        return {"id": row.id, "video_id": row.video_id, "caption": row.caption, "thumbnail_url": row.thumbnail_url, "permalink": row.permalink, "published_at": _utc(row.published_at), "created_at": _utc(row.created_at)}
+        return {
+            "id": row.id,
+            "video_id": row.video_id,
+            "caption": row.caption,
+            "thumbnail_url": row.thumbnail_url,
+            "permalink": row.permalink,
+            "published_at": _utc(row.published_at),
+            "likes": row.likes,
+            "comments": row.comments,
+            "shares": row.shares,
+            "views": row.views,
+            "engagement_rate": row.engagement_rate,
+            "metrics_updated_at": _utc(row.metrics_updated_at),
+            "created_at": _utc(row.created_at),
+        }
 
     def delete_user_data(self, user_id: str) -> None:
         try:

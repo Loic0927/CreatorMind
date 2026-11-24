@@ -23,6 +23,9 @@ def test_retirement_migration_round_trips_empty_database(tmp_path, monkeypatch):
     assert "instagram_data_deletion_requests" in tables
     assert "tiktok_connections" in tables
     assert "tiktok_oauth_states" in tables
+    assert "tiktok_tracked_posts" in tables
+    tiktok_columns = {column["name"] for column in inspect(engine).get_columns("tiktok_tracked_posts")}
+    assert {"likes", "comments", "shares", "views", "engagement_rate", "metrics_updated_at"} <= tiktok_columns
     assert "ai_processing_consented_at" in {column["name"] for column in inspect(engine).get_columns("users")}
     assert "tracked_post_analyses" not in tables
     command.downgrade(_config(), "20261029_0010")

@@ -20,9 +20,10 @@ from backend.services.tiktok import (
     encrypt_token,
     exchange_authorization_code,
     fetch_creator_info,
-    fetch_user_videos,
     fetch_publish_status,
     fetch_user_info,
+    fetch_user_videos,
+    fetch_videos_by_ids,
     granted_scopes,
     refresh_access_token,
     revoke_access_token,
@@ -55,6 +56,72 @@ def _repository_error() -> HTTPException:
         status_code=503,
         detail={"code": "tiktok_storage_unavailable", "message": "TikTok connection storage is unavailable."},
     )
+
+
+_TIKTOK_ANALYSIS_METRICS = ("views", "likes", "engagement_rate", "shares", "comments")
+
+
+def _tiktok_analysis(selected: dict, items: list[dict]) -> dict:
+    peers = [item for item in items if item["id"] != selected["id"]]
+    ranges = []
+    for metric in _TIKTOK_ANALYSIS_METRICS:
+        value = selected.get(metric)
+        peer_values = [float(item[metric]) for item in peers if item.get(metric) is not None]
+        if value is None or len(peer_values) < 2:
+            continue
+        low, high = min(peer_values), max(peer_values)
+        numeric = float(value)
+        status = "above" if numeric > high else "below" if numeric < low else "inside"
+        all_values = [numeric, *peer_values]
+        ranked = sorted(all_values, reverse=True)
+        total_min, total_max = min(all_values), max(all_values)
+        marker = 50.0 if total_min == total_max else (numeric - total_min) / (total_max - total_min) * 100
+        band_start = 50.0 if total_min == total_max else (low - total_min) / (total_max - total_min) * 100
+        band_end = 50.0 if total_min == total_max else (high - total_min) / (total_max - total_min) * 100
+        ranges.append(
+            {
+                "metric": metric,
+                "value": numeric,
+                "usual_min": low,
+                "usual_max": high,
+                "status": status,
+                "rank": ranked.index(numeric) + 1,
+                "group_size": len(all_values),
+                "band_start": max(0.0, min(100.0, band_start)),
+                "band_end": max(0.0, min(100.0, band_end)),
+                "marker": max(0.0, min(100.0, marker)),
+            }
+        )
+    views = selected.get("views")
+    likes = selected.get("likes")
+    engagement = selected.get("engagement_rate")
+    summary = (
+        f"This TikTok has {views:,} views and {likes:,} likes with a {engagement:.1f}% engagement rate."
+        if views is not None and likes is not None and engagement is not None
+        else "TikTok public performance data is still being collected for this post."
+    )
+    view_range = next((row for row in ranges if row["metric"] == "views"), None)
+    if view_range:
+        comparison = {"above": "above", "below": "below", "inside": "within"}[view_range["status"]]
+        summary += f" Its views are {comparison} the usual range across your other tracked TikTok posts."
+    published_at = selected.get("published_at")
+    published = published_at if isinstance(published_at, datetime) else None
+    if published and published.tzinfo is None:
+        published = published.replace(tzinfo=UTC)
+    return {
+        "comparable": bool(ranges),
+        "comparable_count": len(peers),
+        "summary": summary,
+        "stands_out": [row for row in ranges if row["status"] == "above"],
+        "weaker": [row for row in ranges if row["status"] == "below"],
+        "usual_ranges": ranges,
+        "age_days": max(0, (datetime.now(UTC) - published).days) if published else 0,
+        "media_format": "Video",
+        "audience_comments": {
+            "state": "unavailable",
+            "message": "TikTok Display API provides the public comment count, but not comment text.",
+        },
+    }
 
 
 def stored_connection(user_id: str) -> TikTokConnection | None:
@@ -266,6 +333,10 @@ def media(user: AuthenticatedUser = Depends(require_user)) -> dict:
                 "thumbnail_url": item.get("cover_image_url"),
                 "permalink": item.get("share_url"),
                 "published_at": item.get("create_time"),
+                "likes": item.get("like_count"),
+                "comments": item.get("comment_count"),
+                "shares": item.get("share_count"),
+                "views": item.get("view_count"),
             }
             for item in videos
             if item.get("id")
@@ -276,9 +347,33 @@ def media(user: AuthenticatedUser = Depends(require_user)) -> dict:
 @router.get("/tracked")
 def tracked_posts(user: AuthenticatedUser = Depends(require_user)) -> dict:
     try:
-        return {"items": get_tiktok_repository().tracked_posts(user.id)}
+        repository = get_tiktok_repository()
+        items = repository.tracked_posts(user.id)
     except TikTokRepositoryError:
         raise _repository_error() from None
+    connection_value = stored_connection(user.id)
+    stale = [
+        item
+        for item in items
+        if item.get("metrics_updated_at") is None
+        or datetime.now(UTC) - item["metrics_updated_at"] > timedelta(minutes=15)
+    ]
+    if stale and connection_value and connection_value.status == "connected":
+        try:
+            videos = fetch_videos_by_ids(
+                access_token_for(connection_value),
+                [item["video_id"] for item in stale],
+            )
+            by_id = {str(item.get("id")): item for item in videos if item.get("id")}
+            for item in stale:
+                video = by_id.get(item["video_id"])
+                if video:
+                    repository.refresh_tracked_post(user.id, item["id"], video)
+            items = repository.tracked_posts(user.id)
+        except (TikTokServiceError, TikTokRepositoryError, HTTPException):
+            # Serve the last stored values when TikTok is temporarily unavailable.
+            pass
+    return {"items": items}
 
 
 @router.post("/tracked")
@@ -299,12 +394,62 @@ def track_post(payload: TikTokTrackRequest, user: AuthenticatedUser = Depends(re
 @router.get("/tracked/{tracked_id}")
 def tracked_post(tracked_id: str, user: AuthenticatedUser = Depends(require_user)) -> dict:
     try:
-        post = get_tiktok_repository().get_tracked_post(user.id, tracked_id)
+        repository = get_tiktok_repository()
+        post = repository.get_tracked_post(user.id, tracked_id)
     except TikTokRepositoryError:
         raise _repository_error() from None
     if post is None:
         raise HTTPException(status_code=404, detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."})
-    return post
+    try:
+        items = repository.tracked_posts(user.id)
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+    return {**post, "analysis": _tiktok_analysis(post, items)}
+
+
+@router.post("/tracked/{tracked_id}/refresh")
+def refresh_tracked_post(tracked_id: str, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    connection_value = active_connection(user.id)
+    repository = get_tiktok_repository()
+    try:
+        stored = repository.get_tracked_post(user.id, tracked_id)
+        if stored is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."},
+            )
+        videos = fetch_videos_by_ids(access_token_for(connection_value), [stored["video_id"]])
+        if not videos:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "tiktok_video_not_found", "message": "TikTok post was not found."},
+            )
+        refreshed = repository.refresh_tracked_post(user.id, tracked_id, videos[0])
+        if refreshed is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."},
+            )
+        items = repository.tracked_posts(user.id)
+        return {**refreshed, "analysis": _tiktok_analysis(refreshed, items)}
+    except TikTokServiceError as exc:
+        raise _service_error(exc) from None
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+
+
+@router.delete("/tracked/{tracked_id}")
+def delete_tracked_post(tracked_id: str, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    try:
+        deleted = get_tiktok_repository().delete_tracked_post(user.id, tracked_id)
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."},
+        )
+    return {"stopped": True}
 
 
 @router.post("/publishing/status")

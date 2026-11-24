@@ -7,9 +7,13 @@ import {
   MetricKey,
   PerformancePost,
   Session,
+  TikTokMetricKey,
+  TikTokTrackedPost,
   getAccountInsights,
+  getTikTokTrackedPosts,
   grantAIProcessingConsent,
   refreshTrackedPost,
+  refreshTikTokTrackedPost,
 } from "@/lib/postbridge";
 import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
@@ -124,17 +128,7 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
         : "");
 
   if (platform === "TikTok") {
-    return (
-      <section className="mx-auto w-full max-w-[880px]">
-        <PlatformNavigator value={platform} onChange={setPlatform} className="mb-5 md:mb-7" />
-        <Card>
-          <h2 className="text-xl font-black">TikTok insights</h2>
-          <p className="mt-3 text-sm leading-5 text-muted">
-            TikTok insights will appear here once TikTok post syncing is enabled.
-          </p>
-        </Card>
-      </section>
-    );
+    return <TikTokInsights session={session} onOpen={onOpen} onPlatformChange={setPlatform} />;
   }
 
   return (
@@ -258,6 +252,292 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
         onNotNow={() => setConsentDialogOpen(false)}
       />
     </section>
+  );
+}
+
+type TikTokSortKey = TikTokMetricKey | "newest";
+const tikTokSortKeys: TikTokSortKey[] = ["newest", "views", "likes", "engagement_rate", "shares", "comments"];
+const tikTokSortLabels: Record<TikTokSortKey, string> = {
+  newest: "Newest",
+  views: "Views",
+  likes: "Likes",
+  engagement_rate: "Engagement",
+  shares: "Shares",
+  comments: "Comments",
+};
+const tikTokSortOptions = tikTokSortKeys.map((value) => ({ value, label: tikTokSortLabels[value] }));
+const tikTokColumns: Array<{ key: TikTokSortKey; label: string }> = [
+  { key: "views", label: "Views" },
+  { key: "likes", label: "Likes" },
+  { key: "engagement_rate", label: "Eng." },
+  { key: "shares", label: "Shares" },
+  { key: "comments", label: "Comments" },
+  { key: "newest", label: "Date" },
+];
+const tikTokDesktopGrid = "grid-cols-[44px_150px_repeat(5,minmax(52px,1fr))_72px]";
+const tikTokMetricValue = (post: TikTokTrackedPost, key: TikTokSortKey) => {
+  if (key === "newest") return shortDate(post.published_at ?? post.created_at);
+  if (key === "engagement_rate") return formatRate(post.engagement_rate);
+  return formatNumber(post[key]);
+};
+
+function TikTokInsights({
+  session,
+  onOpen,
+  onPlatformChange,
+}: {
+  session: Session;
+  onOpen: (trackedId: string) => void;
+  onPlatformChange: (platform: DashboardPlatform) => void;
+}) {
+  const [items, setItems] = useState<TikTokTrackedPost[]>([]);
+  const [sort, setSort] = useState<TikTokSortKey>("newest");
+  const [showAll, setShowAll] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { items: nextItems } = await getTikTokTrackedPosts(session);
+      setItems(nextItems);
+      setError("");
+    } catch (reason) {
+      setError(errorMessage(reason, "Couldn't load TikTok insights."));
+    } finally {
+      setLoading(false);
+    }
+  }, [session]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const sorted = useMemo(() => {
+    const next = [...items].sort((left, right) => {
+      if (sort === "newest") {
+        return (
+          new Date(right.published_at ?? right.created_at).getTime() -
+          new Date(left.published_at ?? left.created_at).getTime()
+        );
+      }
+      return (right[sort] ?? -1) - (left[sort] ?? -1);
+    });
+    return showAll ? next : next.slice(0, collapsedCount);
+  }, [items, showAll, sort]);
+
+  const highlights = useMemo(() => {
+    const views = items.filter((item) => item.views != null);
+    const engagement = items.filter((item) => item.engagement_rate != null);
+    if (!views.length || !engagement.length) return [];
+    return [
+      {
+        label: "Highest views",
+        post: views.reduce((a, b) => ((a.views ?? 0) >= (b.views ?? 0) ? a : b)),
+        metric: "views" as const,
+      },
+      {
+        label: "Lowest views",
+        post: views.reduce((a, b) => ((a.views ?? 0) <= (b.views ?? 0) ? a : b)),
+        metric: "views" as const,
+      },
+      {
+        label: "Highest engagement",
+        post: engagement.reduce((a, b) => ((a.engagement_rate ?? 0) >= (b.engagement_rate ?? 0) ? a : b)),
+        metric: "engagement_rate" as const,
+      },
+      {
+        label: "Lowest engagement",
+        post: engagement.reduce((a, b) => ((a.engagement_rate ?? 0) <= (b.engagement_rate ?? 0) ? a : b)),
+        metric: "engagement_rate" as const,
+      },
+    ];
+  }, [items]);
+
+  const refresh = async (post: TikTokTrackedPost) => {
+    if (refreshing) return;
+    setRefreshing(post.id);
+    try {
+      const updated = await refreshTikTokTrackedPost(session, post.id);
+      setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setError("");
+    } catch (reason) {
+      setError(errorMessage(reason, "Couldn't refresh TikTok metrics."));
+    } finally {
+      setRefreshing(null);
+    }
+  };
+
+  const strongest = highlights.find((item) => item.label === "Highest engagement")?.post;
+
+  return (
+    <section className="mx-auto w-full max-w-[880px]">
+      <PlatformNavigator value="TikTok" onChange={onPlatformChange} className="mb-5 md:mb-7" />
+      {error ? <p className="mb-3 text-sm text-muted">{error}</p> : null}
+      {loading ? (
+        <LoadingState label="Preparing your TikTok insights" />
+      ) : !items.length ? (
+        <Card>Track a TikTok post first.</Card>
+      ) : (
+        <div className="space-y-4">
+          {highlights.length === 4 ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {highlights.map(({ label, post, metric }) => (
+                <button key={label} onClick={() => onOpen(`tiktok:${post.id}`)} className="h-full text-left">
+                  <Card compact className="h-full">
+                    <p className="min-h-8 text-[11px] font-black uppercase tracking-[.06em] text-muted lg:min-h-0">
+                      {label}
+                    </p>
+                    <div className="mt-3 grid grid-cols-[40px_minmax(0,1fr)] items-center gap-2.5 sm:grid-cols-[56px_minmax(0,1fr)]">
+                      {post.thumbnail_url ? (
+                        <img src={post.thumbnail_url} alt="" className="h-14 w-10 rounded-lg object-cover sm:w-14" />
+                      ) : (
+                        <div className="h-14 w-10 rounded-lg bg-line-strong sm:w-14" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-[20px] font-black leading-none sm:text-[22px]">
+                          {metric === "engagement_rate" ? formatRate(post.engagement_rate) : formatNumber(post.views)}
+                        </p>
+                        <p className="mt-2 whitespace-nowrap text-[12px] text-muted">
+                          {shortDate(post.published_at ?? post.created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {strongest && items.length >= 3 ? (
+            <Card>
+              <h2 className="text-xl font-black">Next post suggestion</h2>
+              <p className="mt-3 text-[15px] leading-5">
+                Your strongest tracked TikTok by engagement is “{strongest.caption || "TikTok post"}”. Test one similar
+                opening or format in your next post while changing only one creative element.
+              </p>
+            </Card>
+          ) : null}
+
+          <Card>
+            <div className="mb-3 flex items-center gap-3">
+              <h2 className="text-xl font-black">Posts</h2>
+              <div className="ml-auto w-[150px]">
+                <UnifiedSelect
+                  label="Sort"
+                  title="Sort TikTok posts"
+                  options={tikTokSortOptions}
+                  value={sort}
+                  onChange={(next) => setSort(next as TikTokSortKey)}
+                  compact
+                />
+              </div>
+            </div>
+            <div
+              className={`hidden ${tikTokDesktopGrid} items-center gap-3 border-b border-line pb-3 text-[11px] uppercase tracking-[.06em] text-muted lg:grid`}
+            >
+              <span>Rank</span>
+              <span>Post</span>
+              {tikTokColumns.map((column) => (
+                <span key={column.key} className={sort === column.key ? "font-black" : "font-normal"}>
+                  {column.label}
+                </span>
+              ))}
+            </div>
+            {sorted.map((post, index) => (
+              <TikTokPostRow
+                key={post.id}
+                post={post}
+                rank={index + 1}
+                sort={sort}
+                refreshing={refreshing === post.id}
+                onOpen={() => onOpen(`tiktok:${post.id}`)}
+                onRefresh={() => void refresh(post)}
+              />
+            ))}
+            {items.length > collapsedCount && !showAll ? (
+              <button onClick={() => setShowAll(true)} className="min-h-11 pt-4 text-[15px] font-black text-primary">
+                Show all {items.length}
+              </button>
+            ) : null}
+          </Card>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TikTokPostRow({
+  post,
+  rank,
+  sort,
+  refreshing,
+  onOpen,
+  onRefresh,
+}: {
+  post: TikTokTrackedPost;
+  rank: number;
+  sort: TikTokSortKey;
+  refreshing: boolean;
+  onOpen: () => void;
+  onRefresh: () => void;
+}) {
+  const cover = post.thumbnail_url ? (
+    <img src={post.thumbnail_url} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+  ) : (
+    <span className="h-14 w-14 shrink-0 rounded-xl bg-line-strong" />
+  );
+  const rowProps = {
+    role: "button",
+    tabIndex: 0,
+    onClick: onOpen,
+    onKeyDown: (event: React.KeyboardEvent) => {
+      if (event.key === "Enter") onOpen();
+    },
+  };
+  const refreshButton = (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onRefresh();
+      }}
+      className="min-h-8 text-[12px] font-semibold text-primary disabled:opacity-50"
+      disabled={refreshing}
+    >
+      {refreshing ? "Refreshing…" : "Refresh"}
+    </button>
+  );
+  return (
+    <div className="border-b border-line last:border-0">
+      <div
+        {...rowProps}
+        className="grid min-h-[72px] cursor-pointer grid-cols-[32px_minmax(108px,1fr)_72px] items-center gap-3 py-2 lg:hidden"
+      >
+        <span className="font-semibold">#{rank}</span>
+        <span className="flex items-center gap-2">
+          {cover}
+          {refreshButton}
+        </span>
+        <span className="text-right font-black">{tikTokMetricValue(post, sort)}</span>
+      </div>
+      <div
+        {...rowProps}
+        className={`hidden min-h-[72px] cursor-pointer ${tikTokDesktopGrid} items-center gap-3 py-2 lg:grid`}
+      >
+        <span className="font-semibold">#{rank}</span>
+        <span className="flex items-center gap-3">
+          {cover}
+          {refreshButton}
+        </span>
+        {tikTokColumns.map((column) => (
+          <span key={column.key} className={sort === column.key ? "font-black" : "font-normal"}>
+            {tikTokMetricValue(post, column.key)}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 

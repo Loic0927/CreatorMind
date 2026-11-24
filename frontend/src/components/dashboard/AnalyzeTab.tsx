@@ -174,6 +174,14 @@ export function AnalyzeTab({
                     <div className="mb-4 aspect-video w-full rounded-2xl bg-selected" />
                   )}
                   <p className="line-clamp-2 font-bold">{item.caption || "TikTok post"}</p>
+                  <div className="mt-5 grid grid-cols-3 gap-2 text-sm">
+                    <Metric label="Likes" value={item.likes ?? undefined} />
+                    <Metric label="Views" value={item.views ?? undefined} />
+                    <Metric
+                      label="Engagement"
+                      value={item.engagement_rate == null ? undefined : formatRate(item.engagement_rate)}
+                    />
+                  </div>
                 </div>
               </button>
             ))}

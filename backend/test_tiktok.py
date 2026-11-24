@@ -113,6 +113,67 @@ def test_fetch_user_videos_uses_the_display_api(monkeypatch, tiktok_environment)
     assert calls[0][1] == tiktok.TIKTOK_VIDEO_LIST_URL
     assert calls[0][2]["access_token"] == "access-sensitive"
     assert "cover_image_url" in calls[0][2]["query"]["fields"]
+    assert "like_count" in calls[0][2]["query"]["fields"]
+    assert "view_count" in calls[0][2]["query"]["fields"]
+
+
+def test_fetch_videos_by_ids_refreshes_public_metrics(monkeypatch, tiktok_environment):
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return {"data": {"videos": [{"id": "video-1", "view_count": 120}]}}
+
+    monkeypatch.setattr(tiktok, "_request_json", fake_request)
+
+    assert tiktok.fetch_videos_by_ids("access-sensitive", ["video-1"]) == [
+        {"id": "video-1", "view_count": 120}
+    ]
+    assert calls[0][1] == tiktok.TIKTOK_VIDEO_QUERY_URL
+    assert calls[0][2]["json_body"] == {"filters": {"video_ids": ["video-1"]}}
+
+
+def test_tracked_tiktok_post_stores_metrics_and_can_be_removed(tiktok_environment):
+    tracked = tiktok_environment.track_post(
+        "user-1",
+        {
+            "id": "video-1",
+            "title": "A TikTok post",
+            "create_time": 1_700_000_000,
+            "like_count": 20,
+            "comment_count": 5,
+            "share_count": 3,
+            "view_count": 200,
+        },
+    )
+
+    assert tracked["likes"] == 20
+    assert tracked["views"] == 200
+    assert tracked["engagement_rate"] == 14.0
+    assert tiktok_environment.delete_tracked_post("user-1", tracked["id"]) is True
+    assert tiktok_environment.tracked_posts("user-1") == []
+
+
+def test_tiktok_analysis_compares_official_metrics():
+    selected = {
+        "id": "selected",
+        "views": 300,
+        "likes": 30,
+        "comments": 4,
+        "shares": 6,
+        "engagement_rate": 13.3,
+        "published_at": datetime.now(UTC),
+    }
+    peers = [
+        {"id": "one", "views": 100, "likes": 10, "comments": 2, "shares": 2, "engagement_rate": 14.0},
+        {"id": "two", "views": 200, "likes": 20, "comments": 3, "shares": 3, "engagement_rate": 13.0},
+    ]
+
+    analysis = tiktok_api._tiktok_analysis(selected, [selected, *peers])
+
+    assert analysis["comparable"] is True
+    assert next(row for row in analysis["usual_ranges"] if row["metric"] == "views")["status"] == "above"
+    assert "300 views" in analysis["summary"]
 
 
 def test_callback_encrypts_both_tokens_and_redirects_without_secrets(monkeypatch, tiktok_environment):

@@ -6,6 +6,7 @@ import {
   Session,
   TrackedPost,
   deleteTrackedPost,
+  deleteTikTokTrackedPost,
   getConnection,
   getInstagramMedia,
   getTikTokMedia,
@@ -78,6 +79,10 @@ export function HomeTab({
       ),
     [posts],
   );
+  const availableTikTokMedia = useMemo(() => {
+    const trackedIds = new Set(tikTokPosts.map((post) => post.video_id));
+    return tikTokMedia.filter((item) => !trackedIds.has(item.id));
+  }, [tikTokMedia, tikTokPosts]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,10 +128,9 @@ export function HomeTab({
   const addPost = async (mediaId: string) => {
     setAddingId(mediaId);
     await attempt("Could not add this Instagram post.", async () => {
-      const tracked = await trackInstagramPost(session, mediaId);
+      await trackInstagramPost(session, mediaId);
       setChoosing(false);
       await load();
-      onOpenInstagram(tracked.id);
     });
     setAddingId("");
   };
@@ -134,10 +138,10 @@ export function HomeTab({
   const addTikTokPost = async (videoId: string) => {
     setAddingId(videoId);
     await attempt("Could not add this TikTok post.", async () => {
-      const tracked = await trackTikTokPost(session, videoId);
+      await trackTikTokPost(session, videoId);
+      setTikTokMedia((current) => current.filter((item) => item.id !== videoId));
       setChoosing(false);
       await load();
-      onOpenTikTok(tracked.id);
     });
     setAddingId("");
   };
@@ -147,10 +151,11 @@ export function HomeTab({
       setLoadingTikTokMedia(true);
       try {
         const { items } = await getTikTokMedia(session);
+        const trackedIds = new Set(tikTokPosts.map((post) => post.video_id));
         setTikTokMedia(
-          [...items].sort(
-            (left, right) => tikTokPublishedAt(right.published_at) - tikTokPublishedAt(left.published_at),
-          ),
+          items
+            .filter((item) => !trackedIds.has(item.id))
+            .sort((left, right) => tikTokPublishedAt(right.published_at) - tikTokPublishedAt(left.published_at)),
         );
       } finally {
         setLoadingTikTokMedia(false);
@@ -168,6 +173,17 @@ export function HomeTab({
     await attempt("Could not remove this post.", async () => {
       await deleteTrackedPost(session, post.tracking.id);
       setPosts((current) => current.filter((item) => item.tracking.id !== post.tracking.id));
+    });
+    setDeletingId("");
+  };
+
+  const removeTikTokPost = async (post: TikTokTrackedPost) => {
+    if (!window.confirm("Remove this post from your tracked posts?")) return;
+    setDeletingId(post.id);
+    await attempt("Could not remove this post.", async () => {
+      await deleteTikTokTrackedPost(session, post.id);
+      setTikTokPosts((current) => current.filter((item) => item.id !== post.id));
+      setTikTokMedia([]);
     });
     setDeletingId("");
   };
@@ -280,10 +296,10 @@ export function HomeTab({
             )
           ) : loadingTikTokMedia ? (
             <p className="py-8 text-center text-sm font-bold text-muted">Loading TikTok posts…</p>
-          ) : tikTokMedia.length ? (
+          ) : availableTikTokMedia.length ? (
             <div className="relative">
               <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 pr-2 [scrollbar-width:thin]">
-                {tikTokMedia.map((item) => (
+                {availableTikTokMedia.map((item) => (
                   <button
                     key={item.id}
                     type="button"
@@ -327,14 +343,29 @@ export function HomeTab({
             onRemove={removePost}
             onOpen={onOpenInstagram}
           />
-          <TikTokPostSection posts={tikTokPosts} onOpen={onOpenTikTok} />
+          <TikTokPostSection
+            posts={tikTokPosts}
+            deletingId={deletingId}
+            onOpen={onOpenTikTok}
+            onRemove={removeTikTokPost}
+          />
         </div>
       )}
     </section>
   );
 }
 
-function TikTokPostSection({ posts, onOpen }: { posts: TikTokTrackedPost[]; onOpen: (id: string) => void }) {
+function TikTokPostSection({
+  posts,
+  deletingId,
+  onOpen,
+  onRemove,
+}: {
+  posts: TikTokTrackedPost[];
+  deletingId: string;
+  onOpen: (id: string) => void;
+  onRemove: (post: TikTokTrackedPost) => Promise<void>;
+}) {
   return (
     <section aria-labelledby="tiktok-posts">
       <h2 id="tiktok-posts" className="mb-3 text-lg font-black">
@@ -343,21 +374,28 @@ function TikTokPostSection({ posts, onOpen }: { posts: TikTokTrackedPost[]; onOp
       {posts.length ? (
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
           {posts.map((post) => (
-            <button
-              key={post.id}
-              onClick={() => onOpen(post.id)}
-              className="aspect-square overflow-hidden bg-selected text-left"
-            >
-              {post.thumbnail_url ? (
-                <img
-                  alt={post.caption || "TikTok post"}
-                  src={post.thumbnail_url}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <div className="h-full w-full bg-line-strong" />
-              )}
-            </button>
+            <div key={post.id} className="group relative aspect-square overflow-hidden bg-selected">
+              <button type="button" onClick={() => onOpen(post.id)} className="h-full w-full text-left">
+                {post.thumbnail_url ? (
+                  <img
+                    alt={post.caption || "TikTok post"}
+                    src={post.thumbnail_url}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="h-full w-full bg-line-strong" />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label="Remove tracked TikTok post"
+                disabled={Boolean(deletingId)}
+                onClick={() => void onRemove(post)}
+                className="absolute right-1.5 top-1.5 z-10 grid h-7 w-7 place-items-center rounded-full bg-surface/95 text-lg font-bold leading-none text-primary-hover opacity-0 shadow-float transition-opacity focus:opacity-100 group-hover:opacity-100 disabled:opacity-50"
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
       ) : (

@@ -37,7 +37,38 @@ export type TikTokTrackedPost = {
   thumbnail_url?: string;
   permalink?: string;
   published_at?: string;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  views?: number | null;
+  engagement_rate?: number | null;
+  metrics_updated_at?: string | null;
   created_at: string;
+  analysis?: TikTokPostAnalysis;
+};
+export type TikTokMetricKey = "views" | "likes" | "engagement_rate" | "shares" | "comments";
+export type TikTokAnalysisRow = {
+  metric: TikTokMetricKey;
+  value: number;
+  usual_min: number;
+  usual_max: number;
+  status: "above" | "below" | "inside";
+  rank: number;
+  group_size: number;
+  band_start: number;
+  band_end: number;
+  marker: number;
+};
+export type TikTokPostAnalysis = {
+  comparable: boolean;
+  comparable_count: number;
+  summary: string;
+  stands_out: TikTokAnalysisRow[];
+  weaker: TikTokAnalysisRow[];
+  usual_ranges: TikTokAnalysisRow[];
+  age_days: number;
+  media_format: "Video";
+  audience_comments: { state: "unavailable"; message: string };
 };
 export type InsightSnapshot = {
   id: string;
@@ -305,6 +336,14 @@ export const trackTikTokPost = (session: Session, videoId: string) =>
   });
 export const getTikTokTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TikTokTrackedPost>(session, `/api/tiktok/tracked/${encodeURIComponent(trackedId)}`);
+export const refreshTikTokTrackedPost = (session: Session, trackedId: string) =>
+  authRequest<TikTokTrackedPost>(session, `/api/tiktok/tracked/${encodeURIComponent(trackedId)}/refresh`, {
+    method: "POST",
+  });
+export const deleteTikTokTrackedPost = (session: Session, trackedId: string) =>
+  authRequest<{ stopped: boolean }>(session, `/api/tiktok/tracked/${encodeURIComponent(trackedId)}`, {
+    method: "DELETE",
+  });
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);

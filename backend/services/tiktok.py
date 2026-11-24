@@ -23,6 +23,7 @@ TIKTOK_TOKEN_URL = f"{TIKTOK_API_BASE}/v2/oauth/token/"
 TIKTOK_REVOKE_URL = f"{TIKTOK_API_BASE}/v2/oauth/revoke/"
 TIKTOK_USER_INFO_URL = f"{TIKTOK_API_BASE}/v2/user/info/"
 TIKTOK_VIDEO_LIST_URL = f"{TIKTOK_API_BASE}/v2/video/list/"
+TIKTOK_VIDEO_QUERY_URL = f"{TIKTOK_API_BASE}/v2/video/query/"
 TIKTOK_CREATOR_INFO_URL = f"{TIKTOK_API_BASE}/v2/post/publish/creator_info/query/"
 TIKTOK_VIDEO_INIT_URL = f"{TIKTOK_API_BASE}/v2/post/publish/video/init/"
 TIKTOK_PHOTO_INIT_URL = f"{TIKTOK_API_BASE}/v2/post/publish/content/init/"
@@ -243,12 +244,36 @@ def fetch_user_info(access_token: str) -> dict[str, Any]:
 
 def fetch_user_videos(access_token: str, *, max_count: int = 20) -> list[dict[str, Any]]:
     """Return recent public videos using TikTok's Display API."""
-    fields = "id,create_time,cover_image_url,share_url,video_description,duration,title"
+    fields = (
+        "id,create_time,cover_image_url,share_url,video_description,duration,title,"
+        "like_count,comment_count,share_count,view_count"
+    )
     payload = _request_json(
         "POST",
         TIKTOK_VIDEO_LIST_URL,
         query={"fields": fields},
         json_body={"max_count": max(1, min(max_count, 20))},
+        access_token=access_token,
+    )
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    videos = data.get("videos")
+    return [item for item in videos if isinstance(item, dict)] if isinstance(videos, list) else []
+
+
+def fetch_videos_by_ids(access_token: str, video_ids: list[str]) -> list[dict[str, Any]]:
+    """Refresh metadata and public counters for up to 20 owned videos."""
+    ids = [str(item) for item in video_ids if str(item)][:20]
+    if not ids:
+        return []
+    fields = (
+        "id,create_time,cover_image_url,share_url,video_description,duration,title,"
+        "like_count,comment_count,share_count,view_count"
+    )
+    payload = _request_json(
+        "POST",
+        TIKTOK_VIDEO_QUERY_URL,
+        query={"fields": fields},
+        json_body={"filters": {"video_ids": ids}},
         access_token=access_token,
     )
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
