@@ -42,6 +42,10 @@ class TikTokStatusRequest(BaseModel):
     publish_id: str = Field(..., min_length=4, max_length=255)
 
 
+class TikTokTrackRequest(BaseModel):
+    video_id: str = Field(..., min_length=1, max_length=255)
+
+
 def _service_error(exc: TikTokServiceError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message})
 
@@ -267,6 +271,40 @@ def media(user: AuthenticatedUser = Depends(require_user)) -> dict:
             if item.get("id")
         ]
     }
+
+
+@router.get("/tracked")
+def tracked_posts(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    try:
+        return {"items": get_tiktok_repository().tracked_posts(user.id)}
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+
+
+@router.post("/tracked")
+def track_post(payload: TikTokTrackRequest, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    connection_value = active_connection(user.id)
+    try:
+        videos = fetch_user_videos(access_token_for(connection_value))
+        video = next((item for item in videos if str(item.get("id")) == payload.video_id), None)
+        if video is None:
+            raise HTTPException(status_code=404, detail={"code": "tiktok_video_not_found", "message": "TikTok post was not found."})
+        return get_tiktok_repository().track_post(user.id, video)
+    except TikTokServiceError as exc:
+        raise _service_error(exc) from None
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+
+
+@router.get("/tracked/{tracked_id}")
+def tracked_post(tracked_id: str, user: AuthenticatedUser = Depends(require_user)) -> dict:
+    try:
+        post = get_tiktok_repository().get_tracked_post(user.id, tracked_id)
+    except TikTokRepositoryError:
+        raise _repository_error() from None
+    if post is None:
+        raise HTTPException(status_code=404, detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."})
+    return post
 
 
 @router.post("/publishing/status")

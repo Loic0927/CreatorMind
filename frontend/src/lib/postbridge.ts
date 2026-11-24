@@ -30,6 +30,15 @@ export type TikTokConnection = {
   scopes?: string[];
   updated_at?: string | null;
 };
+export type TikTokTrackedPost = {
+  id: string;
+  video_id: string;
+  caption: string;
+  thumbnail_url?: string;
+  permalink?: string;
+  published_at?: string;
+  created_at: string;
+};
 export type InsightSnapshot = {
   id: string;
   likes?: number | null;
@@ -287,6 +296,15 @@ export const getTikTokMedia = (session: Session) =>
       published_at?: number | string;
     }>;
   }>(session, "/api/tiktok/media");
+export const getTikTokTrackedPosts = (session: Session) =>
+  authRequest<{ items: TikTokTrackedPost[] }>(session, "/api/tiktok/tracked");
+export const trackTikTokPost = (session: Session, videoId: string) =>
+  authRequest<TikTokTrackedPost>(session, "/api/tiktok/tracked", {
+    method: "POST",
+    body: JSON.stringify({ video_id: videoId }),
+  });
+export const getTikTokTrackedPost = (session: Session, trackedId: string) =>
+  authRequest<TikTokTrackedPost>(session, `/api/tiktok/tracked/${encodeURIComponent(trackedId)}`);
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);

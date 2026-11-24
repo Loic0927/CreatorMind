@@ -8,6 +8,7 @@ import { HomeTab } from "@/components/dashboard/HomeTab";
 import { InsightsTab } from "@/components/dashboard/InsightsTab";
 import { LoginScreen } from "@/components/dashboard/LoginScreen";
 import { SettingsTab } from "@/components/dashboard/SettingsTab";
+import { TikTokPostTab } from "@/components/dashboard/TikTokPostTab";
 import { Brand } from "@/components/dashboard/ui";
 
 type Tab = "home" | "create" | "analyze" | "insights" | "settings";
@@ -99,16 +100,21 @@ export default function DashboardPage() {
         <Brand compact />
       </header>
       <main className="mx-auto max-w-6xl px-5 pb-28 pt-5 lg:ml-64 lg:px-9 lg:pb-12 lg:pt-7">
-        {tab === "home" && <HomeTab session={session} onConnect={connect} />}
-        {tab === "create" && <CreateTab session={session} />}
-        {tab === "analyze" && (
-          <AnalyzeTab
-            session={session}
-            initialId={analyzeId}
-            onOpen={(id) => navigate("analyze", id)}
-            onClear={() => navigate("analyze")}
-          />
+        {tab === "home" && (
+          <HomeTab session={session} onConnect={connect} onOpenTikTok={(id) => navigate("analyze", `tiktok:${id}`)} />
         )}
+        {tab === "create" && <CreateTab session={session} />}
+        {tab === "analyze" &&
+          (analyzeId.startsWith("tiktok:") ? (
+            <TikTokPostTab session={session} trackedId={analyzeId.slice(7)} onBack={() => navigate("analyze")} />
+          ) : (
+            <AnalyzeTab
+              session={session}
+              initialId={analyzeId}
+              onOpen={(id) => navigate("analyze", id)}
+              onClear={() => navigate("analyze")}
+            />
+          ))}
         {tab === "insights" && <InsightsTab session={session} onOpen={(id) => navigate("analyze", id)} />}
         {tab === "settings" && <SettingsTab session={session} onLogout={() => updateSession(null)} />}
       </main>

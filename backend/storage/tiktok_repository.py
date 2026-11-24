@@ -1,13 +1,14 @@
 """Durable TikTok OAuth and connection persistence."""
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.storage.database import session_factory
 from backend.storage.models import TikTokConnection
-from backend.storage.sql_models import TikTokConnectionRecord, TikTokOAuthStateRecord
+from backend.storage.sql_models import TikTokConnectionRecord, TikTokOAuthStateRecord, TikTokTrackedPostRecord
 
 
 class TikTokRepositoryError(RuntimeError):
@@ -194,6 +195,53 @@ class TikTokRepository:
                 return bool(result.rowcount)
         except Exception:
             raise TikTokRepositoryError("TikTok connection storage is unavailable.") from None
+
+    def tracked_posts(self, user_id: str) -> list[dict]:
+        try:
+            with self._factory() as session:
+                rows = session.scalars(
+                    select(TikTokTrackedPostRecord)
+                    .where(TikTokTrackedPostRecord.user_id == user_id)
+                    .order_by(TikTokTrackedPostRecord.published_at.desc(), TikTokTrackedPostRecord.created_at.desc())
+                ).all()
+                return [self._tracked(row) for row in rows]
+        except Exception:
+            raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
+
+    def track_post(self, user_id: str, item: dict) -> dict:
+        try:
+            with self._factory.begin() as session:
+                row = session.scalar(
+                    select(TikTokTrackedPostRecord).where(
+                        TikTokTrackedPostRecord.user_id == user_id,
+                        TikTokTrackedPostRecord.video_id == str(item["id"]),
+                    )
+                )
+                if row is None:
+                    row = TikTokTrackedPostRecord(
+                        id=str(uuid4()), user_id=user_id, video_id=str(item["id"]),
+                        caption=str(item.get("video_description") or item.get("title") or "TikTok post"),
+                        thumbnail_url=item.get("cover_image_url"), permalink=item.get("share_url"),
+                        published_at=datetime.fromtimestamp(int(item["create_time"]), UTC) if item.get("create_time") else None,
+                        created_at=datetime.now(UTC),
+                    )
+                    session.add(row)
+                    session.flush()
+                return self._tracked(row)
+        except Exception:
+            raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
+
+    def get_tracked_post(self, user_id: str, tracked_id: str) -> dict | None:
+        try:
+            with self._factory() as session:
+                row = session.scalar(select(TikTokTrackedPostRecord).where(TikTokTrackedPostRecord.user_id == user_id, TikTokTrackedPostRecord.id == tracked_id))
+                return self._tracked(row) if row else None
+        except Exception:
+            raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
+
+    @staticmethod
+    def _tracked(row: TikTokTrackedPostRecord) -> dict:
+        return {"id": row.id, "video_id": row.video_id, "caption": row.caption, "thumbnail_url": row.thumbnail_url, "permalink": row.permalink, "published_at": _utc(row.published_at), "created_at": _utc(row.created_at)}
 
     def delete_user_data(self, user_id: str) -> None:
         try:

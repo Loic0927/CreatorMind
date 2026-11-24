@@ -9,7 +9,10 @@ import {
   getConnection,
   getInstagramMedia,
   getTikTokMedia,
+  getTikTokTrackedPosts,
   getTrackedPosts,
+  TikTokTrackedPost,
+  trackTikTokPost,
   trackInstagramPost,
 } from "@/lib/postbridge";
 import { errorMessage } from "@/lib/format";
@@ -43,11 +46,20 @@ const tikTokPublishedAt = (value: number | string | undefined) => {
   return value ? new Date(value).getTime() : 0;
 };
 
-export function HomeTab({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
+export function HomeTab({
+  session,
+  onConnect,
+  onOpenTikTok,
+}: {
+  session: Session;
+  onConnect: () => Promise<void>;
+  onOpenTikTok: (id: string) => void;
+}) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [posts, setPosts] = useState<TrackedPost[]>([]);
   const [media, setMedia] = useState<InstagramMediaItem[]>([]);
   const [tikTokMedia, setTikTokMedia] = useState<TikTokMediaItem[]>([]);
+  const [tikTokPosts, setTikTokPosts] = useState<TikTokTrackedPost[]>([]);
   const [choosing, setChoosing] = useState(false);
   const [selectionPlatform, setSelectionPlatform] = useState<SelectionPlatform>("Instagram");
   const [loading, setLoading] = useState(true);
@@ -68,9 +80,14 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextConnection, tracked] = await Promise.all([getConnection(session), getTrackedPosts(session)]);
+      const [nextConnection, tracked, trackedTikTok] = await Promise.all([
+        getConnection(session),
+        getTrackedPosts(session),
+        getTikTokTrackedPosts(session).catch(() => ({ items: [] })),
+      ]);
       setConnection(nextConnection);
       setPosts(tracked.items);
+      setTikTokPosts(trackedTikTok.items);
     } catch (reason) {
       setError(errorMessage(reason, "Could not load posts."));
     } finally {
@@ -105,6 +122,16 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     setAddingId(mediaId);
     await attempt("Could not add this Instagram post.", async () => {
       await trackInstagramPost(session, mediaId);
+      setChoosing(false);
+      await load();
+    });
+    setAddingId("");
+  };
+
+  const addTikTokPost = async (videoId: string) => {
+    setAddingId(videoId);
+    await attempt("Could not add this TikTok post.", async () => {
+      await trackTikTokPost(session, videoId);
       setChoosing(false);
       await load();
     });
@@ -187,7 +214,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                 onClick={() => selectPlatform(platform)}
                 className={`relative min-h-11 px-4 text-sm font-black ${selectionPlatform === platform ? "text-primary" : "text-muted hover:text-ink"}`}
               >
-                {platform} Post
+                {platform}
                 {selectionPlatform === platform ? (
                   <span aria-hidden className="absolute inset-x-4 bottom-0 h-0.5 bg-primary" />
                 ) : null}
@@ -253,23 +280,24 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
             <div className="relative">
               <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 pr-2 [scrollbar-width:thin]">
                 {tikTokMedia.map((item) => (
-                  <a
+                  <button
                     key={item.id}
-                    href={item.permalink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-32 shrink-0 snap-start overflow-hidden rounded-2xl bg-selected text-left sm:w-40"
+                    type="button"
+                    disabled={Boolean(addingId)}
+                    onClick={() => void addTikTokPost(item.id)}
+                    className="w-32 shrink-0 snap-start overflow-hidden rounded-2xl bg-selected text-left disabled:opacity-60 sm:w-40"
                   >
                     {item.thumbnail_url ? (
                       <img alt="" src={item.thumbnail_url} className="aspect-square w-full object-cover" />
                     ) : (
                       <div className="aspect-square bg-line-strong" />
                     )}
-                    <p className="line-clamp-2 min-h-12 p-2 text-xs font-bold">{item.caption || "TikTok post"}</p>
-                  </a>
+                    <p className="line-clamp-2 min-h-12 p-2 text-xs font-bold">
+                      {addingId === item.id ? "Adding…" : item.caption || "TikTok post"}
+                    </p>
+                  </button>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-muted">TikTok videos are read directly from your connected account.</p>
             </div>
           ) : (
             <p className="py-8 text-center text-sm font-bold text-muted">No public TikTok posts were found.</p>
@@ -294,8 +322,43 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
             deletingId={deletingId}
             onRemove={removePost}
           />
-          <PlatformPostSection platform="TikTok" posts={[]} deletingId={deletingId} onRemove={removePost} />
+          <TikTokPostSection posts={tikTokPosts} onOpen={onOpenTikTok} />
         </div>
+      )}
+    </section>
+  );
+}
+
+function TikTokPostSection({ posts, onOpen }: { posts: TikTokTrackedPost[]; onOpen: (id: string) => void }) {
+  return (
+    <section aria-labelledby="tiktok-posts">
+      <h2 id="tiktok-posts" className="mb-3 text-lg font-black">
+        TikTok
+      </h2>
+      {posts.length ? (
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+          {posts.map((post) => (
+            <button
+              key={post.id}
+              onClick={() => onOpen(post.id)}
+              className="aspect-square overflow-hidden bg-selected text-left"
+            >
+              {post.thumbnail_url ? (
+                <img
+                  alt={post.caption || "TikTok post"}
+                  src={post.thumbnail_url}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="h-full w-full bg-line-strong" />
+              )}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <Panel>
+          <p className="text-sm font-bold text-muted">No tracked TikTok posts yet.</p>
+        </Panel>
       )}
     </section>
   );

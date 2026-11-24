@@ -83,6 +83,20 @@ class TikTokConnectionRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class TikTokTrackedPostRecord(Base):
+    __tablename__ = "tiktok_tracked_posts"
+    __table_args__ = (UniqueConstraint("user_id", "video_id", name="uq_tiktok_tracked_posts_user_video"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    video_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    permalink: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class InstagramDataDeletionRequestRecord(Base):
     __tablename__ = "instagram_data_deletion_requests"
 
