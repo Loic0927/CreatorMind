@@ -8,6 +8,7 @@ import {
   deleteTrackedPost,
   getConnection,
   getInstagramMedia,
+  getTikTokMedia,
   getTrackedPosts,
   trackInstagramPost,
 } from "@/lib/postbridge";
@@ -22,6 +23,13 @@ type InstagramMediaItem = {
   published_at?: string;
 };
 type SelectionPlatform = "Instagram" | "TikTok";
+type TikTokMediaItem = {
+  id: string;
+  caption: string;
+  thumbnail_url?: string;
+  permalink?: string;
+  published_at?: number | string;
+};
 
 const primaryButton = "rounded-xl bg-primary px-5 py-3 font-bold text-white hover:bg-primary-hover";
 const byOldestFirst = <T,>(items: T[]) =>
@@ -30,15 +38,21 @@ const byOldestFirst = <T,>(items: T[]) =>
       new Date((left as { published_at?: string }).published_at ?? 0).getTime() -
       new Date((right as { published_at?: string }).published_at ?? 0).getTime(),
   );
+const tikTokPublishedAt = (value: number | string | undefined) => {
+  if (typeof value === "number") return value * 1000;
+  return value ? new Date(value).getTime() : 0;
+};
 
 export function HomeTab({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [posts, setPosts] = useState<TrackedPost[]>([]);
   const [media, setMedia] = useState<InstagramMediaItem[]>([]);
+  const [tikTokMedia, setTikTokMedia] = useState<TikTokMediaItem[]>([]);
   const [choosing, setChoosing] = useState(false);
   const [selectionPlatform, setSelectionPlatform] = useState<SelectionPlatform>("Instagram");
   const [loading, setLoading] = useState(true);
   const [addingId, setAddingId] = useState("");
+  const [loadingTikTokMedia, setLoadingTikTokMedia] = useState(false);
   const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
   const carousel = useRef<HTMLDivElement>(null);
@@ -97,6 +111,26 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     setAddingId("");
   };
 
+  const loadTikTokMedia = () =>
+    attempt("Could not load TikTok posts. Reconnect TikTok with the video.list permission and try again.", async () => {
+      setLoadingTikTokMedia(true);
+      try {
+        const { items } = await getTikTokMedia(session);
+        setTikTokMedia(
+          [...items].sort(
+            (left, right) => tikTokPublishedAt(left.published_at) - tikTokPublishedAt(right.published_at),
+          ),
+        );
+      } finally {
+        setLoadingTikTokMedia(false);
+      }
+    });
+
+  const selectPlatform = (platform: SelectionPlatform) => {
+    setSelectionPlatform(platform);
+    if (platform === "TikTok" && !tikTokMedia.length && !loadingTikTokMedia) void loadTikTokMedia();
+  };
+
   const removePost = async (post: TrackedPost) => {
     if (!window.confirm("Remove this post from your tracked posts?")) return;
     setDeletingId(post.tracking.id);
@@ -150,7 +184,7 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
                 type="button"
                 role="tab"
                 aria-selected={selectionPlatform === platform}
-                onClick={() => setSelectionPlatform(platform)}
+                onClick={() => selectPlatform(platform)}
                 className={`relative min-h-11 px-4 text-sm font-black ${selectionPlatform === platform ? "text-primary" : "text-muted hover:text-ink"}`}
               >
                 {platform} Post
@@ -213,10 +247,32 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
             ) : (
               <p className="py-8 text-center text-sm font-bold text-muted">All Instagram posts are already tracked.</p>
             )
+          ) : loadingTikTokMedia ? (
+            <p className="py-8 text-center text-sm font-bold text-muted">Loading TikTok posts…</p>
+          ) : tikTokMedia.length ? (
+            <div className="relative">
+              <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 pr-2 [scrollbar-width:thin]">
+                {tikTokMedia.map((item) => (
+                  <a
+                    key={item.id}
+                    href={item.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-32 shrink-0 snap-start overflow-hidden rounded-2xl bg-selected text-left sm:w-40"
+                  >
+                    {item.thumbnail_url ? (
+                      <img alt="" src={item.thumbnail_url} className="aspect-square w-full object-cover" />
+                    ) : (
+                      <div className="aspect-square bg-line-strong" />
+                    )}
+                    <p className="line-clamp-2 min-h-12 p-2 text-xs font-bold">{item.caption || "TikTok post"}</p>
+                  </a>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted">TikTok videos are read directly from your connected account.</p>
+            </div>
           ) : (
-            <p className="py-8 text-center text-sm font-bold text-muted">
-              TikTok post selection will appear here after TikTok post syncing is enabled.
-            </p>
+            <p className="py-8 text-center text-sm font-bold text-muted">No public TikTok posts were found.</p>
           )}
         </Panel>
       ) : null}

@@ -34,7 +34,7 @@ def tiktok_environment(monkeypatch):
     monkeypatch.setenv("POSTBRIDGE_TIKTOK_CLIENT_KEY", "sandbox-key")
     monkeypatch.setenv("POSTBRIDGE_TIKTOK_CLIENT_SECRET", "sandbox-secret")
     monkeypatch.setenv("POSTBRIDGE_TIKTOK_REDIRECT_URI", "https://api.example.test/api/tiktok/connect/callback")
-    monkeypatch.setenv("POSTBRIDGE_TIKTOK_SCOPES", "user.info.basic,video.publish")
+    monkeypatch.setenv("POSTBRIDGE_TIKTOK_SCOPES", "user.info.basic,video.list,video.publish")
     monkeypatch.setenv("POSTBRIDGE_TIKTOK_MEDIA_URL_SECRET", "media-url-secret")
     monkeypatch.setenv("POSTBRIDGE_PUBLIC_API_URL", "https://api.example.test")
     monkeypatch.setenv("POSTBRIDGE_TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
@@ -72,7 +72,7 @@ def test_oauth_state_is_single_use_and_authorization_url_is_sandbox_ready(tiktok
 
     assert query["client_key"] == ["sandbox-key"]
     assert query["redirect_uri"] == ["https://api.example.test/api/tiktok/connect/callback"]
-    assert query["scope"] == ["user.info.basic,video.publish"]
+    assert query["scope"] == ["user.info.basic,video.list,video.publish"]
     assert tiktok.consume_oauth_state(state) == ("user-1", "web")
     with pytest.raises(tiktok.TikTokServiceError) as replayed:
         tiktok.consume_oauth_state(state)
@@ -97,6 +97,22 @@ def test_token_exchange_uses_server_side_credentials(monkeypatch, tiktok_environ
     assert result["open_id"] == "open-1"
     assert calls[0][2]["form"]["client_secret"] == "sandbox-secret"
     assert calls[0][2]["form"]["redirect_uri"] == "https://api.example.test/api/tiktok/connect/callback"
+
+
+def test_fetch_user_videos_uses_the_display_api(monkeypatch, tiktok_environment):
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return {"data": {"videos": [{"id": "video-1", "title": "A TikTok post"}]}}
+
+    monkeypatch.setattr(tiktok, "_request_json", fake_request)
+
+    assert tiktok.fetch_user_videos("access-sensitive") == [{"id": "video-1", "title": "A TikTok post"}]
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == tiktok.TIKTOK_VIDEO_LIST_URL
+    assert calls[0][2]["access_token"] == "access-sensitive"
+    assert "cover_image_url" in calls[0][2]["query"]["fields"]
 
 
 def test_callback_encrypts_both_tokens_and_redirects_without_secrets(monkeypatch, tiktok_environment):

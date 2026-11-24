@@ -20,6 +20,7 @@ from backend.services.tiktok import (
     encrypt_token,
     exchange_authorization_code,
     fetch_creator_info,
+    fetch_user_videos,
     fetch_publish_status,
     fetch_user_info,
     granted_scopes,
@@ -243,6 +244,29 @@ def creator_info(user: AuthenticatedUser = Depends(require_user)) -> dict:
         return fetch_creator_info(access_token_for(connection_value))
     except TikTokServiceError as exc:
         raise _service_error(exc) from None
+
+
+@router.get("/media")
+def media(user: AuthenticatedUser = Depends(require_user)) -> dict:
+    """List recent public videos for the authenticated creator."""
+    connection_value = active_connection(user.id)
+    try:
+        videos = fetch_user_videos(access_token_for(connection_value))
+    except TikTokServiceError as exc:
+        raise _service_error(exc) from None
+    return {
+        "items": [
+            {
+                "id": str(item["id"]),
+                "caption": str(item.get("video_description") or item.get("title") or "TikTok post"),
+                "thumbnail_url": item.get("cover_image_url"),
+                "permalink": item.get("share_url"),
+                "published_at": item.get("create_time"),
+            }
+            for item in videos
+            if item.get("id")
+        ]
+    }
 
 
 @router.post("/publishing/status")

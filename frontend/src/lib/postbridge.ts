@@ -277,6 +277,16 @@ export async function authRequest<T>(session: Session, path: string, init?: Requ
 export const getConnection = (session: Session) => authRequest<Connection>(session, "/api/instagram/connection");
 export const getTikTokConnection = (session: Session) =>
   authRequest<TikTokConnection>(session, "/api/tiktok/connection");
+export const getTikTokMedia = (session: Session) =>
+  authRequest<{
+    items: Array<{
+      id: string;
+      caption: string;
+      thumbnail_url?: string;
+      permalink?: string;
+      published_at?: number | string;
+    }>;
+  }>(session, "/api/tiktok/media");
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);
