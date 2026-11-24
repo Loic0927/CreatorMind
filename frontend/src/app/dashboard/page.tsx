@@ -89,18 +89,6 @@ export default function DashboardPage() {
     setPostDetail(null);
   };
 
-  const openPost = (platform: PostPlatform, id: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", "home");
-    url.searchParams.set("view", "post");
-    url.searchParams.set("platform", platform);
-    url.searchParams.set("post", id);
-    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-    setTab("home");
-    setAnalyzeId("");
-    setPostDetail({ platform, id });
-  };
-
   return (
     <div className="min-h-screen bg-canvas-gradient bg-fixed text-ink">
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-line bg-sidebar p-5 lg:flex lg:flex-col">
@@ -136,12 +124,7 @@ export default function DashboardPage() {
               detailTitle="Instagram"
             />
           ) : (
-            <HomeTab
-              session={session}
-              onConnect={connect}
-              onOpenInstagram={(id) => openPost("instagram", id)}
-              onOpenTikTok={(id) => openPost("tiktok", id)}
-            />
+            <HomeTab session={session} onConnect={connect} />
           ))}
         {tab === "create" && <CreateTab session={session} />}
         {tab === "analyze" &&

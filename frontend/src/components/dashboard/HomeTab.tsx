@@ -47,17 +47,7 @@ const tikTokPublishedAt = (value: number | string | undefined) => {
   return value ? new Date(value).getTime() : 0;
 };
 
-export function HomeTab({
-  session,
-  onConnect,
-  onOpenInstagram,
-  onOpenTikTok,
-}: {
-  session: Session;
-  onConnect: () => Promise<void>;
-  onOpenInstagram: (id: string) => void;
-  onOpenTikTok: (id: string) => void;
-}) {
+export function HomeTab({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [posts, setPosts] = useState<TrackedPost[]>([]);
   const [media, setMedia] = useState<InstagramMediaItem[]>([]);
@@ -79,6 +69,12 @@ export function HomeTab({
       ),
     [posts],
   );
+  const availableInstagramMedia = useMemo(() => {
+    const trackedIds = new Set(
+      posts.map((post) => post.media.instagram_media_id).filter((id): id is string => Boolean(id)),
+    );
+    return media.filter((item) => !trackedIds.has(item.id));
+  }, [media, posts]);
   const availableTikTokMedia = useMemo(() => {
     const trackedIds = new Set(tikTokPosts.map((post) => post.video_id));
     return tikTokMedia.filter((item) => !trackedIds.has(item.id));
@@ -118,9 +114,8 @@ export function HomeTab({
   const openPostPicker = () => {
     setSelectionPlatform("Instagram");
     void attempt("Could not load Instagram posts.", async () => {
-      const trackedIds = new Set(posts.map((post) => post.media.id));
       const { items } = await getInstagramMedia(session);
-      setMedia(byNewestFirst(items.filter((item) => !trackedIds.has(item.id))));
+      setMedia(byNewestFirst(items));
       setChoosing(true);
     });
   };
@@ -139,7 +134,6 @@ export function HomeTab({
     setAddingId(videoId);
     await attempt("Could not add this TikTok post.", async () => {
       await trackTikTokPost(session, videoId);
-      setTikTokMedia((current) => current.filter((item) => item.id !== videoId));
       setChoosing(false);
       await load();
     });
@@ -151,11 +145,8 @@ export function HomeTab({
       setLoadingTikTokMedia(true);
       try {
         const { items } = await getTikTokMedia(session);
-        const trackedIds = new Set(tikTokPosts.map((post) => post.video_id));
         setTikTokMedia(
-          items
-            .filter((item) => !trackedIds.has(item.id))
-            .sort((left, right) => tikTokPublishedAt(right.published_at) - tikTokPublishedAt(left.published_at)),
+          items.sort((left, right) => tikTokPublishedAt(right.published_at) - tikTokPublishedAt(left.published_at)),
         );
       } finally {
         setLoadingTikTokMedia(false);
@@ -183,7 +174,6 @@ export function HomeTab({
     await attempt("Could not remove this post.", async () => {
       await deleteTikTokTrackedPost(session, post.id);
       setTikTokPosts((current) => current.filter((item) => item.id !== post.id));
-      setTikTokMedia([]);
     });
     setDeletingId("");
   };
@@ -242,13 +232,13 @@ export function HomeTab({
             ))}
           </div>
           {selectionPlatform === "Instagram" ? (
-            media.length ? (
+            availableInstagramMedia.length ? (
               <div className="relative">
                 <div
                   ref={carousel}
                   className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 pr-2 [scrollbar-width:thin]"
                 >
-                  {media.map((item) => (
+                  {availableInstagramMedia.map((item) => (
                     <button
                       key={item.id}
                       disabled={Boolean(addingId)}
@@ -270,7 +260,7 @@ export function HomeTab({
                     </button>
                   ))}
                 </div>
-                {media.length > 2 ? (
+                {availableInstagramMedia.length > 2 ? (
                   <div className="mt-1 flex justify-end gap-2">
                     <button
                       type="button"
@@ -341,14 +331,8 @@ export function HomeTab({
             posts={orderedPosts}
             deletingId={deletingId}
             onRemove={removePost}
-            onOpen={onOpenInstagram}
           />
-          <TikTokPostSection
-            posts={tikTokPosts}
-            deletingId={deletingId}
-            onOpen={onOpenTikTok}
-            onRemove={removeTikTokPost}
-          />
+          <TikTokPostSection posts={tikTokPosts} deletingId={deletingId} onRemove={removeTikTokPost} />
         </div>
       )}
     </section>
@@ -358,12 +342,10 @@ export function HomeTab({
 function TikTokPostSection({
   posts,
   deletingId,
-  onOpen,
   onRemove,
 }: {
   posts: TikTokTrackedPost[];
   deletingId: string;
-  onOpen: (id: string) => void;
   onRemove: (post: TikTokTrackedPost) => Promise<void>;
 }) {
   return (
@@ -375,17 +357,37 @@ function TikTokPostSection({
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
           {posts.map((post) => (
             <div key={post.id} className="group relative aspect-square overflow-hidden bg-selected">
-              <button type="button" onClick={() => onOpen(post.id)} className="h-full w-full text-left">
-                {post.thumbnail_url ? (
-                  <img
-                    alt={post.caption || "TikTok post"}
-                    src={post.thumbnail_url}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="h-full w-full bg-line-strong" />
-                )}
-              </button>
+              {post.permalink ? (
+                <a
+                  href={post.permalink}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Open TikTok post"
+                  className="block h-full w-full text-left"
+                >
+                  {post.thumbnail_url ? (
+                    <img
+                      alt={post.caption || "TikTok post"}
+                      src={post.thumbnail_url}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-line-strong" />
+                  )}
+                </a>
+              ) : (
+                <div className="h-full w-full">
+                  {post.thumbnail_url ? (
+                    <img
+                      alt={post.caption || "TikTok post"}
+                      src={post.thumbnail_url}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-line-strong" />
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 aria-label="Remove tracked TikTok post"
@@ -412,13 +414,11 @@ function PlatformPostSection({
   posts,
   deletingId,
   onRemove,
-  onOpen,
 }: {
   platform: SelectionPlatform;
   posts: TrackedPost[];
   deletingId: string;
   onRemove: (post: TrackedPost) => Promise<void>;
-  onOpen: (id: string) => void;
 }) {
   return (
     <section aria-labelledby={`${platform.toLowerCase()}-posts`}>
@@ -431,22 +431,37 @@ function PlatformPostSection({
             const image = post.media.thumbnail_url || post.media.media_url;
             return (
               <div key={post.tracking.id} className="group relative aspect-square overflow-hidden bg-selected">
-                <button
-                  type="button"
-                  onClick={() => onOpen(post.tracking.id)}
-                  aria-label={`Open ${platform} post`}
-                  className="h-full w-full text-left"
-                >
-                  {image ? (
-                    <img
-                      alt={post.media.caption || `${platform} post`}
-                      src={image}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="h-full w-full bg-line-strong" />
-                  )}
-                </button>
+                {post.media.permalink ? (
+                  <a
+                    href={post.media.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={`Open ${platform} post`}
+                    className="block h-full w-full text-left"
+                  >
+                    {image ? (
+                      <img
+                        alt={post.media.caption || `${platform} post`}
+                        src={image}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full bg-line-strong" />
+                    )}
+                  </a>
+                ) : (
+                  <div className="h-full w-full">
+                    {image ? (
+                      <img
+                        alt={post.media.caption || `${platform} post`}
+                        src={image}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full bg-line-strong" />
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   aria-label="Remove tracked post"
