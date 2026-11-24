@@ -892,14 +892,14 @@ def refresh_tracking(
         # write-side cache refresh rather than making the GET-style response
         # path responsible for generation.
         if background_tasks is not None:
-            background_tasks.add_task(refresh_cached_insights, user_id, tracked_id)
+            background_tasks.add_task(refresh_cached_insights, user_id, tracked_id, True)
         return tracked_detail(tracked_id, user)
     try:
         refresh_one_post(user_id, tracked_item["tracking"], media_item, usable_token(account))
     except InstagramServiceError as exc:
         raise _handle_connected_service_error(account, exc) from exc
     if background_tasks is not None:
-        background_tasks.add_task(refresh_cached_insights, user_id, tracked_id)
+        background_tasks.add_task(refresh_cached_insights, user_id, tracked_id, True)
     return tracked_detail(tracked_id, user)
 
 

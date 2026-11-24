@@ -65,7 +65,11 @@ def _internal_posts(items: list[dict[str, Any]], performance_posts: list[dict[st
     return result
 
 
-def refresh_cached_insights(user_id: str, tracked_post_id: str | None = None) -> None:
+def refresh_cached_insights(
+    user_id: str,
+    tracked_post_id: str | None = None,
+    retry_template_summaries: bool = False,
+) -> None:
     """Refresh generated text after a write-side collection event.
 
     Individual failures are isolated so a transient model/configuration issue
@@ -108,7 +112,11 @@ def refresh_cached_insights(user_id: str, tracked_post_id: str | None = None) ->
         LOGGER.warning("suggestion_refresh_failed user_id=%s error_type=%s", user_id, type(exc).__name__)
 
     try:
-        refresh_summary_for_user(user_id, tracked_post_id)
+        refresh_summary_for_user(
+            user_id,
+            tracked_post_id,
+            retry_template_fallback=retry_template_summaries,
+        )
     except Exception as exc:  # pragma: no cover - provider-specific logging path
         LOGGER.warning(
             "summary_refresh_failed user_id=%s tracked_post_id=%s error_type=%s",

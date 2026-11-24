@@ -859,7 +859,7 @@ def test_manual_refresh_schedules_cached_insight_generation(monkeypatch):
     assert len(refreshed) == 1
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func is instagram_api.refresh_cached_insights
-    assert background_tasks.tasks[0].args == ("user-1", "tracked-one")
+    assert background_tasks.tasks[0].args == ("user-1", "tracked-one", True)
 
 
 def test_recent_manual_refresh_still_schedules_cached_insight_generation(monkeypatch):
@@ -890,4 +890,4 @@ def test_recent_manual_refresh_still_schedules_cached_insight_generation(monkeyp
     assert result == {"id": "tracked-one"}
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].func is instagram_api.refresh_cached_insights
-    assert background_tasks.tasks[0].args == ("user-1", "tracked-one")
+    assert background_tasks.tasks[0].args == ("user-1", "tracked-one", True)

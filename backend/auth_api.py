@@ -226,7 +226,7 @@ def save_account_context(
     if background_tasks is not None:
         from backend.services.insight_refresh import refresh_cached_insights
 
-        background_tasks.add_task(refresh_cached_insights, user.id)
+        background_tasks.add_task(refresh_cached_insights, user.id, None, True)
     return context_as_dict(encoded)
 
 

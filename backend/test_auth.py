@@ -251,7 +251,7 @@ def test_saving_account_context_queues_a_contextual_analysis_refresh(auth_databa
 
     assert len(tasks.tasks) == 1
     assert tasks.tasks[0].func.__name__ == "refresh_cached_insights"
-    assert tasks.tasks[0].args == (user.id,)
+    assert tasks.tasks[0].args == (user.id, None, True)
 
 
 def test_legacy_account_context_fields_are_ignored(auth_database):

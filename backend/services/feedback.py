@@ -656,6 +656,7 @@ def generate_summary(
     media_loader: Callable[[], tuple[bytes, str] | None] | None = None,
     post_caption: str = "",
     creator_context: str = "",
+    retry_template_fallback: bool = False,
 ) -> str | None:
     """Generate or retrieve a Summary without fetching media on a cache hit.
 
@@ -695,7 +696,10 @@ def generate_summary(
             "prompt_version": PROMPT_VERSION,
         }
     )
-    if existing and existing.input_hash == input_hash:
+    retrying_failed_ai_generation = (
+        consented and retry_template_fallback and getattr(existing, "provider", "") == "template"
+    )
+    if existing and existing.input_hash == input_hash and not retrying_failed_ai_generation:
         return existing.text or None
     if not metric_facts:
         _log(tracked_post_id, "none", "none", input_hash, "empty", 0, None)
@@ -830,7 +834,12 @@ def cached_summary(user_id: str, tracked_post_id: str) -> str | None:
     return item.text or None if item else None
 
 
-def refresh_summary_for_user(user_id: str, tracked_post_id: str | None = None) -> None:
+def refresh_summary_for_user(
+    user_id: str,
+    tracked_post_id: str | None = None,
+    *,
+    retry_template_fallback: bool = False,
+) -> None:
     """Generate caches only from explicit login-sync/manual-refresh call sites."""
     from backend.services.account_insights import build_post_analysis
     from backend.storage.instagram_repository import get_instagram_repository
@@ -865,4 +874,5 @@ def refresh_summary_for_user(user_id: str, tracked_post_id: str | None = None) -
             media_loader=lambda media=media: load_media_input(media),
             post_caption=caption,
             creator_context=account_reference.text if account_reference.used else "",
+            retry_template_fallback=retry_template_fallback,
         )

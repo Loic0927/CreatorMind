@@ -488,6 +488,35 @@ def test_summary_passes_post_caption_and_matching_creator_context_to_gemini(monk
     }
 
 
+def test_manual_refresh_retries_a_cached_template_after_an_ai_generation_failure(monkeypatch):
+    repository = _SummaryCacheRepository()
+    facts = [
+        {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
+    ]
+    calls = []
+
+    class FlakyProvider:
+        name = "gemini"
+        model = "unit"
+
+        def generate(self, _facts, *, media_input=None, analysis_context=None):
+            calls.append(True)
+            if len(calls) == 1:
+                raise feedback.GeminiUpstreamError("temporary failure")
+            return _payload("Attention kept accumulating across the observed checkpoints.")
+
+    monkeypatch.setattr(feedback, "get_content_repository", lambda: repository)
+    monkeypatch.setattr(feedback, "_selection", lambda: ([FlakyProvider()], "gemini:unit"))
+
+    first = feedback.generate_summary("user", "post", facts)
+    assert repository.get_text_cache("user", "summary:post").provider == "template"
+    second = feedback.generate_summary("user", "post", facts, retry_template_fallback=True)
+
+    assert first != second
+    assert len(calls) == 2
+    assert repository.get_text_cache("user", "summary:post").provider == "gemini"
+
+
 def test_summary_without_consent_uses_a_template_without_loading_media_or_calling_gemini(monkeypatch):
     repository = _SummaryCacheRepository()
     facts = [

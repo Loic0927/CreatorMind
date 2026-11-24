@@ -33,10 +33,12 @@ const comparisonUnavailableMessage = (reason?: NotComparableReason | null) => {
 export function AnalyzeTab({
   session,
   initialId,
+  onOpen,
   onClear,
 }: {
   session: Session;
   initialId?: string;
+  onOpen?: (id: string) => void;
   onClear: () => void;
 }) {
   const [posts, setPosts] = useState<TrackedPost[]>([]);
@@ -85,6 +87,7 @@ export function AnalyzeTab({
     setDeleted(false);
     setShowComments(false);
     setSelectedId(id);
+    onOpen?.(id);
     void load(id);
   };
 
