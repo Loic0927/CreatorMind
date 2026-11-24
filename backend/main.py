@@ -12,13 +12,14 @@ from backend.config import csv_environment, is_production, validate_runtime_envi
 from backend.draft_api import media_router
 from backend.draft_api import router as draft_router
 from backend.instagram_api import router as instagram_router
+from backend.tiktok_api import router as tiktok_router
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 validate_runtime_environment()
 
 app = FastAPI(title="PostBridge API")
-for router in (auth_router, instagram_router, draft_router, media_router, caption_router):
+for router in (auth_router, instagram_router, tiktok_router, draft_router, media_router, caption_router):
     app.include_router(router)
 
 app.add_middleware(

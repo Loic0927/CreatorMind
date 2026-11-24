@@ -11,7 +11,7 @@ export type Session = {
     ai_processing_consented_at?: string | null;
   };
 };
-export type SocialPlatform = "Instagram" | "Twitter" | "Facebook" | "Threads" | "YouTube";
+export type SocialPlatform = "Instagram" | "TikTok" | "Twitter" | "Facebook" | "Threads" | "YouTube";
 export type Connection = {
   connected: boolean;
   configured: boolean;
@@ -20,6 +20,15 @@ export type Connection = {
   session_synced_at?: string | null;
   sync_error?: string | null;
   comment_ingestion?: { enabled: boolean; permission_granted: boolean };
+};
+export type TikTokConnection = {
+  connected: boolean;
+  configured: boolean;
+  status?: string;
+  display_name?: string;
+  avatar_url?: string | null;
+  scopes?: string[];
+  updated_at?: string | null;
 };
 export type InsightSnapshot = {
   id: string;
@@ -266,14 +275,15 @@ export async function authRequest<T>(session: Session, path: string, init?: Requ
 }
 
 export const getConnection = (session: Session) => authRequest<Connection>(session, "/api/instagram/connection");
+export const getTikTokConnection = (session: Session) =>
+  authRequest<TikTokConnection>(session, "/api/tiktok/connection");
 export const getTrackedPosts = (session: Session) => authRequest<{ items: TrackedPost[] }>(session, "/tracked-posts");
 export const getTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);
 export const getInstagramMedia = (session: Session) =>
-  authRequest<{ items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string }> }>(
-    session,
-    "/api/instagram/media",
-  );
+  authRequest<{
+    items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string; published_at?: string }>;
+  }>(session, "/api/instagram/media");
 export const trackInstagramPost = (session: Session, mediaId: string) =>
   authRequest<TrackingRecord>(session, "/tracked-posts", {
     method: "POST",
@@ -373,6 +383,10 @@ export const connectInstagram = (session: Session) =>
   authRequest<{ authorization_url: string }>(session, "/api/instagram/connect/start?client=web", { method: "POST" });
 export const disconnectInstagram = (session: Session) =>
   authRequest<{ disconnected: boolean }>(session, "/api/instagram/connection", { method: "DELETE" });
+export const connectTikTok = (session: Session) =>
+  authRequest<{ authorization_url: string }>(session, "/api/tiktok/connect/start?client=web", { method: "POST" });
+export const disconnectTikTok = (session: Session) =>
+  authRequest<{ disconnected: boolean }>(session, "/api/tiktok/connection", { method: "DELETE" });
 export const getAccountContext = (session: Session) => authRequest<AccountContext>(session, "/auth/account-context");
 export const updateAccountContext = (session: Session, accountContext: AccountContext) =>
   authRequest<AccountContext>(session, "/auth/account-context", {

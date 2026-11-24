@@ -198,7 +198,7 @@ class DraftRepository:
     def transition_draft_status(self, user_id: str, draft_id: str, status: str) -> PostDraft:
         transitions = {
             "draft": {"publishing"},
-            "publishing": {"published", "failed"},
+            "publishing": {"publishing", "published", "failed"},
             "failed": {"publishing"},
             "published": set(),
         }
@@ -321,7 +321,7 @@ class DraftRepository:
         transitions = {
             "pending": {"validating", "failed"},
             "validating": {"publishing", "failed"},
-            "publishing": {"published", "failed"},
+            "publishing": {"publishing", "published", "failed"},
             "failed": {"pending"},
             "published": set(),
         }

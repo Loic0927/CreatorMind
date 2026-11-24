@@ -15,6 +15,7 @@ import {
 import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
 import { LoadingState } from "@/components/dashboard/LoadingState";
+import { DashboardPlatform, PlatformNavigator } from "@/components/dashboard/PlatformNavigator";
 import { Card, ErrorBanner, Metric, PageTitle } from "@/components/dashboard/ui";
 
 const deletedMediaCodes = ["media_not_found", "instagram_media_unavailable"];
@@ -42,6 +43,7 @@ export function AnalyzeTab({
   onClear: () => void;
 }) {
   const [posts, setPosts] = useState<TrackedPost[]>([]);
+  const [platform, setPlatform] = useState<DashboardPlatform>("Instagram");
   const [selectedId, setSelectedId] = useState(initialId ?? "");
   const [post, setPost] = useState<TrackedPost | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,6 +101,12 @@ export function AnalyzeTab({
     void loadPosts();
   };
 
+  const changePlatform = (nextPlatform: DashboardPlatform) => {
+    setPlatform(nextPlatform);
+    setDeleted(false);
+    setShowComments(false);
+  };
+
   const refreshMetrics = async () => {
     if (!selectedId || refreshing || cooldown) return;
     setRefreshing(true);
@@ -133,12 +141,11 @@ export function AnalyzeTab({
   if (!selectedId) {
     return (
       <section className="mx-auto w-full lg:w-4/5">
-        <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1 md:mb-7">
-          <PageTitle>Post</PageTitle>
-          <span className="text-sm font-medium text-muted md:text-base">Choose one to analyze</span>
-        </div>
+        <PlatformNavigator value={platform} onChange={changePlatform} className="mb-5 md:mb-7" />
         <ErrorBanner message={error} />
-        {loading ? (
+        {platform === "TikTok" ? (
+          <Card>Track a TikTok post first.</Card>
+        ) : loading ? (
           <Card>Loading tracked posts…</Card>
         ) : posts.length ? (
           <div className="grid gap-5 md:grid-cols-2">

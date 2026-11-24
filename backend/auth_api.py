@@ -52,6 +52,8 @@ from backend.storage.sql_models import (
     PostDraftRecord,
     PostPublicationRecord,
     PredictionHistoryRecord,
+    TikTokConnectionRecord,
+    TikTokOAuthStateRecord,
     TrackedPostRecord,
     UserRecord,
 )
@@ -304,6 +306,8 @@ def delete_account(user: AuthenticatedUser = Depends(require_user)) -> dict:
 
         session.execute(delete(PredictionHistoryRecord).where(PredictionHistoryRecord.user_id == user.id))
         session.execute(delete(InstagramConnectionRecord).where(InstagramConnectionRecord.user_id == user.id))
+        session.execute(delete(TikTokConnectionRecord).where(TikTokConnectionRecord.user_id == user.id))
+        session.execute(delete(TikTokOAuthStateRecord).where(TikTokOAuthStateRecord.user_id == user.id))
         session.execute(delete(AuthSessionRecord).where(AuthSessionRecord.user_id == user.id))
         session.execute(delete(OAuthStateRecord).where(OAuthStateRecord.user_id == user.id))
         session.execute(delete(LoginCodeRecord).where(LoginCodeRecord.email == user.email))

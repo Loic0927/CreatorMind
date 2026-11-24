@@ -69,6 +69,7 @@ All routes except sign-in and health checks require `Authorization: Bearer <sess
 | Auth | `POST /auth/request-code`, `POST /auth/verify-code`, `GET /auth/session`, `POST /auth/logout`, `DELETE /auth/account`, `GET/POST/DELETE /auth/ai-processing-consent` |
 | Account context | `GET/PATCH /auth/account-context`, `GET /auth/account-context/suggest`, `POST /auth/account-context/preview` |
 | Instagram | `/api/instagram/connection`, `/api/instagram/connect/start`, `/api/instagram/connect/callback`, `/api/instagram/account`, `/api/instagram/media` |
+| TikTok | `/api/tiktok/connection`, `/api/tiktok/connect/start`, `/api/tiktok/connect/callback`, `/api/tiktok/creator-info`, `/api/tiktok/publishing/status` |
 | Tracking and insights | `/tracked-posts`, `/tracked-posts/{id}`, `/tracked-posts/{id}/refresh`, `/insights/account`, `/insights/instagram` |
 | Create and publish | `POST /mobile/caption`, `POST /media-assets`, `/drafts`, `/drafts/{id}/publish`, `GET /publishing/capabilities`, `POST /publications` |
 | Health | `GET /`, `GET /health` |

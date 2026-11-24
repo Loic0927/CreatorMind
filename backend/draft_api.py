@@ -26,9 +26,10 @@ from backend.storage.oci_object_storage import OCIStorageConfigurationError, upl
 
 router = APIRouter(prefix="/drafts", tags=["drafts"])
 media_router = APIRouter(prefix="/media-assets", tags=["media-assets"])
-Platform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
+Platform = Literal["Instagram", "TikTok", "Twitter", "Facebook", "Threads", "YouTube"]
 CAPTION_LIMITS = {
     "Instagram": 2200,
+    "TikTok": 2200,
     "Twitter": 280,
     "Facebook": 63_206,
     "Threads": 500,
@@ -109,6 +110,7 @@ class MediaAssetUpload(BaseModel):
 class DraftPublishRequest(BaseModel):
     platforms: list[Platform] = Field(..., min_length=1, max_length=5)
     idempotency_key: str = Field(..., min_length=8, max_length=128)
+    platform_options: dict[str, dict[str, object]] = Field(default_factory=dict)
 
     @field_validator("platforms")
     @classmethod
@@ -295,6 +297,7 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
             hashtags=" ".join(draft.hashtags),
             mime_type=asset.mime_type,
             object_name=asset.object_name,
+            platform_options=payload.platform_options,
         )
         preflight: dict[str, object] = {}
         results: list[dict] = []
@@ -361,6 +364,15 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
                     provider_media_id=result.provider_post_id,
                     provider_post_id=result.provider_post_id,
                 )
+            elif result.status == "publishing" and result.provider_post_id:
+                all_published = False
+                repository.transition_publication(
+                    user.id,
+                    publication.id,
+                    "publishing",
+                    provider_media_id=result.provider_post_id,
+                    provider_post_id=result.provider_post_id,
+                )
             else:
                 all_published = False
                 repository.transition_publication(
@@ -374,8 +386,12 @@ def publish_draft(payload: DraftPublishRequest, draft_id: str, user: Authenticat
             item["publication_id"] = publication.id
             results.append(item)
 
-        final_status = "published" if all_published and len(preflight) == len(payload.platforms) else "failed"
-        final_draft = repository.transition_draft_status(user.id, draft.id, final_status)
+        has_processing = any(item.get("status") == "publishing" for item in results)
+        if has_processing:
+            final_draft = repository.get_draft(user.id, draft.id) or draft
+        else:
+            final_status = "published" if all_published and len(preflight) == len(payload.platforms) else "failed"
+            final_draft = repository.transition_draft_status(user.id, draft.id, final_status)
         return {"draft": final_draft, "results": results}
     except DraftRepositoryError as exc:
         raise _repository_error(exc) from None

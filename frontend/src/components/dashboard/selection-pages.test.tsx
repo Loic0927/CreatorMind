@@ -28,6 +28,7 @@ vi.mock("@/lib/postbridge", () => ({
   publishPost: vi.fn(),
   caption: vi.fn(),
   getConnection: vi.fn().mockResolvedValue({ connected: false, configured: true }),
+  getTikTokConnection: vi.fn().mockResolvedValue({ connected: false, configured: true }),
   getAccountContext: vi.fn().mockResolvedValue(accountContext),
   getAIProcessingConsent: vi.fn().mockResolvedValue({
     ai_processing_consented: true,
@@ -37,6 +38,8 @@ vi.mock("@/lib/postbridge", () => ({
   revokeAIProcessingConsent: vi.fn(),
   updateAccountContext: vi.fn().mockImplementation(async (_session, value) => value),
   disconnectInstagram: vi.fn(),
+  connectTikTok: vi.fn(),
+  disconnectTikTok: vi.fn(),
   logout: vi.fn(),
   deleteAccount: vi.fn(),
   getAccountInsights: vi.fn().mockResolvedValue({

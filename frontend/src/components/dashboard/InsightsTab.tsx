@@ -14,7 +14,8 @@ import {
 import { AiConsentDialog } from "@/components/dashboard/AiConsentDialog";
 import { errorMessage, formatMetric, formatNumber, formatRate, metricLabel } from "@/lib/format";
 import { LoadingState } from "@/components/dashboard/LoadingState";
-import { Card, PageTitle } from "@/components/dashboard/ui";
+import { DashboardPlatform, PlatformNavigator } from "@/components/dashboard/PlatformNavigator";
+import { Card } from "@/components/dashboard/ui";
 import { UnifiedSelect } from "@/components/ui/UnifiedSelect";
 
 type SortKey = MetricKey | "newest";
@@ -40,6 +41,7 @@ const cellValue = (post: PerformancePost, key: SortKey) =>
 
 export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (trackedId: string) => void }) {
   const [data, setData] = useState<AccountInsights | null>(null);
+  const [platform, setPlatform] = useState<DashboardPlatform>("Instagram");
   const [sort, setSort] = useState<SortKey>("newest");
   const [showAll, setShowAll] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
@@ -121,9 +123,23 @@ export function InsightsTab({ session, onOpen }: { session: Session; onOpen: (tr
         ? reconnectMessage
         : "");
 
+  if (platform === "TikTok") {
+    return (
+      <section className="mx-auto w-full max-w-[880px]">
+        <PlatformNavigator value={platform} onChange={setPlatform} className="mb-5 md:mb-7" />
+        <Card>
+          <h2 className="text-xl font-black">TikTok insights</h2>
+          <p className="mt-3 text-sm leading-5 text-muted">
+            TikTok insights will appear here once TikTok post syncing is enabled.
+          </p>
+        </Card>
+      </section>
+    );
+  }
+
   return (
     <section className="mx-auto w-full max-w-[880px]">
-      <PageTitle className="mb-5 md:mb-7">Insights</PageTitle>
+      <PlatformNavigator value={platform} onChange={setPlatform} className="mb-5 md:mb-7" />
       {notice ? <p className="mb-3 text-sm text-muted">{notice}</p> : null}
       {!data ? (
         <LoadingState label="Preparing your insights" />

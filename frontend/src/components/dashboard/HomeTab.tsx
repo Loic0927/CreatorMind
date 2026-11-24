@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Connection,
   Session,
@@ -9,25 +9,47 @@ import {
   getConnection,
   getInstagramMedia,
   getTrackedPosts,
-  refreshTrackedPost,
   trackInstagramPost,
 } from "@/lib/postbridge";
-import { errorMessage, formatRate } from "@/lib/format";
-import { ErrorBanner, Metric, PageTitle, Panel } from "@/components/dashboard/ui";
+import { errorMessage } from "@/lib/format";
+import { ErrorBanner, PageTitle, Panel } from "@/components/dashboard/ui";
 
-type InstagramMediaItem = { id: string; caption: string; media_url?: string; thumbnail_url?: string };
-const primaryButton = "mt-5 rounded-xl bg-primary px-5 py-3 font-bold text-white hover:bg-primary-hover";
+type InstagramMediaItem = {
+  id: string;
+  caption: string;
+  media_url?: string;
+  thumbnail_url?: string;
+  published_at?: string;
+};
+type SelectionPlatform = "Instagram" | "TikTok";
+
+const primaryButton = "rounded-xl bg-primary px-5 py-3 font-bold text-white hover:bg-primary-hover";
+const byOldestFirst = <T,>(items: T[]) =>
+  [...items].sort(
+    (left, right) =>
+      new Date((left as { published_at?: string }).published_at ?? 0).getTime() -
+      new Date((right as { published_at?: string }).published_at ?? 0).getTime(),
+  );
 
 export function HomeTab({ session, onConnect }: { session: Session; onConnect: () => Promise<void> }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [posts, setPosts] = useState<TrackedPost[]>([]);
   const [media, setMedia] = useState<InstagramMediaItem[]>([]);
   const [choosing, setChoosing] = useState(false);
+  const [selectionPlatform, setSelectionPlatform] = useState<SelectionPlatform>("Instagram");
   const [loading, setLoading] = useState(true);
   const [addingId, setAddingId] = useState("");
-  const [refreshingId, setRefreshingId] = useState("");
   const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
+  const carousel = useRef<HTMLDivElement>(null);
+
+  const orderedPosts = useMemo(
+    () =>
+      [...posts].sort(
+        (left, right) => new Date(right.media.published_at).getTime() - new Date(left.media.published_at).getTime(),
+      ),
+    [posts],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,7 +68,6 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     void load();
   }, [load]);
 
-  /** Runs an action with error reporting; `fallback` is shown when the error has no message. */
   const attempt = async (fallback: string, action: () => Promise<void>) => {
     setError("");
     try {
@@ -56,32 +77,24 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     }
   };
 
-  const choosePost = () =>
-    attempt("Could not load Instagram posts.", async () => {
+  const openPostPicker = () => {
+    setSelectionPlatform("Instagram");
+    void attempt("Could not load Instagram posts.", async () => {
       const trackedIds = new Set(posts.map((post) => post.media.id));
       const { items } = await getInstagramMedia(session);
-      setMedia(items.filter((item) => !trackedIds.has(item.id)));
+      setMedia(byOldestFirst(items.filter((item) => !trackedIds.has(item.id))));
       setChoosing(true);
     });
+  };
 
   const addPost = async (mediaId: string) => {
     setAddingId(mediaId);
     await attempt("Could not add this Instagram post.", async () => {
-      const tracked = await trackInstagramPost(session, mediaId);
+      await trackInstagramPost(session, mediaId);
       setChoosing(false);
-      await refreshTrackedPost(session, tracked.id);
       await load();
     });
     setAddingId("");
-  };
-
-  const refreshPost = async (trackedId: string) => {
-    setRefreshingId(trackedId);
-    await attempt("Could not refresh metrics.", async () => {
-      const refreshed = await refreshTrackedPost(session, trackedId);
-      setPosts((current) => current.map((post) => (post.tracking.id === trackedId ? refreshed : post)));
-    });
-    setRefreshingId("");
   };
 
   const removePost = async (post: TrackedPost) => {
@@ -94,135 +107,194 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     setDeletingId("");
   };
 
+  const scrollCarousel = (direction: number) =>
+    carousel.current?.scrollBy({ left: direction * 320, behavior: "smooth" });
+
   return (
     <section className="mx-auto w-full lg:w-4/5">
       <div className="mb-5 flex items-center justify-between gap-3 md:mb-7">
         <PageTitle>Tracked posts</PageTitle>
-        {connection?.connected && (
+        {connection?.connected ? (
           <div className="ml-auto flex flex-wrap justify-end gap-2">
-            {connection.comment_ingestion?.enabled && !connection.comment_ingestion.permission_granted && (
+            {connection.comment_ingestion?.enabled && !connection.comment_ingestion.permission_granted ? (
               <button
                 onClick={() => void onConnect()}
                 className="rounded-xl bg-selected px-3 py-2 text-xs font-bold text-selected-ink hover:bg-line-strong sm:px-4 sm:py-3 sm:text-sm"
               >
                 Reauthorize Instagram
               </button>
-            )}
+            ) : null}
             <button
-              onClick={() => void choosePost()}
+              onClick={openPostPicker}
               className="shrink-0 rounded-xl bg-primary px-3 py-2 text-xs font-bold text-white hover:bg-primary-hover sm:px-5 sm:py-3 sm:text-base"
             >
               Add a post
             </button>
           </div>
-        )}
+        ) : null}
       </div>
       <ErrorBanner message={error} />
 
-      {choosing && (
-        <div className="mb-5">
-          <Panel>
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-black">Choose an Instagram post</h2>
-              <button onClick={() => setChoosing(false)} className="text-sm font-bold text-primary-hover">
-                Close
+      {choosing ? (
+        <Panel>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-xl font-black">Add a post</h2>
+            <button onClick={() => setChoosing(false)} className="text-sm font-bold text-primary-hover">
+              Close
+            </button>
+          </div>
+          <div className="mb-4 flex border-b border-line" role="tablist" aria-label="Post platform">
+            {(["Instagram", "TikTok"] as const).map((platform) => (
+              <button
+                key={platform}
+                type="button"
+                role="tab"
+                aria-selected={selectionPlatform === platform}
+                onClick={() => setSelectionPlatform(platform)}
+                className={`relative min-h-11 px-4 text-sm font-black ${selectionPlatform === platform ? "text-primary" : "text-muted hover:text-ink"}`}
+              >
+                {platform} Post
+                {selectionPlatform === platform ? (
+                  <span aria-hidden className="absolute inset-x-4 bottom-0 h-0.5 bg-primary" />
+                ) : null}
               </button>
-            </div>
-            {media.length ? (
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                {media.map((item) => (
-                  <button
-                    key={item.id}
-                    disabled={Boolean(addingId)}
-                    onClick={() => void addPost(item.id)}
-                    className="overflow-hidden rounded-2xl bg-selected text-left disabled:opacity-60"
-                  >
-                    {item.thumbnail_url || item.media_url ? (
-                      <img
-                        alt=""
-                        src={item.thumbnail_url || item.media_url}
-                        className="aspect-square w-full object-cover"
-                      />
-                    ) : (
-                      <div className="aspect-square" />
-                    )}
-                    <p className="line-clamp-2 p-3 text-xs font-bold">
-                      {addingId === item.id ? "Adding…" : item.caption || "Instagram post"}
-                    </p>
-                  </button>
-                ))}
+            ))}
+          </div>
+          {selectionPlatform === "Instagram" ? (
+            media.length ? (
+              <div className="relative">
+                <div
+                  ref={carousel}
+                  className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 pr-2 [scrollbar-width:thin]"
+                >
+                  {media.map((item) => (
+                    <button
+                      key={item.id}
+                      disabled={Boolean(addingId)}
+                      onClick={() => void addPost(item.id)}
+                      className="w-32 shrink-0 snap-start overflow-hidden rounded-2xl bg-selected text-left disabled:opacity-60 sm:w-40"
+                    >
+                      {item.thumbnail_url || item.media_url ? (
+                        <img
+                          alt=""
+                          src={item.thumbnail_url || item.media_url}
+                          className="aspect-square w-full object-cover"
+                        />
+                      ) : (
+                        <div className="aspect-square" />
+                      )}
+                      <p className="line-clamp-2 min-h-12 p-2 text-xs font-bold">
+                        {addingId === item.id ? "Adding…" : item.caption || "Instagram post"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+                {media.length > 2 ? (
+                  <div className="mt-1 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => scrollCarousel(-1)}
+                      aria-label="Previous Instagram posts"
+                      className="rounded-lg bg-selected px-3 py-1 font-black text-selected-ink"
+                    >
+                      ‹
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => scrollCarousel(1)}
+                      aria-label="Next Instagram posts"
+                      className="rounded-lg bg-selected px-3 py-1 font-black text-selected-ink"
+                    >
+                      ›
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="py-8 text-center text-sm font-bold text-muted">All Instagram posts are already tracked.</p>
-            )}
-          </Panel>
-        </div>
-      )}
+            )
+          ) : (
+            <p className="py-8 text-center text-sm font-bold text-muted">
+              TikTok post selection will appear here after TikTok post syncing is enabled.
+            </p>
+          )}
+        </Panel>
+      ) : null}
 
       {loading ? (
         <Panel>Loading your account…</Panel>
       ) : !connection?.connected ? (
         <Panel>
           <h2 className="text-xl font-black">Connect Instagram</h2>
-          <button onClick={() => void onConnect()} className={primaryButton}>
+          <button onClick={() => void onConnect()} className={`mt-5 ${primaryButton}`}>
             Connect Instagram
           </button>
         </Panel>
-      ) : posts.length === 0 ? (
-        <Panel>
-          <h2 className="text-xl font-black">No tracked posts yet</h2>
-          <button onClick={() => void choosePost()} className={primaryButton}>
-            Add a post
-          </button>
-        </Panel>
       ) : (
-        <div className="grid gap-5 md:grid-cols-2">
-          {posts.map((post) => (
-            <Panel key={post.tracking.id}>
-              <div className="relative">
-                {post.media.thumbnail_url || post.media.media_url ? (
+        <div className="space-y-8">
+          <PlatformPostSection
+            platform="Instagram"
+            posts={orderedPosts}
+            deletingId={deletingId}
+            onRemove={removePost}
+          />
+          <PlatformPostSection platform="TikTok" posts={[]} deletingId={deletingId} onRemove={removePost} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PlatformPostSection({
+  platform,
+  posts,
+  deletingId,
+  onRemove,
+}: {
+  platform: SelectionPlatform;
+  posts: TrackedPost[];
+  deletingId: string;
+  onRemove: (post: TrackedPost) => Promise<void>;
+}) {
+  return (
+    <section aria-labelledby={`${platform.toLowerCase()}-posts`}>
+      <h2 id={`${platform.toLowerCase()}-posts`} className="mb-3 text-lg font-black">
+        {platform}
+      </h2>
+      {posts.length ? (
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+          {posts.map((post) => {
+            const image = post.media.thumbnail_url || post.media.media_url;
+            return (
+              <div key={post.tracking.id} className="group relative aspect-square overflow-hidden bg-selected">
+                {image ? (
                   <img
-                    alt=""
-                    src={post.media.thumbnail_url || post.media.media_url}
-                    className="mb-4 aspect-video w-full rounded-2xl object-cover"
+                    alt={post.media.caption || `${platform} post`}
+                    src={image}
+                    className="h-full w-full object-cover"
                   />
-                ) : null}
+                ) : (
+                  <div className="h-full w-full bg-line-strong" />
+                )}
                 <button
                   type="button"
                   aria-label="Remove tracked post"
                   disabled={Boolean(deletingId)}
-                  onClick={() => void removePost(post)}
-                  className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-surface/95 text-xl font-bold leading-none text-primary-hover shadow-float disabled:opacity-50"
+                  onClick={() => void onRemove(post)}
+                  className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-surface/95 text-lg font-bold leading-none text-primary-hover opacity-0 shadow-float transition-opacity focus:opacity-100 group-hover:opacity-100 disabled:opacity-50"
                 >
                   ×
                 </button>
               </div>
-              <p className="line-clamp-2 font-bold">{post.media.caption || "Instagram post"}</p>
-              <div className="mt-5 grid grid-cols-3 gap-2 text-sm">
-                <Metric label="Likes" value={post.latest?.likes} />
-                <Metric label="Reach" value={post.latest?.reach} />
-                <Metric
-                  label="Engagement"
-                  value={post.latest?.engagement_rate == null ? undefined : formatRate(post.latest.engagement_rate)}
-                />
-              </div>
-              <div className="mt-5 flex items-center justify-between gap-3 border-t border-line pt-4">
-                <p className="text-[11px] text-muted">
-                  {post.latest?.captured_at
-                    ? `Updated ${new Date(post.latest.captured_at).toLocaleString()}`
-                    : "Metrics not loaded"}
-                </p>
-                <button
-                  disabled={Boolean(refreshingId) || Boolean(deletingId)}
-                  onClick={() => void refreshPost(post.tracking.id)}
-                  className="shrink-0 rounded-lg bg-selected px-3 py-2 text-xs font-bold text-selected-ink hover:bg-line-strong disabled:opacity-60"
-                >
-                  {refreshingId === post.tracking.id ? "Refreshing…" : "Refresh metrics"}
-                </button>
-              </div>
-            </Panel>
-          ))}
+            );
+          })}
         </div>
+      ) : (
+        <Panel>
+          <p className="text-sm font-bold text-muted">
+            {platform === "TikTok" ? "No tracked TikTok posts yet." : "No tracked Instagram posts yet."}
+          </p>
+        </Panel>
       )}
     </section>
   );

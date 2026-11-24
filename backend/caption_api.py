@@ -14,9 +14,10 @@ from backend.services.gemini import GeminiConfigurationError, GeminiUpstreamErro
 
 router = APIRouter(tags=["caption"])
 
-Platform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
+Platform = Literal["Instagram", "TikTok", "Twitter", "Facebook", "Threads", "YouTube"]
 PLATFORM_GUIDANCE: dict[str, str] = {
     "Instagram": "Write an engaging Instagram caption.",
+    "TikTok": "Write a concise TikTok caption with a clear hook and natural hashtags.",
     "Twitter": "Keep the full post within 280 characters.",
     "Facebook": "Write a conversational Facebook post.",
     "Threads": "Write a concise, natural Threads post that invites conversation.",

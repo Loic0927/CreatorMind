@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-DraftPlatform = Literal["Instagram", "Twitter", "Facebook", "Threads", "YouTube"]
+DraftPlatform = Literal["Instagram", "TikTok", "Twitter", "Facebook", "Threads", "YouTube"]
 
 
 class MediaAsset(BaseModel):
@@ -78,6 +78,23 @@ class InstagramAccount(BaseModel):
     connected_at: datetime
     last_synced_at: datetime | None = None
     last_error: str | None = None
+
+
+class TikTokConnection(BaseModel):
+    id: str
+    user_id: str
+    open_id: str
+    union_id: str | None = None
+    display_name: str
+    avatar_url: str | None = None
+    encrypted_access_token: str = ""
+    encrypted_refresh_token: str = ""
+    access_token_expires_at: datetime | None = None
+    refresh_token_expires_at: datetime | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: Literal["connected", "expired", "reconnect_required", "disconnected", "error"] = "connected"
+    connected_at: datetime
+    updated_at: datetime
 
 
 class InstagramDataDeletionRequest(BaseModel):

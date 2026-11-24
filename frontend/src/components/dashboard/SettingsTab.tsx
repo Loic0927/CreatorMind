@@ -6,10 +6,14 @@ import {
   AccountContext,
   Connection,
   Session,
+  TikTokConnection,
+  connectTikTok,
   deleteAccount,
   disconnectInstagram,
+  disconnectTikTok,
   getAccountContext,
   getConnection,
+  getTikTokConnection,
   logout,
   updateAccountContext,
 } from "@/lib/postbridge";
@@ -94,6 +98,7 @@ const fieldClass =
 
 export function SettingsTab({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [tikTokConnection, setTikTokConnection] = useState<TikTokConnection | null>(null);
   const [context, setContext] = useState<AccountContext>(emptyContext);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -102,9 +107,10 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getConnection(session), getAccountContext(session)])
-      .then(([nextConnection, nextContext]) => {
+    Promise.all([getConnection(session), getTikTokConnection(session), getAccountContext(session)])
+      .then(([nextConnection, nextTikTokConnection, nextContext]) => {
         setConnection(nextConnection);
+        setTikTokConnection(nextTikTokConnection);
         setContext(nextContext);
       })
       .catch((reason) => setError(errorMessage(reason, "Could not load settings.")))
@@ -151,6 +157,25 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
       setConnection({ connected: false, configured: true });
     } catch (reason) {
       setError(errorMessage(reason, "Could not log out of Instagram."));
+    }
+  };
+
+  const connectTikTokAccount = async () => {
+    try {
+      window.location.href = (await connectTikTok(session)).authorization_url;
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not connect TikTok."));
+    }
+  };
+
+  const tikTokLogout = async () => {
+    if (!window.confirm("Log out of TikTok? PostBridge will stop using this connection until you connect it again."))
+      return;
+    try {
+      await disconnectTikTok(session);
+      setTikTokConnection({ connected: false, configured: true, status: "disconnected" });
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not log out of TikTok."));
     }
   };
 
@@ -337,6 +362,35 @@ export function SettingsTab({ session, onLogout }: { session: Session; onLogout:
                 className="rounded-xl border border-danger-line px-5 py-3 text-sm font-black text-danger hover:bg-danger-bg"
               >
                 Log out
+              </button>
+            ) : null}
+          </div>
+        </Panel>
+        <Panel>
+          <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted">TikTok connection</p>
+              <h2 className="mt-1 text-lg font-black">
+                {tikTokConnection?.connected
+                  ? `@${tikTokConnection.display_name || "TikTok account"}`
+                  : tikTokConnection
+                    ? "TikTok is not connected"
+                    : "Loading TikTok connection…"}
+              </h2>
+            </div>
+            {tikTokConnection?.connected ? (
+              <button
+                onClick={() => void tikTokLogout()}
+                className="rounded-xl border border-danger-line px-5 py-3 text-sm font-black text-danger hover:bg-danger-bg"
+              >
+                Log out
+              </button>
+            ) : tikTokConnection?.configured ? (
+              <button
+                onClick={() => void connectTikTokAccount()}
+                className="rounded-xl bg-primary px-5 py-3 text-sm font-black text-white hover:bg-primary-hover"
+              >
+                Connect TikTok
               </button>
             ) : null}
           </div>
