@@ -37,7 +37,7 @@ describe("HomeTab", () => {
       "confirm",
       vi.fn(() => true),
     );
-    vi.mocked(getConnection).mockResolvedValue({ connected: true });
+    vi.mocked(getConnection).mockResolvedValue({ connected: true, configured: true });
     vi.mocked(getTrackedPosts).mockResolvedValue({
       items: [
         {
@@ -76,8 +76,8 @@ describe("HomeTab", () => {
         { id: "tiktok-2", caption: "Available TikTok caption", published_at: 1795392000 },
       ],
     });
-    vi.mocked(deleteTrackedPost).mockResolvedValue(undefined);
-    vi.mocked(deleteTikTokTrackedPost).mockResolvedValue(undefined);
+    vi.mocked(deleteTrackedPost).mockResolvedValue({ stopped: true });
+    vi.mocked(deleteTikTokTrackedPost).mockResolvedValue({ stopped: true });
 
     render(<HomeTab session={session} onConnect={vi.fn()} />);
 
