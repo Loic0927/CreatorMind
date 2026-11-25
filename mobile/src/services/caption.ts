@@ -1,17 +1,7 @@
 import { API_BASE_URL, CAPTION_MODE } from "../config/environment";
-import { ImageMimeType, MediaMimeType, SocialPlatform } from "../types";
+import type { CaptionInput, CaptionResult } from "../types";
 
-export type CaptionInput = {
-  information: string;
-  goal: string;
-  platform: SocialPlatform;
-  platforms?: SocialPlatform[];
-  hashtag_count?: number;
-  use_account_context?: boolean;
-  image?: { mime_type: ImageMimeType; data: string };
-  media?: { mime_type: MediaMimeType; data: string; duration_seconds?: number };
-};
-export type CaptionResult = { caption: string; hashtags: string };
+export type { CaptionInput, CaptionResult } from "../types";
 
 export class CaptionGenerationError extends Error {
   constructor(

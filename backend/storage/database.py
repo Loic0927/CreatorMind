@@ -1,6 +1,7 @@
+"""SQLAlchemy database configuration; SQLite URLs are reserved for tests."""
+
 import os
 from functools import lru_cache
-from pathlib import Path
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.config import is_production
 from backend.storage.sql_models import Base
 
-LOCAL_DATABASE_PATH = Path(__file__).resolve().parent.parent / "data" / "postbridge.local.db"
+DEFAULT_DATABASE_URL = "postgresql+psycopg://creatormind:creatormind@db:5432/creatormind"
 
 
 def database_url() -> str:
@@ -17,7 +18,7 @@ def database_url() -> str:
         return configured
     if is_production():
         raise RuntimeError("PostBridge database configuration is required.")
-    return f"sqlite:///{LOCAL_DATABASE_PATH.as_posix()}"
+    return DEFAULT_DATABASE_URL
 
 
 @lru_cache(maxsize=4)
@@ -25,7 +26,6 @@ def engine_for_url(url: str) -> Engine:
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
     if url.startswith("sqlite"):
-        LOCAL_DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
         Base.metadata.create_all(engine)
     return engine
 

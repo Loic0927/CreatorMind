@@ -1,7 +1,6 @@
-"""Development-only JSON persistence.
+"""Test-only JSON persistence retained for legacy unit tests.
 
-This store is retained for local MVP development. It is not suitable for Cloud Run,
-multi-instance deployments, or production credential storage.
+Application code uses PostgreSQL in both local development and production.
 """
 
 import json

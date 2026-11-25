@@ -1,15 +1,17 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import BackgroundTasks
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import backend.services.feedback as feedback
 import backend.storage.tracking_repository as tracking_repository_module
 from backend import instagram_api
 from backend.auth import AuthenticatedUser
+from backend.storage.database import engine_for_url, session_factory_for_url
 from backend.storage.models import InstagramInsightSnapshot
 from backend.storage.sql_models import (
     Base,
@@ -17,17 +19,28 @@ from backend.storage.sql_models import (
     InstagramInsightCollectionJobRecord,
     InstagramInsightSnapshotRecord,
     InstagramMediaRecord,
+    InstagramTrackingDeadLetterRecord,
     TrackedPostRecord,
     UserRecord,
 )
-from backend.storage.tracking_repository import MILESTONES, TrackingRepository
+from backend.storage.tracking_repository import MAX_RETRY_ATTEMPTS, MILESTONES, TrackingRepository
 
 NOW = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
-def ai_processing_consent(monkeypatch):
+def ai_processing_consent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    database_url = f"sqlite:///{(tmp_path / 'feedback.db').as_posix()}"
+    monkeypatch.setenv("POSTBRIDGE_ENV", "development")
+    monkeypatch.setenv("POSTBRIDGE_DATABASE_URL", database_url)
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
+    engine_for_url(database_url)
     monkeypatch.setattr(feedback, "has_ai_processing_consent", lambda _user_id: True)
+    yield
+    engine_for_url(database_url).dispose()
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
 
 
 def _factory():
@@ -152,6 +165,47 @@ def test_retry_becomes_missed_after_grace_and_restart_does_not_duplicate_snapsho
     with factory2() as session:
         assert session.query(InstagramInsightSnapshotRecord).count() == 1
         assert session.get(TrackedPostRecord, "t").first_24h_status != "unavailable"
+
+
+def test_repeated_failures_create_a_post_dead_letter():
+    factory = _factory()
+    _seed(factory, NOW - timedelta(hours=1))
+    repository = TrackingRepository(factory)
+    repository.ensure_jobs_for_tracking("t", NOW)
+    job = repository.claim_due("worker-a", now=NOW)[0]
+
+    for attempt in range(MAX_RETRY_ATTEMPTS):
+        assert repository.retry(job.id, "worker-a", "instagram_upstream_error", 1, NOW)
+        if attempt + 1 < MAX_RETRY_ATTEMPTS:
+            job = repository.claim_due("worker-a", now=NOW + timedelta(seconds=2))[0]
+
+    with factory() as session:
+        dead_letter = session.query(InstagramTrackingDeadLetterRecord).one()
+        stored_job = session.get(InstagramInsightCollectionJobRecord, job.id)
+        tracked = session.get(TrackedPostRecord, "t")
+        assert dead_letter.tracked_post_id == "t"
+        assert dead_letter.attempt_count == MAX_RETRY_ATTEMPTS
+        assert stored_job.status == "dead_letter"
+        assert tracked.first_24h_status == "partial"
+
+
+def test_overdue_snapshot_is_logged_once_and_persisted():
+    factory = _factory()
+    _seed(factory, NOW - timedelta(hours=1))
+    repository = TrackingRepository(factory)
+    repository.ensure_jobs_for_tracking("t", NOW)
+
+    assert repository.alert_overdue(NOW) == 1
+    assert repository.alert_overdue(NOW + timedelta(minutes=1)) == 0
+
+    with factory() as session:
+        job = session.scalar(
+            select(InstagramInsightCollectionJobRecord).where(
+                InstagramInsightCollectionJobRecord.tracked_post_id == "t",
+                InstagramInsightCollectionJobRecord.milestone_hours == 1,
+            )
+        )
+        assert job.overdue_alerted_at.replace(tzinfo=UTC) == NOW
 
 
 def _snapshot(identifier, captured, views, reach=None, engagement=5, watch=1000, interactions=10):
@@ -388,7 +442,6 @@ def test_validator_allows_common_non_imperative_words_in_observations():
 
 
 def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
-    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
     facts = [
         {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
     ]
@@ -428,7 +481,6 @@ def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
 
 
 def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeypatch):
-    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
     captured = {}
     facts = [
         {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
@@ -583,7 +635,6 @@ def test_legacy_feedback_provider_values_fall_back_to_gemini(monkeypatch):
 
 
 def test_no_qualifying_fact_hides_summary_and_cache_read_never_selects_provider(monkeypatch):
-    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
     empty = [{"id": "growth_stage", "type": "growth_stage", "value": "", "evidence": {}, "qualifies": False}]
     assert feedback.generate_summary("empty-user", "empty-post", empty) is None
     monkeypatch.setattr(

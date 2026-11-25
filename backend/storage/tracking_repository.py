@@ -17,14 +17,22 @@ from backend.storage.sql_models import (
     InstagramInsightCollectionJobRecord,
     InstagramInsightSnapshotRecord,
     InstagramMediaRecord,
+    InstagramTrackingDeadLetterRecord,
     TrackedPostRecord,
 )
 
 MILESTONES = (1, 3, 6, 12, 24)
 GRACE_MINUTES = {1: 30, 3: 30, 6: 60, 12: 60, 24: 60}
-FINAL_STATUSES = {"completed", "missed"}
+FINAL_STATUSES = {"completed", "missed", "dead_letter"}
 LEASE = timedelta(minutes=10)
+MAX_RETRY_ATTEMPTS = 5
+RETRY_BACKOFF_SECONDS = (60, 120, 240, 480)
 LOGGER = logging.getLogger("postbridge.tracking_queue")
+
+
+def retry_delay_seconds(attempt_count: int) -> int:
+    index = max(0, min(attempt_count - 1, len(RETRY_BACKOFF_SECONDS) - 1))
+    return RETRY_BACKOFF_SECONDS[index]
 
 
 def _utc(value: datetime) -> datetime:
@@ -85,6 +93,7 @@ class TrackingRepository:
                         "status": "missed" if missed else "pending",
                         "snapshot_id": None,
                         "reason": "tracking_started_late" if missed else None,
+                        "overdue_alerted_at": None,
                         "locked_at": None,
                         "locked_by": None,
                         "completed_at": current if missed else None,
@@ -132,6 +141,34 @@ class TrackingRepository:
                 sum(job.status == "missed" for job in jobs),
             )
             return jobs
+
+    def alert_overdue(self, now: datetime | None = None) -> int:
+        """Log and mark each due-but-not-captured snapshot once."""
+        current = _utc(now or datetime.now(UTC))
+        with self.factory.begin() as session:
+            jobs = list(
+                session.scalars(
+                    select(InstagramInsightCollectionJobRecord).where(
+                        InstagramInsightCollectionJobRecord.status.in_(
+                            {"pending", "retry", "blocked_reconnect", "running"}
+                        ),
+                        InstagramInsightCollectionJobRecord.due_at <= current,
+                        InstagramInsightCollectionJobRecord.overdue_alerted_at.is_(None),
+                    )
+                )
+            )
+            for job in jobs:
+                job.overdue_alerted_at = current
+                job.updated_at = current
+                LOGGER.warning(
+                    "insight_snapshot_overdue tracked_post_id=%s milestone=%s due_at=%s deadline_at=%s status=%s",
+                    job.tracked_post_id,
+                    job.milestone_hours,
+                    job.due_at.isoformat(),
+                    job.deadline_at.isoformat(),
+                    job.status,
+                )
+            return len(jobs)
 
     def ensure_all_active_jobs(self, now: datetime | None = None) -> int:
         with self.factory() as session:
@@ -262,7 +299,9 @@ class TrackingRepository:
             if not job:
                 return False
             next_attempt = current + timedelta(seconds=max(1, delay_seconds))
-            if next_attempt > _utc(job.deadline_at):
+            if job.attempt_count >= MAX_RETRY_ATTEMPTS:
+                self._dead_letter(session, job, reason, current)
+            elif next_attempt > _utc(job.deadline_at):
                 self._finish(job, "missed", "collection_window_missed", current)
             else:
                 job.status = "retry"
@@ -272,6 +311,23 @@ class TrackingRepository:
                 job.locked_by = None
                 job.updated_at = current
             self._refresh_post_status(session, job.tracked_post_id)
+            return True
+
+    def dead_letter(self, job_id: str, worker_id: str, reason: str, now: datetime | None = None) -> bool:
+        current = _utc(now or datetime.now(UTC))
+        with self.factory.begin() as session:
+            job = session.scalar(
+                select(InstagramInsightCollectionJobRecord)
+                .where(
+                    InstagramInsightCollectionJobRecord.id == job_id,
+                    InstagramInsightCollectionJobRecord.status == "running",
+                    InstagramInsightCollectionJobRecord.locked_by == worker_id,
+                )
+                .with_for_update()
+            )
+            if not job:
+                return False
+            self._dead_letter(session, job, reason, current)
             return True
 
     def block_reconnect(self, user_id: str, now: datetime | None = None) -> int:
@@ -323,6 +379,45 @@ class TrackingRepository:
         job.updated_at = current
 
     @staticmethod
+    def _dead_letter(session, job, reason: str, current: datetime) -> None:
+        existing = session.scalar(
+            select(InstagramTrackingDeadLetterRecord)
+            .where(InstagramTrackingDeadLetterRecord.tracked_post_id == job.tracked_post_id)
+            .with_for_update()
+        )
+        if existing:
+            existing.failure_count += 1
+            existing.attempt_count = job.attempt_count
+            existing.last_error = reason
+            existing.last_failed_at = current
+            existing.updated_at = current
+        else:
+            session.add(
+                InstagramTrackingDeadLetterRecord(
+                    id=str(uuid4()),
+                    user_id=job.user_id,
+                    tracked_post_id=job.tracked_post_id,
+                    media_id=job.media_id,
+                    milestone_hours=job.milestone_hours,
+                    failure_count=1,
+                    attempt_count=job.attempt_count,
+                    last_error=reason,
+                    first_failed_at=current,
+                    last_failed_at=current,
+                    created_at=current,
+                    updated_at=current,
+                )
+            )
+        TrackingRepository._finish(job, "dead_letter", reason, current)
+        LOGGER.error(
+            "tracking_job_dead_letter tracked_post_id=%s milestone=%s attempts=%s reason=%s",
+            job.tracked_post_id,
+            job.milestone_hours,
+            job.attempt_count,
+            reason,
+        )
+
+    @staticmethod
     def _refresh_post_status(session, tracked_id: str) -> None:
         tracked = session.get(TrackedPostRecord, tracked_id)
         if not tracked or tracked.first_24h_status == "unavailable":
@@ -338,15 +433,15 @@ class TrackingRepository:
             tracked.first_24h_status = "complete"
             tracked.first_24h_reason = None
         elif any(job.status in {"pending", "retry", "running", "blocked_reconnect"} for job in jobs):
-            if any(job.status == "missed" for job in jobs):
+            if any(job.status in {"missed", "dead_letter"} for job in jobs):
                 tracked.first_24h_status = "partial"
-                tracked.first_24h_reason = next(job.reason for job in jobs if job.status == "missed")
+                tracked.first_24h_reason = next(job.reason for job in jobs if job.status in {"missed", "dead_letter"})
             else:
                 tracked.first_24h_status = "collecting"
                 tracked.first_24h_reason = None
         elif jobs:
             tracked.first_24h_status = "partial"
-            missed = next((job for job in jobs if job.status == "missed"), None)
+            missed = next((job for job in jobs if job.status in {"missed", "dead_letter"}), None)
             tracked.first_24h_reason = missed.reason if missed else "collection_incomplete"
 
 

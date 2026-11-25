@@ -1,11 +1,9 @@
-import os
 from datetime import UTC, datetime
 from functools import lru_cache
 from uuid import uuid4
 
 from sqlalchemy import select
 
-from backend.storage import json_store
 from backend.storage.database import session_factory
 from backend.storage.models import (
     InsightTextCache,
@@ -33,11 +31,9 @@ class ContentRepository:
 
     @property
     def persistent(self) -> bool:
-        return bool(os.getenv("POSTBRIDGE_DATABASE_URL"))
+        return True
 
     def upsert_media(self, items: list[InstagramMedia]) -> list[InstagramMedia]:
-        if not self.persistent:
-            return json_store.upsert_instagram_media(items)
         factory = session_factory()
         with factory.begin() as session:
             for item in items:
@@ -51,8 +47,6 @@ class ContentRepository:
         return items
 
     def media_for_account(self, account_id: str) -> list[InstagramMedia]:
-        if not self.persistent:
-            return json_store.get_instagram_media(account_id)
         factory = session_factory()
         with factory() as session:
             records = session.scalars(
@@ -61,8 +55,6 @@ class ContentRepository:
         return [self._media(item) for item in records]
 
     def create_tracked(self, user_id: str, media_id: str) -> TrackedPost:
-        if not self.persistent:
-            return json_store.create_tracked_post(user_id, media_id)
         factory = session_factory()
         with factory.begin() as session:
             record = session.scalar(
@@ -86,8 +78,6 @@ class ContentRepository:
             return self._tracked(record)
 
     def tracked(self, user_id: str, active_only: bool = True) -> list[TrackedPost]:
-        if not self.persistent:
-            return json_store.get_tracked_posts(user_id, active_only)
         statement = (
             select(TrackedPostRecord)
             .where(TrackedPostRecord.user_id == user_id)
@@ -100,8 +90,6 @@ class ContentRepository:
             return [self._tracked(item) for item in session.scalars(statement).all()]
 
     def stop_tracked(self, user_id: str, tracked_id: str) -> bool:
-        if not self.persistent:
-            return json_store.stop_tracked_post(user_id, tracked_id)
         factory = session_factory()
         with factory.begin() as session:
             record = session.scalar(
@@ -120,9 +108,6 @@ class ContentRepository:
             self.stop_tracked(user_id, item.id)
 
     def snapshots(self, media_ids: list[str] | None = None) -> list[InstagramInsightSnapshot]:
-        if not self.persistent:
-            items = json_store.load_store().instagram_insight_snapshots
-            return [item for item in items if media_ids is None or item.media_id in media_ids]
         statement = select(InstagramInsightSnapshotRecord)
         if media_ids is not None:
             if not media_ids:
@@ -134,16 +119,12 @@ class ContentRepository:
         return [self._snapshot(item) for item in records]
 
     def append_snapshot(self, item: InstagramInsightSnapshot) -> InstagramInsightSnapshot:
-        if not self.persistent:
-            return json_store.append_instagram_snapshot(item)
         factory = session_factory()
         with factory.begin() as session:
             session.add(InstagramInsightSnapshotRecord(**item.model_dump()))
         return item
 
     def get_text_cache(self, user_id: str, cache_key: str) -> InsightTextCache | None:
-        if not self.persistent:
-            return self._local_text_cache.get((user_id, cache_key))
         factory = session_factory()
         with factory() as session:
             record = session.scalar(
@@ -155,9 +136,6 @@ class ContentRepository:
         return self._text_cache(record) if record else None
 
     def upsert_text_cache(self, item: InsightTextCache) -> InsightTextCache:
-        if not self.persistent:
-            self._local_text_cache[(item.user_id, item.cache_key)] = item
-            return item
         factory = session_factory()
         with factory.begin() as session:
             record = session.scalar(
@@ -178,8 +156,6 @@ class ContentRepository:
     def upsert_comments(
         self, user_id: str, tracked_post_id: str, items: list[InstagramComment]
     ) -> list[InstagramComment]:
-        if not self.persistent:
-            return json_store.upsert_instagram_comments(user_id, tracked_post_id, items)
         factory = session_factory()
         with factory.begin() as session:
             for item in items:
@@ -199,8 +175,6 @@ class ContentRepository:
         return items
 
     def comments(self, user_id: str, tracked_post_id: str | None = None) -> list[InstagramComment]:
-        if not self.persistent:
-            return json_store.get_instagram_comments(user_id, tracked_post_id)
         statement = select(InstagramCommentRecord).where(InstagramCommentRecord.user_id == user_id)
         if tracked_post_id is not None:
             statement = statement.where(InstagramCommentRecord.tracked_post_id == tracked_post_id)
@@ -218,8 +192,6 @@ class ContentRepository:
     def clear_text_cache_for_user(self, user_id: str) -> None:
         """Remove generated text when a user revokes AI-processing consent."""
         self.clear_local_user_cache(user_id)
-        if not self.persistent:
-            return
         factory = session_factory()
         with factory.begin() as session:
             records = session.scalars(

@@ -126,9 +126,7 @@ def test_fetch_videos_by_ids_refreshes_public_metrics(monkeypatch, tiktok_enviro
 
     monkeypatch.setattr(tiktok, "_request_json", fake_request)
 
-    assert tiktok.fetch_videos_by_ids("access-sensitive", ["video-1"]) == [
-        {"id": "video-1", "view_count": 120}
-    ]
+    assert tiktok.fetch_videos_by_ids("access-sensitive", ["video-1"]) == [{"id": "video-1", "view_count": 120}]
     assert calls[0][1] == tiktok.TIKTOK_VIDEO_QUERY_URL
     assert calls[0][2]["json_body"] == {"filters": {"video_ids": ["video-1"]}}
 

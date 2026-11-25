@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ SESSION_SYNC_COOLDOWN = timedelta(minutes=30)
 TOKEN_REFRESH_WINDOW = timedelta(days=7)
 SYNC_BATCH_SIZE = 5
 MAX_ATTEMPTS = 3
+LOGGER = logging.getLogger("postbridge.instagram_sync")
 _locks_guard = threading.Lock()
 _locks: dict[str, threading.Lock] = {}
 
@@ -62,7 +64,14 @@ def usable_token(account) -> str:
     token = decrypt_access_token(encrypted)
     expires_at = _aware(account.token_expires_at)
     if expires_at and expires_at <= datetime.now(UTC) + TOKEN_REFRESH_WINDOW:
-        payload = refresh_long_lived_token(token)
+        try:
+            payload = refresh_long_lived_token(token)
+        except InstagramServiceError as exc:
+            LOGGER.warning("instagram_token_refresh_failed account_id=%s code=%s", account.id, exc.code)
+            raise
+        except Exception:
+            LOGGER.exception("instagram_token_refresh_failed account_id=%s code=unexpected", account.id)
+            raise
         token = payload["access_token"]
         repository.upsert_connection(
             account.model_copy(

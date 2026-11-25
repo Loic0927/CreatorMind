@@ -24,10 +24,11 @@ from backend.services.instagram_sync import usable_token
 from backend.storage.content_repository import get_content_repository
 from backend.storage.instagram_repository import get_instagram_repository
 from backend.storage.models import InstagramInsightSnapshot, InstagramMedia
-from backend.storage.tracking_repository import get_tracking_repository
+from backend.storage.tracking_repository import get_tracking_repository, retry_delay_seconds
 
 LOGGER = logging.getLogger("postbridge.tracking_worker")
 STOP_REQUESTED = False
+TRACKING_BATCH_SIZE = 5
 
 
 def _request_stop(signum, frame):  # pragma: no cover
@@ -98,8 +99,11 @@ def collect_due(now: datetime | None = None, worker_id: str | None = None) -> di
     worker = worker_id or f"worker-{os.getpid()}"
     queue = get_tracking_repository()
     instagram = get_instagram_repository()
-    counts = {"claimed": 0, "captured": 0, "retried": 0, "blocked": 0, "missed": 0}
-    jobs = queue.claim_due(worker, now=current)
+    counts = {"claimed": 0, "captured": 0, "retried": 0, "blocked": 0, "missed": 0, "overdue": 0}
+    alert_overdue = getattr(queue, "alert_overdue", None)
+    if alert_overdue:
+        counts["overdue"] = alert_overdue(current)
+    jobs = queue.claim_due(worker, limit=TRACKING_BATCH_SIZE, now=current)
     counts["claimed"] = len(jobs)
     for claimed in jobs:
         context = queue.context(claimed.id, worker)
@@ -178,7 +182,7 @@ def collect_due(now: datetime | None = None, worker_id: str | None = None) -> di
                     job.milestone_hours,
                 )
             else:
-                delay = min(300, 2 ** min(job.attempt_count, 8))
+                delay = retry_delay_seconds(job.attempt_count)
                 queue.retry(job.id, worker, exc.code, delay, current)
                 counts["retried"] += 1
                 LOGGER.info(
@@ -188,6 +192,18 @@ def collect_due(now: datetime | None = None, worker_id: str | None = None) -> di
                     exc.code,
                     delay,
                 )
+        except Exception:
+            reason = "tracking_job_failed"
+            delay = retry_delay_seconds(job.attempt_count)
+            queue.retry(job.id, worker, reason, delay, current)
+            counts["retried"] += 1
+            LOGGER.exception(
+                "milestone_retry tracked_post_id=%s milestone=%s reason=%s delay_seconds=%s",
+                job.tracked_post_id,
+                job.milestone_hours,
+                reason,
+                delay,
+            )
     return counts
 
 

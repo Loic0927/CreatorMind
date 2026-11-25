@@ -1,8 +1,7 @@
 """Instagram persistence selection and implementations.
 
-PostgreSQL is mandatory whenever POSTBRIDGE_DATABASE_URL is configured. The local
-implementation is an explicit development-only fallback and is never selected after
-a configured database error.
+PostgreSQL is mandatory for application code in both local development and
+production. The JSON implementation remains available only to legacy tests.
 """
 
 import os
@@ -17,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import is_production
 from backend.storage import json_store, token_store
+from backend.storage.database import database_url
 from backend.storage.models import InstagramAccount, InstagramDataDeletionRequest
 from backend.storage.sql_models import (
     AIGenerationLogRecord,
@@ -383,7 +383,7 @@ class SQLAlchemyInstagramRepository:
 
 
 class LocalDevelopmentInstagramRepository:
-    """Development-only JSON/sidecar fallback used when no DB URL is configured."""
+    """Test-only JSON/sidecar repository; application code always uses PostgreSQL."""
 
     def __init__(self):
         self._states: dict[str, tuple[str, datetime, datetime | None]] = {}
@@ -507,16 +507,15 @@ def _postgres_repository(database_url: str) -> SQLAlchemyInstagramRepository:
 
 
 def get_instagram_repository() -> InstagramRepository:
-    database_url = os.getenv("POSTBRIDGE_DATABASE_URL")
-    if database_url:
-        return _postgres_repository(database_url)
-    if is_production():
-        raise InstagramRepositoryError("PostBridge database configuration is required in production.")
-    return _local_repository
+    try:
+        configured_url = database_url()
+    except RuntimeError:
+        raise InstagramRepositoryError("PostBridge database configuration is required in production.") from None
+    return _postgres_repository(configured_url)
 
 
 def delete_local_user_data(user_id: str) -> None:
-    """Clear the JSON store, token sidecar, and process cache used by local development."""
+    """Test-only cleanup for fixtures that exercise the legacy JSON store directly."""
     if os.getenv("POSTBRIDGE_DATABASE_URL") or is_production():
         return
 

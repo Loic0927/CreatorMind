@@ -1,18 +1,10 @@
 import * as SecureStore from "expo-secure-store";
 import { API_BASE_URL } from "../config/environment";
+import type { AuthIntent, Session } from "../types";
 
 const SESSION_KEY = "postbridge.mobile.session";
 
-export type Session = {
-  accessToken: string;
-  expiresAt: string;
-  user: {
-    id: string;
-    email: string;
-    ai_processing_consented?: boolean;
-    ai_processing_consented_at?: string | null;
-  };
-};
+export type { AuthIntent, Session } from "../types";
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -42,8 +34,6 @@ export async function getSession(): Promise<Session | null> {
     return null;
   }
 }
-
-export type AuthIntent = "sign_in" | "sign_up";
 
 export async function requestLoginCode(
   email: string,

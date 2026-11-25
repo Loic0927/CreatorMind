@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 
 import pytest
 
@@ -6,14 +7,24 @@ from backend import caption_api
 from backend.auth import AuthenticatedUser
 from backend.rate_limit import reset_rate_limits
 from backend.services.account_context import AccountContextFields, serialize_account_context
+from backend.storage.database import engine_for_url, session_factory_for_url
 
 
 @pytest.fixture(autouse=True)
-def _fresh_rate_limits(monkeypatch):
+def _fresh_rate_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    database_url = f"sqlite:///{(tmp_path / 'caption.db').as_posix()}"
+    monkeypatch.setenv("POSTBRIDGE_ENV", "development")
+    monkeypatch.setenv("POSTBRIDGE_DATABASE_URL", database_url)
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
+    engine_for_url(database_url)
     reset_rate_limits()
     monkeypatch.setattr(caption_api, "has_ai_processing_consent", lambda user_id: True)
     yield
     reset_rate_limits()
+    engine_for_url(database_url).dispose()
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
 
 
 def _user() -> AuthenticatedUser:

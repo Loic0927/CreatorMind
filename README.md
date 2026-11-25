@@ -16,7 +16,7 @@ Gemini, publish image posts, and track per-post Instagram insights.
 | Web | Next.js + TypeScript + Tailwind (`frontend/`) |
 | Mobile | Expo / React Native (`mobile/`) |
 | API | FastAPI (`backend/`), Alembic migrations |
-| Storage | PostgreSQL in production, SQLite locally; private OCI Object Storage for media |
+| Storage | PostgreSQL 17 locally and in production; private OCI Object Storage for media |
 | AI | Gemini, server-side only |
 
 ## Environment files
@@ -34,8 +34,18 @@ secrets, OAuth client secrets, database credentials, or permanent access tokens.
 
 ## Local development
 
+Local development uses the same PostgreSQL-backed SQLAlchemy repositories as production. The
+default database URL targets the `db` service in `docker-compose.oci.yml`; run the API inside
+that Compose network, or set `POSTBRIDGE_DATABASE_URL` to a host-reachable URL when running the
+API directly on the host. Do not rely on the legacy JSON store for application development.
+
 ```bash
+# Start the PostgreSQL 17 service used by the API.
+docker compose --env-file .env.oci -f docker-compose.oci.yml up -d db
+
 # API (from the repository root)
+# The default `db` hostname is for a process running in the Compose network.
+# For a host-run process, set POSTBRIDGE_DATABASE_URL to a host-reachable URL.
 python -m pip install -r backend/requirements.txt
 python -m uvicorn backend.main:app --reload     # http://127.0.0.1:8000/docs
 
@@ -48,6 +58,21 @@ cd mobile && npm install && npx expo start
 
 The web app expects `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000`.
 
+## Shared API types
+
+The FastAPI OpenAPI document is the source for the shared web/mobile API contract in
+`shared/api.ts`. After changing a route or schema, refresh the schema artifacts from the
+repository root:
+
+```bash
+python scripts/generate_api_types.py
+```
+
+The command exports `shared/openapi.json` and regenerates `shared/openapi.ts` with
+`openapi-typescript`; the clients import their shared contract rather than maintaining
+separate API response declarations. CI regenerates both artifacts and fails if the committed
+schema output is stale.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs the same commands on every push and pull request:
@@ -55,7 +80,7 @@ CI (`.github/workflows/ci.yml`) runs the same commands on every push and pull re
 | Area | Commands |
 | --- | --- |
 | Backend | `ruff check`, `ruff format --check`, `python -m pytest backend` |
-| Web | `npm run format:check`, `npm test`, `npm run build` |
+| Web | `npm run typecheck`, `npm run format:check`, `npm test`, `npm run build` |
 | Mobile | `npm run format:check`, `npm run typecheck`, `npm run lint`, `npm test` |
 
 Use `ruff format` and `npm run format` to fix formatting.

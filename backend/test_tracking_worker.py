@@ -1,8 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 import backend.services.instagram_sync as sync
 import backend.tracking_worker as worker
+from backend.services.instagram import InstagramServiceError
 
 NOW = datetime(2026, 10, 30, tzinfo=UTC)
 
@@ -221,7 +224,7 @@ def test_worker_refreshes_derived_caches_after_a_completed_capture(monkeypatch):
     media = SimpleNamespace(id="media-1", instagram_media_id="provider-media-1", media_type="IMAGE")
 
     class Queue:
-        def claim_due(self, worker_id, now):
+        def claim_due(self, worker_id, limit, now):
             return [SimpleNamespace(id=job.id)]
 
         def context(self, job_id, worker_id):
@@ -257,6 +260,83 @@ def test_worker_refreshes_derived_caches_after_a_completed_capture(monkeypatch):
 
     assert result["captured"] == 1
     assert refreshed == [("u", "tracked-1")]
+
+
+def test_worker_retries_unexpected_snapshot_failures(monkeypatch):
+    job = SimpleNamespace(
+        id="job-1",
+        user_id="u",
+        tracked_post_id="tracked-1",
+        media_id="media-1",
+        milestone_hours=6,
+        due_at=NOW,
+        attempt_count=1,
+    )
+    media = SimpleNamespace(id="media-1", instagram_media_id="provider-media-1", media_type="IMAGE")
+
+    class Queue:
+        def claim_due(self, worker_id, limit, now):
+            return [SimpleNamespace(id=job.id)]
+
+        def context(self, job_id, worker_id):
+            return {"job": job, "media": media}
+
+        def alert_overdue(self, now):
+            return 0
+
+        def complete(self, *args):
+            raise AssertionError("failed capture must not complete")
+
+        def retry(self, *args):
+            self.retry_args = args
+            return True
+
+        def block_reconnect(self, *args):
+            raise AssertionError("unexpected failure must retry, not block")
+
+    queue = Queue()
+    monkeypatch.setattr(worker, "get_tracking_repository", lambda: queue)
+    monkeypatch.setattr(
+        worker,
+        "get_instagram_repository",
+        lambda: SimpleNamespace(get_connection=lambda user_id: account()),
+    )
+    monkeypatch.setattr(worker, "usable_token", lambda account: "token")
+    monkeypatch.setattr(
+        worker, "fetch_instagram_media_insights", lambda *args: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    result = worker.collect_due(NOW, "worker-test")
+
+    assert result["retried"] == 1
+    assert queue.retry_args[2:4] == ("tracking_job_failed", 60)
+
+
+def test_token_refresh_failure_is_logged(monkeypatch):
+    class Repository:
+        def get_encrypted_token(self, account_id):
+            return "encrypted"
+
+    account_value = SimpleNamespace(
+        id="account-1",
+        token_expires_at=NOW - timedelta(hours=1),
+    )
+    monkeypatch.setattr(sync, "get_instagram_repository", lambda: Repository())
+    monkeypatch.setattr(sync, "decrypt_access_token", lambda value: "token")
+    monkeypatch.setattr(
+        sync,
+        "refresh_long_lived_token",
+        lambda token: (_ for _ in ()).throw(InstagramServiceError("instagram_token_refresh_failed", "failed", 502)),
+    )
+    warning_calls = []
+    monkeypatch.setattr(sync.LOGGER, "warning", lambda *args, **kwargs: warning_calls.append((args, kwargs)))
+
+    with pytest.raises(InstagramServiceError):
+        sync.usable_token(account_value)
+
+    assert warning_calls == [
+        (("instagram_token_refresh_failed account_id=%s code=%s", "account-1", "instagram_token_refresh_failed"), {})
+    ]
 
 
 def test_worker_cycle_collects_due_milestones(monkeypatch):

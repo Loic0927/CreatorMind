@@ -383,7 +383,9 @@ def track_post(payload: TikTokTrackRequest, user: AuthenticatedUser = Depends(re
         videos = fetch_user_videos(access_token_for(connection_value))
         video = next((item for item in videos if str(item.get("id")) == payload.video_id), None)
         if video is None:
-            raise HTTPException(status_code=404, detail={"code": "tiktok_video_not_found", "message": "TikTok post was not found."})
+            raise HTTPException(
+                status_code=404, detail={"code": "tiktok_video_not_found", "message": "TikTok post was not found."}
+            )
         return get_tiktok_repository().track_post(user.id, video)
     except TikTokServiceError as exc:
         raise _service_error(exc) from None
@@ -399,7 +401,9 @@ def tracked_post(tracked_id: str, user: AuthenticatedUser = Depends(require_user
     except TikTokRepositoryError:
         raise _repository_error() from None
     if post is None:
-        raise HTTPException(status_code=404, detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."})
+        raise HTTPException(
+            status_code=404, detail={"code": "tiktok_tracked_post_not_found", "message": "TikTok post was not found."}
+        )
     try:
         items = repository.tracked_posts(user.id)
     except TikTokRepositoryError:

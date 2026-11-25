@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 import backend.services.feedback as feedback
 from backend.services.gemini import GeminiGeneration
+from backend.storage.database import engine_for_url, session_factory_for_url
 
 FACTS = [
     {
@@ -100,7 +104,9 @@ def test_gemini_feedback_accepts_a_json_object_wrapped_by_provider_presentation_
     assert result.payload == PAYLOAD
 
 
-def test_generate_summary_persists_gemini_token_usage_in_generation_log(monkeypatch):
+def test_generate_summary_persists_gemini_token_usage_in_generation_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     class Provider:
         name = "gemini"
         model = "unit-test-model"
@@ -111,7 +117,12 @@ def test_generate_summary_persists_gemini_token_usage_in_generation_log(monkeypa
             return feedback.FeedbackGeneration(payload=PAYLOAD, token_usage={"prompt_token_count": 7})
 
     log_calls = []
-    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
+    database_url = f"sqlite:///{(tmp_path / 'feedback.db').as_posix()}"
+    monkeypatch.setenv("POSTBRIDGE_ENV", "development")
+    monkeypatch.setenv("POSTBRIDGE_DATABASE_URL", database_url)
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
+    engine_for_url(database_url)
     monkeypatch.setattr(feedback, "has_ai_processing_consent", lambda _user_id: True)
     monkeypatch.setattr(feedback, "_selection", lambda: ([Provider()], "gemini:unit-test-model"))
     monkeypatch.setattr(feedback, "_log", lambda *args, **kwargs: log_calls.append((args, kwargs)))
@@ -124,3 +135,6 @@ def test_generate_summary_persists_gemini_token_usage_in_generation_log(monkeypa
     assert args[4] == "ok"
     assert args[7] == {"prompt_token_count": 7}
     assert kwargs == {}
+    engine_for_url(database_url).dispose()
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()

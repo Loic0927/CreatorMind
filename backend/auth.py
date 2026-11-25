@@ -11,6 +11,7 @@ from fastapi import Header, HTTPException
 from sqlalchemy import delete, select, update
 
 from backend.config import is_production
+from backend.rate_limit import enforce_rate_limit_in_session
 from backend.storage.database import session_factory
 from backend.storage.sql_models import AuthSessionRecord, LoginCodeRecord, UserRecord
 
@@ -54,10 +55,6 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=value.tzinfo or UTC)
 
 
-def _too_many(code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=429, detail={"code": code, "message": message})
-
-
 def create_login_code(email: str) -> str:
     """Issue a new code. Older codes are invalidated but kept for 24h to enforce the daily cap,
     which bounds guesses to (daily cap x 5 attempts) per email per day."""
@@ -68,14 +65,25 @@ def create_login_code(email: str) -> str:
     daily_cap = max(1, int(os.getenv("POSTBRIDGE_LOGIN_CODES_PER_DAY", "10")))
     factory = session_factory()
     with factory.begin() as session:
+        enforce_rate_limit_in_session(
+            session,
+            f"login-code:cooldown:{email}",
+            1,
+            cooldown,
+            error_code="code_requested_too_soon",
+            error_message="Wait a moment before requesting another sign-in code.",
+        )
+        enforce_rate_limit_in_session(
+            session,
+            f"login-code:daily:{email}",
+            daily_cap,
+            24 * 60 * 60,
+            error_code="too_many_codes",
+            error_message="Too many sign-in codes were requested. Try again tomorrow.",
+        )
         session.execute(
             delete(LoginCodeRecord).where(LoginCodeRecord.email == email, LoginCodeRecord.created_at < window_start)
         )
-        recent = session.scalars(select(LoginCodeRecord.created_at).where(LoginCodeRecord.email == email)).all()
-        if recent and _utc(max(recent)) + timedelta(seconds=cooldown) > now:
-            raise _too_many("code_requested_too_soon", "Wait a moment before requesting another sign-in code.")
-        if len(recent) >= daily_cap:
-            raise _too_many("too_many_codes", "Too many sign-in codes were requested. Try again tomorrow.")
         session.execute(
             update(LoginCodeRecord)
             .where(LoginCodeRecord.email == email, LoginCodeRecord.consumed_at.is_(None))

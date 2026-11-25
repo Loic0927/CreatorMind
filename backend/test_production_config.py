@@ -2,6 +2,7 @@ import pytest
 
 from backend.config import PRODUCTION_REQUIRED_ENV, ConfigurationError, validate_runtime_environment
 from backend.main import health_check
+from backend.storage.database import DEFAULT_DATABASE_URL, database_url
 from backend.storage.instagram_repository import InstagramRepositoryError, get_instagram_repository
 
 
@@ -18,6 +19,14 @@ def test_production_requires_database_url(monkeypatch):
         validate_runtime_environment()
 
     assert "POSTBRIDGE_DATABASE_URL" in str(failure.value)
+
+
+def test_development_defaults_to_the_compose_postgres_service(monkeypatch):
+    monkeypatch.setenv("POSTBRIDGE_ENV", "development")
+    monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
+
+    assert database_url() == DEFAULT_DATABASE_URL
+    assert "@db:5432/creatormind" in DEFAULT_DATABASE_URL
 
 
 def test_production_requires_mobile_oauth_return_uri(monkeypatch):

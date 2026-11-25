@@ -219,10 +219,15 @@ class TikTokRepository:
                 )
                 if row is None:
                     row = TikTokTrackedPostRecord(
-                        id=str(uuid4()), user_id=user_id, video_id=str(item["id"]),
+                        id=str(uuid4()),
+                        user_id=user_id,
+                        video_id=str(item["id"]),
                         caption=str(item.get("video_description") or item.get("title") or "TikTok post"),
-                        thumbnail_url=item.get("cover_image_url"), permalink=item.get("share_url"),
-                        published_at=datetime.fromtimestamp(int(item["create_time"]), UTC) if item.get("create_time") else None,
+                        thumbnail_url=item.get("cover_image_url"),
+                        permalink=item.get("share_url"),
+                        published_at=datetime.fromtimestamp(int(item["create_time"]), UTC)
+                        if item.get("create_time")
+                        else None,
                         created_at=datetime.now(UTC),
                     )
                     session.add(row)
@@ -235,7 +240,11 @@ class TikTokRepository:
     def get_tracked_post(self, user_id: str, tracked_id: str) -> dict | None:
         try:
             with self._factory() as session:
-                row = session.scalar(select(TikTokTrackedPostRecord).where(TikTokTrackedPostRecord.user_id == user_id, TikTokTrackedPostRecord.id == tracked_id))
+                row = session.scalar(
+                    select(TikTokTrackedPostRecord).where(
+                        TikTokTrackedPostRecord.user_id == user_id, TikTokTrackedPostRecord.id == tracked_id
+                    )
+                )
                 return self._tracked(row) if row else None
         except Exception:
             raise TikTokRepositoryError("TikTok post storage is unavailable.") from None
@@ -282,7 +291,9 @@ class TikTokRepository:
         row.shares = int(item["share_count"]) if item.get("share_count") is not None else row.shares
         row.views = int(item["view_count"]) if item.get("view_count") is not None else row.views
         if row.views:
-            row.engagement_rate = round(((row.likes or 0) + (row.comments or 0) + (row.shares or 0)) / row.views * 100, 1)
+            row.engagement_rate = round(
+                ((row.likes or 0) + (row.comments or 0) + (row.shares or 0)) / row.views * 100, 1
+            )
         elif row.views == 0:
             row.engagement_rate = 0.0
         row.metrics_updated_at = datetime.now(UTC)

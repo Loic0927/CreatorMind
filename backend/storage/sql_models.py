@@ -88,7 +88,9 @@ class TikTokTrackedPostRecord(Base):
     __table_args__ = (UniqueConstraint("user_id", "video_id", name="uq_tiktok_tracked_posts_user_video"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     video_id: Mapped[str] = mapped_column(String(255), nullable=False)
     caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
@@ -133,6 +135,14 @@ class LoginCodeRecord(Base):
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RateLimitRecord(Base):
+    __tablename__ = "rate_limits"
+
+    key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    hits: Mapped[list[float]] = mapped_column(JSON, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AuthSessionRecord(Base):
@@ -285,9 +295,34 @@ class InstagramInsightCollectionJobRecord(Base):
         String(36), ForeignKey("instagram_insight_snapshots.id", ondelete="SET NULL"), unique=True
     )
     reason: Mapped[str | None] = mapped_column(String(128))
+    overdue_alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(128))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstagramTrackingDeadLetterRecord(Base):
+    __tablename__ = "instagram_tracking_dead_letters"
+    __table_args__ = (UniqueConstraint("tracked_post_id", name="uq_instagram_tracking_dead_letter_post"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tracked_post_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tracked_posts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    media_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("instagram_media.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    milestone_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_error: Mapped[str] = mapped_column(String(128), nullable=False)
+    first_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

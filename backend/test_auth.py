@@ -588,7 +588,6 @@ def test_local_account_cleanup_removes_only_the_selected_users_data(tmp_path, mo
     monkeypatch.delenv("POSTBRIDGE_DATABASE_URL", raising=False)
     monkeypatch.setattr(json_store, "STORE_PATH", tmp_path / "store.json")
     monkeypatch.setattr(token_store, "TOKEN_STORE_PATH", tmp_path / "tokens.json")
-    get_content_repository.cache_clear()
     now = datetime.now(UTC)
 
     json_store.save_store(
@@ -661,32 +660,6 @@ def test_local_account_cleanup_removes_only_the_selected_users_data(tmp_path, mo
     )
     token_store.save_encrypted_token("account-delete", "token-delete")
     token_store.save_encrypted_token("account-keep", "token-keep")
-    repository = get_content_repository()
-    repository.upsert_text_cache(
-        InsightTextCache(
-            id="cache-delete",
-            user_id="user-delete",
-            cache_key="summary",
-            input_hash="hash",
-            text="Delete",
-            model_name="test",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    repository.upsert_text_cache(
-        InsightTextCache(
-            id="cache-keep",
-            user_id="user-keep",
-            cache_key="summary",
-            input_hash="hash",
-            text="Keep",
-            model_name="test",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-
     delete_local_user_data("user-delete")
 
     store = json_store.load_store()
@@ -697,6 +670,3 @@ def test_local_account_cleanup_removes_only_the_selected_users_data(tmp_path, mo
     assert [item.id for item in store.instagram_comments] == ["comment-keep"]
     assert token_store.get_encrypted_token("account-delete") is None
     assert token_store.get_encrypted_token("account-keep") == "token-keep"
-    assert repository.get_text_cache("user-delete", "summary") is None
-    assert repository.get_text_cache("user-keep", "summary") is not None
-    get_content_repository.cache_clear()

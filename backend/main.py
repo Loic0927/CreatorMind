@@ -22,14 +22,14 @@ app = FastAPI(title="PostBridge API")
 for router in (auth_router, instagram_router, tiktok_router, draft_router, media_router, caption_router):
     app.include_router(router)
 
+DEFAULT_CORS_ORIGINS = "https://postbridge.dev,http://localhost:3000"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=csv_environment(
-        "POSTBRIDGE_CORS_ALLOWED_ORIGINS", "" if is_production() else "http://localhost:3000"
-    ),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=csv_environment("POSTBRIDGE_CORS_ALLOWED_ORIGINS", DEFAULT_CORS_ORIGINS),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 if is_production():
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=csv_environment("POSTBRIDGE_ALLOWED_HOSTS"))

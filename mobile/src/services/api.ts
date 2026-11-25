@@ -7,12 +7,13 @@ import {
   InstagramConnection,
   InstagramMedia,
   MediaMimeType,
+  PublicationResult,
   SocialPlatform,
   TrackedPost,
+  TrackedPostListResponse,
 } from "../types";
 
 WebBrowser.maybeCompleteAuthSession();
-export type TrackedPostListResponse = { items: TrackedPost[] };
 export class ApiError extends Error {
   constructor(
     public code: string,
@@ -56,14 +57,6 @@ export const grantAIProcessingConsent = (token: string) =>
   request<AIProcessingConsent>("/auth/ai-processing-consent", token, { method: "POST" });
 export const revokeAIProcessingConsent = (token: string) =>
   request<AIProcessingConsent>("/auth/ai-processing-consent", token, { method: "DELETE" });
-export type PublicationResult = {
-  platform: SocialPlatform;
-  status: "published" | "failed" | "unavailable";
-  message: string;
-  code?: string;
-  permalink?: string;
-  tracked_post_id?: string;
-};
 export const publishPost = (
   token: string,
   payload: {

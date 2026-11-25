@@ -35,7 +35,6 @@ from backend.services.email_login import (
 from backend.services.instagram_sync import request_account_sync
 from backend.storage.content_repository import get_content_repository
 from backend.storage.database import session_factory
-from backend.storage.instagram_repository import delete_local_user_data
 from backend.storage.oci_object_storage import delete_private_prefix, oci_storage_enabled
 from backend.storage.sql_models import (
     AIGenerationLogRecord,
@@ -263,8 +262,6 @@ def logout(user: AuthenticatedUser = Depends(require_user)) -> dict:
 
 @router.delete("/account")
 def delete_account(user: AuthenticatedUser = Depends(require_user)) -> dict:
-    delete_local_user_data(user.id)
-
     factory = session_factory()
     with factory.begin() as session:
         tracked_ids = list(session.scalars(select(TrackedPostRecord.id).where(TrackedPostRecord.user_id == user.id)))
