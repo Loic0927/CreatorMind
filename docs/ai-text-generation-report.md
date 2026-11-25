@@ -1,6 +1,6 @@
 # AI text generation boundaries
 
-Updated: 2026-11-23.
+Updated: 2026-11-25.
 
 This document describes the active PostBridge behavior. Historical `post_summary`, `post_feedback`, and
 `_feedback_media` paths were removed; they are available only in Git history.
@@ -18,9 +18,19 @@ persisted metrics and generated-text caches; they do not download media or call 
 ## Summary
 
 `backend/services/feedback.py` builds qualifying facts from snapshot history and same-format account
-comparisons. Gemini receives structured facts and, on a cache miss, optionally one bounded media input.
-Its output is JSON-schema constrained and validated for fact citations, numeric restatement, causal and
-predictive language, and advice rules. No consent produces a deterministic fact-template Summary instead.
+comparisons. The fact set includes growth stage, accumulation pace, historical comparisons, reach/engagement
+relationships, watch time when supplied by Instagram, and separate same-format peer comparisons for views,
+saves, shares, and comments. Each interaction fact carries its peer count and percentile; unavailable signals
+are explicitly `unknown`. An additional `interaction_outlier` fact names a high/low split such as
+`views_high_comments_low` when the evidence supports one. No per-second retention or other unavailable API
+data is inferred.
+
+Gemini receives those structured facts and, on a cache miss, optionally one bounded media input. Its response
+is a JSON object with `diagnosis`, an `evidence` array of `{fact_id, statement}` items, `hypothesis`,
+`experiment`, `measure`, and `do_not_change`. Evidence must cite qualifying fact ids. Numbers may be
+restated only when present in the fact payload; causal explanations must be labelled hypotheses, and invented
+numbers, guarantees, and causation stated as fact are rejected. No consent produces the same structured shape
+from a deterministic fact template before it is rendered for the existing Summary text field.
 
 The Summary cache key contains the fact payload, selected provider signature, prompt version, and stable
 media identity. It does not contain downloaded media bytes.
@@ -37,9 +47,11 @@ remain available where comment access is enabled.
 
 `next_post_suggestion` uses only mature posts with usable rate signals, selects the largest same-format
 group, and passes at most three distinct top and two distinct bottom posts. The input contains bounded,
-untrusted captions, caption length, relative rate signals, optional video watch-time buckets, and at most
-eight non-owner comment texts per selected post. It requests a concise, uncertain optional experiment;
-the prompt forbids values, causation, engagement bait, niche assumptions, and posting-time advice.
+untrusted captions, caption length, relative rate signals, optional video watch-time buckets, and clustered
+non-owner comment themes. Each theme includes a label, count, and a small number of representative texts;
+raw comment lists, usernames, and provider IDs are not passed. Example themes include `asking_how`,
+`guessing_the_method`, `praise`, and `asking_next_video`. It requests a concise, uncertain optional
+experiment; the prompt forbids values, causation, engagement bait, niche assumptions, and posting-time advice.
 
 ## Reliability and audit
 

@@ -257,9 +257,16 @@ def test_each_fact_type_qualifies_from_real_snapshot_evidence():
     assert {fact["type"] for fact in facts if fact["qualifies"]} == {
         "growth_stage",
         "accumulation_pace",
-        "interaction_mix",
+        "interaction_signal",
+        "interaction_outlier",
         "reach_interaction_relation",
         "watch_time",
+    }
+    assert {fact["evidence"]["signal"] for fact in facts if fact["type"] == "interaction_signal"} == {
+        "views",
+        "saves",
+        "shares",
+        "comments",
     }
 
 
@@ -282,13 +289,10 @@ def test_fact_boundaries_and_novelty_rule_do_not_invent_evidence():
         _item(f"q{i}", "REELS", NOW - timedelta(days=30), [_snapshot(f"q{i}s", NOW, 1000, 1000, interactions=10)])
         for i in range(6)
     ]
-    visible = {"usual_ranges": [{"metric": key} for key in ("saves", "shares", "comments")]}
-    mix = next(
-        fact
-        for fact in feedback.build_feedback_facts(rich, [rich, *peers], visible, NOW)
-        if fact["type"] == "interaction_mix"
-    )
-    assert mix["qualifies"] is False and mix["evidence"]["novelty_dropped"] is True
+    facts = feedback.build_feedback_facts(rich, [rich, *peers], {"usual_ranges": []}, NOW)
+    interaction = [fact for fact in facts if fact["type"] == "interaction_signal"]
+    assert len(interaction) == 4
+    assert all(fact["qualifies"] and fact["evidence"]["percentile"] is not None for fact in interaction)
 
 
 def test_summary_facts_include_selected_post_comparison_with_history():
@@ -313,7 +317,8 @@ def test_summary_facts_include_selected_post_comparison_with_history():
         ("historical_views", "stronger"),
         ("historical_comments", "weaker"),
     ]
-    assert feedback.template_output(facts)["sentences"][0]["fact_ids"] == ["historical_views"]
+    output = feedback.template_output(facts)
+    assert feedback.validate_output(output, facts)
 
 
 def test_summary_template_deduplicates_repeated_historical_signal_copy():
@@ -324,7 +329,7 @@ def test_summary_template_deduplicates_repeated_historical_signal_copy():
 
     output = feedback.template_output(facts)
 
-    assert len(output["sentences"]) == 1
+    assert len(output["evidence"]) == 1
 
 
 def _growth_fact(selected):
@@ -389,8 +394,16 @@ def test_zero_views_use_views_rather_than_falling_through_to_reach():
     assert growth["evidence"]["metric"] == "views"
 
 
-def _payload(text="Attention was still accumulating across the observed checkpoints.", kind="observation", ids=None):
-    return {"sentences": [{"text": text, "kind": kind, "fact_ids": ids or ["growth_stage"]}]}
+def _payload(text="The post was still accumulating attention across the observed checkpoints.", ids=None):
+    fact_id = (ids or ["growth_stage"])[0]
+    return {
+        "diagnosis": text,
+        "evidence": [{"fact_id": fact_id, "statement": text}],
+        "hypothesis": "Hypothesis: the observed pattern may reflect the presentation, but the facts do not establish a cause.",
+        "experiment": "Experiment: change one presentation element in the next comparable post.",
+        "measure": "Measure: compare the cited signal on the next comparable post.",
+        "do_not_change": "Do not change multiple elements at once.",
+    }
 
 
 class _SummaryCacheRepository:
@@ -407,7 +420,7 @@ class _SummaryCacheRepository:
         return item
 
 
-def test_validator_rejects_digits_causation_prediction_unknown_fact_imperative_advice_and_second_suggestion():
+def test_validator_rejects_invented_numbers_causation_prediction_and_unknown_fact():
     facts = [
         {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
     ]
@@ -416,29 +429,16 @@ def test_validator_rejects_digits_causation_prediction_unknown_fact_imperative_a
     assert not feedback.validate_output(_payload("It grew because viewers stayed."), facts)
     assert not feedback.validate_output(_payload("It will keep growing."), facts)
     assert not feedback.validate_output(_payload(ids=["unknown"]), facts)
-    assert not feedback.validate_output(_payload("Try another version."), facts)
-    two = {
-        "sentences": [
-            {"text": "Consider another version.", "kind": "suggestion", "fact_ids": ["growth_stage"]},
-            {"text": "Try a shorter version.", "kind": "suggestion", "fact_ids": ["growth_stage"]},
-        ]
-    }
-    assert not feedback.validate_output(two, facts)
 
 
-def test_validator_allows_common_non_imperative_words_in_observations():
+def test_validator_requires_a_labelled_hypothesis_and_allows_specific_experiment_language():
     facts = [
         {"id": "growth_stage", "type": "growth_stage", "value": "still_growing", "evidence": {}, "qualifies": True}
     ]
-    for text in (
-        "This might keep attention on the topic's central focus.",
-        "The visual choices could make the topic easier to follow.",
-    ):
-        assert feedback.validate_output(_payload(text), facts)
-
-    assert feedback.validate_output(
-        _payload("The visual choices could make the topic easier to follow.", kind="suggestion"), facts
-    )
+    assert feedback.validate_output(_payload("The visual choices could make the topic easier to follow."), facts)
+    invalid = _payload()
+    invalid["hypothesis"] = "The visual choices caused the result."
+    assert not feedback.validate_output(invalid, facts)
 
 
 def test_provider_fallback_and_cache_signature_invalidation(monkeypatch):
@@ -504,7 +504,7 @@ def test_summary_feedback_passes_attached_video_and_media_fact_to_gemini(monkeyp
         media_input=(b"video-content", "video/mp4"),
     )
 
-    assert result == "The attached video shows a clear visual sequence."
+    assert "The attached video shows a clear visual sequence." in result
     assert captured["media_input"] == (b"video-content", "video/mp4")
     assert any(item["id"] == "media_content" for item in captured["facts"])
 
@@ -595,7 +595,7 @@ def test_summary_without_consent_uses_a_template_without_loading_media_or_callin
         media_loader=lambda: (_ for _ in ()).throw(AssertionError("media must not download without consent")),
     )
 
-    assert result == "This post was still accumulating attention across the observed checkpoints."
+    assert "The post was still accumulating attention across the observed checkpoints." in result
     assert repository.get_text_cache("no-consent-user", "summary:post").provider == "template"
 
 

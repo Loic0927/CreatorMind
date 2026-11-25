@@ -63,10 +63,11 @@ AI-processing container.
 - **Audience summary** may receive up to the permitted stored comment text after consent. The
   client can still show the latest privacy-safe raw comment items; its AI state is
   `consent_required` until opt-in.
-- **Next-post suggestion** uses mature rate-based comparisons, selected captions and up to eight
-  untrusted comment texts per selected post after consent. It compares the largest eligible format
-  group, sends at most three top and two distinct bottom examples, and asks for one observable
-  difference, one optional experiment, and brief uncertainty.
+- **Next-post suggestion** uses mature rate-based comparisons, selected captions, and clustered
+  non-owner comment themes after consent. Each theme is bounded to a label, count, and representative
+  text; usernames and provider IDs are not sent. It compares the largest eligible format group, sends
+  at most three top and two distinct bottom examples, and asks for one observable difference, one
+  optional experiment, and brief uncertainty.
 
 Prompts and validators prohibit invented values, causal or predictive claims, engagement bait,
 niche assumptions, and posting-time claims. Model failures and invalid responses retain a

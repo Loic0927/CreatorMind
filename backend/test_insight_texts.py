@@ -95,6 +95,45 @@ def test_next_post_suggestion_reflects_the_latest_post_against_high_performing_h
     assert all("performance_signals" in item for item in captured["data"]["historical_examples"])
 
 
+def test_next_post_suggestion_passes_clustered_comment_themes_without_identifiers(monkeypatch):
+    repository = _TextCacheRepository()
+    monkeypatch.setattr(insight_texts, "get_content_repository", lambda: repository)
+    posts = [_post(f"history-{index}", index * 100) for index in range(1, 7)]
+    latest = _post("latest", 10_000)
+    latest["published_at"] = datetime(2026, 11, 1, tzinfo=UTC).isoformat()
+    posts.append(latest)
+    comments = [
+        _comment("How did you make this?"),
+        _comment("What are the steps?"),
+        _comment("Is that a real camera?"),
+        _comment("Love this!"),
+        _comment("Can you make another video?"),
+        _comment("@creator please make the next video"),
+    ]
+    captured = {}
+
+    def generate(prompt: str) -> str:
+        captured["data"] = _prompt_data(prompt)
+        return "Reflection: Keep the clear premise and test one focused change."
+
+    result = insight_texts.next_post_suggestion(
+        "user",
+        posts,
+        {"latest": comments},
+        generator=generate,
+    )
+
+    assert result is not None
+    themes = {item["theme"]: item for item in captured["data"]["latest_post"]["comment_themes"]}
+    assert themes["asking_how"]["count"] == 2
+    assert themes["guessing_the_method"]["count"] == 1
+    assert themes["praise"]["count"] == 1
+    assert themes["asking_next_video"]["count"] == 2
+    assert themes["asking_next_video"]["representative_texts"]
+    assert "[mention]" in " ".join(text for item in themes.values() for text in item["representative_texts"])
+    assert all("username" not in item and "provider_id" not in item for item in themes.values())
+
+
 def test_next_post_suggestion_requires_six_historical_posts_with_rate_signals(monkeypatch):
     repository = _TextCacheRepository()
     monkeypatch.setattr(insight_texts, "get_content_repository", lambda: repository)

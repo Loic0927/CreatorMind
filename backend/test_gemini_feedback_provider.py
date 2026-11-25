@@ -19,13 +19,17 @@ FACTS = [
     }
 ]
 PAYLOAD = {
-    "sentences": [
+    "diagnosis": "The post was still accumulating attention across the observed checkpoints.",
+    "evidence": [
         {
-            "text": "Attention was still accumulating across the observed checkpoints.",
-            "kind": "observation",
-            "fact_ids": ["growth_stage"],
+            "fact_id": "growth_stage",
+            "statement": "The post was still accumulating attention across the observed checkpoints.",
         }
-    ]
+    ],
+    "hypothesis": "Hypothesis: the observed pattern may reflect the presentation, but the facts do not establish a cause.",
+    "experiment": "Experiment: change one presentation element in the next comparable post.",
+    "measure": "Measure: compare the cited signal on the next comparable post.",
+    "do_not_change": "Do not change multiple elements at once.",
 }
 
 
@@ -55,10 +59,13 @@ def test_gemini_feedback_uses_sdk_timeout_json_mode_schema_and_system_instructio
         "image_mime_type": "image/png",
     }
     assert "Do not restate" not in captured["prompt"]
-    assert feedback.FEEDBACK_RESPONSE_SCHEMA["properties"]["sentences"]["items"]["properties"] == {
-        "text": {"type": "string"},
-        "kind": {"type": "string", "enum": ["observation", "suggestion"]},
-        "fact_ids": {"type": "array", "items": {"type": "string"}},
+    assert set(feedback.FEEDBACK_RESPONSE_SCHEMA["properties"]) == {
+        "diagnosis",
+        "evidence",
+        "hypothesis",
+        "experiment",
+        "measure",
+        "do_not_change",
     }
 
 
@@ -129,7 +136,7 @@ def test_generate_summary_persists_gemini_token_usage_in_generation_log(
 
     result = feedback.generate_summary("usage-user", "usage-post", FACTS)
 
-    assert result == PAYLOAD["sentences"][0]["text"]
+    assert PAYLOAD["diagnosis"] in result
     assert len(log_calls) == 1
     args, kwargs = log_calls[0]
     assert args[4] == "ok"
