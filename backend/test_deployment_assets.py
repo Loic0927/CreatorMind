@@ -71,8 +71,8 @@ def test_oci_frontend_image_is_standalone_and_non_root():
     next_config = (ROOT / "frontend" / "next.config.mjs").read_text(encoding="utf-8")
     assert 'output: "standalone"' in next_config
     assert "NEXT_PUBLIC_API_BASE_URL" in dockerfile
-    assert "/app/.next/standalone" in dockerfile
-    assert "/app/public ./public" in dockerfile
+    assert "/app/frontend/.next/standalone" in dockerfile
+    assert "/app/frontend/public ./public" in dockerfile
     assert "USER nextjs" in dockerfile
     assert 'CMD ["node", "server.js"]' in dockerfile
 

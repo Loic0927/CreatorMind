@@ -33,7 +33,7 @@ from backend.storage.models import InsightTextCache
 from backend.storage.sql_models import AIGenerationLogRecord
 
 LOGGER = logging.getLogger("postbridge.feedback")
-PROMPT_VERSION = "summary-facts-media-v7"
+PROMPT_VERSION = "summary-facts-media-v8"
 MEDIA_FACT_ID = "media_content"
 MIN_PEERS = 6
 PERCENTILE_RANGE_AT = 15
@@ -711,7 +711,9 @@ class GeminiFeedbackProvider:
                 last_error = exc
                 if attempt == 0 and not isinstance(exc, GeminiConfigurationError):
                     continue
-                raise GeminiUpstreamError("Feedback generation failed.") from None
+                if isinstance(exc, (GeminiConfigurationError, GeminiUpstreamError)):
+                    raise
+                raise GeminiUpstreamError("Feedback generation failed: Gemini returned invalid JSON.") from exc
         raise GeminiUpstreamError("Feedback generation failed.") from last_error
 
 
@@ -959,6 +961,9 @@ def generate_summary(
                 break
             LOGGER.warning("feedback_provider_fallback provider=%s reason=invalid", provider.name)
         except Exception as exc:
+            error_detail = (
+                str(exc) if isinstance(exc, (GeminiConfigurationError, GeminiUpstreamError)) else type(exc).__name__
+            )
             _log(
                 tracked_post_id,
                 provider.name,
@@ -966,10 +971,10 @@ def generate_summary(
                 input_hash,
                 "error",
                 int((time.monotonic() - started) * 1000),
-                type(exc).__name__,
+                error_detail,
                 token_usage,
             )
-            LOGGER.warning("feedback_provider_fallback provider=%s reason=%s", provider.name, type(exc).__name__)
+            LOGGER.warning("feedback_provider_fallback provider=%s reason=%s", provider.name, error_detail)
     if payload is None:
         payload = template_output(qualifying)
     if not validate_output(payload, qualifying):

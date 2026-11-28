@@ -191,7 +191,15 @@ export const getTrackedPost = (session: Session, trackedId: string) =>
   authRequest<TrackedPost>(session, `/tracked-posts/${encodeURIComponent(trackedId)}`);
 export const getInstagramMedia = (session: Session) =>
   authRequest<{
-    items: Array<{ id: string; caption: string; media_url?: string; thumbnail_url?: string; published_at?: string }>;
+    items: Array<{
+      id: string;
+      instagram_media_id?: string;
+      caption: string;
+      media_url?: string;
+      thumbnail_url?: string;
+      permalink?: string | null;
+      published_at?: string;
+    }>;
   }>(session, "/api/instagram/media");
 export const trackInstagramPost = (session: Session, mediaId: string) =>
   authRequest<TrackingRecord>(session, "/tracked-posts", {

@@ -84,6 +84,22 @@ def test_gemini_feedback_retries_invalid_json_without_thread_timeout():
     assert len(calls) == 2
 
 
+def test_gemini_feedback_preserves_upstream_error_after_retry():
+    message = "Gemini request failed (HTTP 400): INVALID_ARGUMENT: response_schema rejected"
+    calls = []
+
+    def generate(_prompt: str, **_kwargs):
+        calls.append(True)
+        raise feedback.GeminiUpstreamError(message, status_code=400)
+
+    with pytest.raises(feedback.GeminiUpstreamError, match="INVALID_ARGUMENT") as failure:
+        feedback.GeminiFeedbackProvider(generator=generate).generate(FACTS)
+
+    assert str(failure.value) == message
+    assert failure.value.status_code == 400
+    assert len(calls) == 2
+
+
 def test_gemini_feedback_includes_untrusted_post_and_creator_context_when_supplied():
     captured = {}
 
@@ -141,6 +157,42 @@ def test_generate_summary_persists_gemini_token_usage_in_generation_log(
     args, kwargs = log_calls[0]
     assert args[4] == "ok"
     assert args[7] == {"prompt_token_count": 7}
+    assert kwargs == {}
+    engine_for_url(database_url).dispose()
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
+
+
+def test_generate_summary_persists_gemini_error_details_in_generation_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    error_message = "Gemini request failed (HTTP 400): INVALID_ARGUMENT: response_schema rejected"
+
+    class Provider:
+        name = "gemini"
+        model = "unit-test-model"
+
+        def generate(self, facts, *, media_input=None, analysis_context=None):
+            raise feedback.GeminiUpstreamError(error_message, status_code=400)
+
+    log_calls = []
+    database_url = f"sqlite:///{(tmp_path / 'feedback-error.db').as_posix()}"
+    monkeypatch.setenv("POSTBRIDGE_ENV", "development")
+    monkeypatch.setenv("POSTBRIDGE_DATABASE_URL", database_url)
+    engine_for_url.cache_clear()
+    session_factory_for_url.cache_clear()
+    engine_for_url(database_url)
+    monkeypatch.setattr(feedback, "has_ai_processing_consent", lambda _user_id: True)
+    monkeypatch.setattr(feedback, "_selection", lambda: ([Provider()], "gemini:unit-test-model"))
+    monkeypatch.setattr(feedback, "_log", lambda *args, **kwargs: log_calls.append((args, kwargs)))
+
+    result = feedback.generate_summary("error-user", "error-post", FACTS)
+
+    assert result
+    assert len(log_calls) == 1
+    args, kwargs = log_calls[0]
+    assert args[4] == "error"
+    assert args[6] == error_message
     assert kwargs == {}
     engine_for_url(database_url).dispose()
     engine_for_url.cache_clear()

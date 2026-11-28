@@ -6,10 +6,14 @@ directly.  The default return value remains a string for existing callers;
 callers which need auditing information can opt into :class:`GeminiGeneration`.
 """
 
+import copy
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+LOGGER = logging.getLogger("postbridge.gemini")
 
 
 class GeminiConfigurationError(RuntimeError):
@@ -17,7 +21,11 @@ class GeminiConfigurationError(RuntimeError):
 
 
 class GeminiUpstreamError(RuntimeError):
-    """Raised with a safe message when Gemini cannot complete a request."""
+    """Raised with safe upstream diagnostics when Gemini cannot complete a request."""
+
+    def __init__(self, message: str, *, status_code: int | str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 GeminiClientFactory = Callable[..., Any]
@@ -79,6 +87,42 @@ def _generation_config(
     )
 
 
+def _sanitized_response_schema(response_schema: Any | None) -> Any | None:
+    """Copy a response schema and remove fields unsupported by Gemini."""
+    sanitized = copy.deepcopy(response_schema)
+
+    def strip(value: Any) -> None:
+        if isinstance(value, dict):
+            value.pop("additionalProperties", None)
+            for nested in value.values():
+                strip(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                strip(nested)
+
+    strip(sanitized)
+    return sanitized
+
+
+def _upstream_status_code(exc: Exception) -> int | str | None:
+    for name in ("status_code", "code"):
+        value = getattr(exc, name, None)
+        if value is None:
+            continue
+        enum_value = getattr(value, "value", value)
+        if isinstance(enum_value, (int, str)):
+            return enum_value
+    return None
+
+
+def _safe_upstream_message(exc: Exception, api_key: str) -> str:
+    message = getattr(exc, "message", None)
+    if not isinstance(message, str) or not message.strip():
+        message = str(exc)
+    message = message.strip() or type(exc).__name__
+    return message.replace(api_key, "[REDACTED]")
+
+
 def _token_usage(response: Any) -> dict[str, Any] | None:
     metadata = getattr(response, "usage_metadata", None)
     if metadata is None:
@@ -137,7 +181,7 @@ def generate_gemini_content(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         response_mime_type=response_mime_type,
-        response_schema=response_schema,
+        response_schema=_sanitized_response_schema(response_schema),
     )
     factory = client_factory or _client_factory
     try:
@@ -162,8 +206,17 @@ def generate_gemini_content(
         text = response.text
     except GeminiConfigurationError:
         raise
-    except Exception:
-        raise GeminiUpstreamError("Gemini could not complete the request.") from None
+    except Exception as exc:
+        status_code = _upstream_status_code(exc)
+        upstream_message = _safe_upstream_message(exc, resolved_api_key)
+        status_label = f" (HTTP {status_code})" if status_code is not None else ""
+        message = f"Gemini request failed{status_label}: {upstream_message}"
+        LOGGER.error(
+            "gemini_request_failed status_code=%s message=%s",
+            status_code if status_code is not None else "unknown",
+            upstream_message,
+        )
+        raise GeminiUpstreamError(message, status_code=status_code) from exc
 
     if not isinstance(text, str) or not text.strip():
         raise GeminiUpstreamError("Gemini returned an empty response.")

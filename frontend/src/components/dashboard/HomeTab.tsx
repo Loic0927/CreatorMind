@@ -21,9 +21,11 @@ import { ErrorBanner, PageTitle, Panel } from "@/components/dashboard/ui";
 
 type InstagramMediaItem = {
   id: string;
+  instagram_media_id?: string;
   caption: string;
   media_url?: string;
   thumbnail_url?: string;
+  permalink?: string | null;
   published_at?: string;
 };
 type SelectionPlatform = "Instagram" | "TikTok";
@@ -70,10 +72,19 @@ export function HomeTab({ session, onConnect }: { session: Session; onConnect: (
     [posts],
   );
   const availableInstagramMedia = useMemo(() => {
-    const trackedIds = new Set(
-      posts.map((post) => post.media.instagram_media_id).filter((id): id is string => Boolean(id)),
+    const trackedIds = new Set<string>();
+    const trackedPermalinks = new Set<string>();
+    posts.forEach((post) => {
+      trackedIds.add(post.media.id);
+      if (post.media.instagram_media_id) trackedIds.add(post.media.instagram_media_id);
+      if (post.media.permalink) trackedPermalinks.add(post.media.permalink);
+    });
+    return media.filter(
+      (item) =>
+        !trackedIds.has(item.id) &&
+        (!item.instagram_media_id || !trackedIds.has(item.instagram_media_id)) &&
+        (!item.permalink || !trackedPermalinks.has(item.permalink)),
     );
-    return media.filter((item) => !trackedIds.has(item.id));
   }, [media, posts]);
   const availableTikTokMedia = useMemo(() => {
     const trackedIds = new Set(tikTokPosts.map((post) => post.video_id));

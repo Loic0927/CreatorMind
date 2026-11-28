@@ -84,13 +84,20 @@ def test_image_and_prompt_are_passed_as_multimodal_content():
     ]
 
 
-def test_upstream_error_is_safely_wrapped():
+def test_upstream_error_preserves_safe_provider_diagnostics(monkeypatch):
+    class ProviderError(RuntimeError):
+        status_code = 400
+        message = "INVALID_ARGUMENT: response_schema rejected private-api-key"
+
     class FailingModels:
         def generate_content(self, *, model: str, contents):
-            raise RuntimeError("provider response containing sensitive diagnostics")
+            raise ProviderError("request failed for private prompt")
 
     class FailingClient:
         models = FailingModels()
+
+    log_calls = []
+    monkeypatch.setattr(gemini.LOGGER, "error", lambda *args: log_calls.append(args))
 
     with pytest.raises(GeminiUpstreamError) as failure:
         generate_gemini_content(
@@ -100,10 +107,20 @@ def test_upstream_error_is_safely_wrapped():
             client_factory=lambda api_key, model_name: FailingClient(),
         )
 
-    assert str(failure.value) == "Gemini could not complete the request."
+    assert (
+        str(failure.value) == "Gemini request failed (HTTP 400): INVALID_ARGUMENT: response_schema rejected [REDACTED]"
+    )
+    assert failure.value.status_code == 400
     assert "private-api-key" not in str(failure.value)
     assert "private prompt" not in str(failure.value)
-    assert failure.value.__cause__ is None
+    assert isinstance(failure.value.__cause__, ProviderError)
+    assert log_calls == [
+        (
+            "gemini_request_failed status_code=%s message=%s",
+            400,
+            "INVALID_ARGUMENT: response_schema rejected [REDACTED]",
+        )
+    ]
 
 
 def test_missing_api_key_has_explicit_error(monkeypatch):
@@ -183,3 +200,62 @@ def test_generation_options_and_token_usage_are_exposed_without_breaking_text_ca
         "response_schema": {"type": "object"},
     }
     assert calls == [{"model": "configured-model", "contents": "Return JSON", "config": config}]
+
+
+def test_response_schema_sent_to_gemini_strips_additional_properties_recursively_without_mutating_caller(
+    monkeypatch,
+):
+    schema = {
+        "type": "object",
+        "properties": {
+            "evidence": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"statement": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+            "choice": {
+                "anyOf": [
+                    {"type": "object", "additionalProperties": False},
+                    {"type": "string"},
+                ]
+            },
+        },
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def configuration(**kwargs):
+        return kwargs
+
+    class ConfigModels:
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(text='{"ok":true}')
+
+    monkeypatch.setattr(gemini, "_generation_config", configuration)
+    generate_gemini_content(
+        "Return JSON",
+        api_key="unit-test-key",
+        model_name="configured-model",
+        client_factory=lambda api_key, model_name: SimpleNamespace(models=ConfigModels()),
+        response_mime_type="application/json",
+        response_schema=schema,
+    )
+
+    sent_schema = calls[0]["config"]["response_schema"]
+
+    def assert_no_additional_properties(value):
+        if isinstance(value, dict):
+            assert "additionalProperties" not in value
+            for nested in value.values():
+                assert_no_additional_properties(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                assert_no_additional_properties(nested)
+
+    assert_no_additional_properties(sent_schema)
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["evidence"]["items"]["additionalProperties"] is False

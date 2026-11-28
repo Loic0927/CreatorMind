@@ -43,7 +43,7 @@ describe("HomeTab", () => {
         {
           tracking: { id: "tracked-instagram" },
           media: {
-            id: "internal-media-id",
+            id: "instagram:instagram-1",
             instagram_media_id: "instagram-1",
             caption: "Tracked Instagram caption",
             permalink: "https://www.instagram.com/p/instagram-1/",
@@ -66,8 +66,20 @@ describe("HomeTab", () => {
     });
     vi.mocked(getInstagramMedia).mockResolvedValue({
       items: [
-        { id: "instagram-1", caption: "Tracked Instagram caption", published_at: "2026-11-24T00:00:00Z" },
-        { id: "instagram-2", caption: "Available Instagram caption", published_at: "2026-11-23T00:00:00Z" },
+        {
+          id: "instagram:instagram-1",
+          instagram_media_id: "instagram-1",
+          caption: "Tracked Instagram caption",
+          permalink: "https://www.instagram.com/p/instagram-1/",
+          published_at: "2026-11-24T00:00:00Z",
+        },
+        {
+          id: "instagram:instagram-2",
+          instagram_media_id: "instagram-2",
+          caption: "Available Instagram caption",
+          permalink: "https://www.instagram.com/p/instagram-2/",
+          published_at: "2026-11-23T00:00:00Z",
+        },
       ],
     });
     vi.mocked(getTikTokMedia).mockResolvedValue({
